@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="repository.01xkeven" name="01xKeven Repository" version="1.0.3" provider-name="01xKeven">
+<addon id="repository.01xkeven" name="01xKeven Repository" version="1.0.4" provider-name="01xKeven">
 
     <extension point="xbmc.addon.repository" name="01xKeven Repository">
         <dir>
@@ -12,8 +12,8 @@
     <extension point="xbmc.addon.metadata">
        <summary>01xKeven addons repository</summary>
        <summary lang="es_ES">Repositorio de addons de 01xKeven</summary>
-       <description>Repository containing 01xKeven add-ons: Balandro Bridge Multi and IMDb Parental Guide. Balandro Bridge Multi requires the "Balandro" add-on (plugin.video.balandro) to be installed and is NOT affiliated with, endorsed by, or associated with the Balandro developers.</description>
-       <description lang="es_ES">Repositorio que contiene los addons de 01xKeven: Balandro Bridge Multi y Control Parental IMDb. Balandro Bridge Multi requiere que el addon "Balandro" (plugin.video.balandro) esté instalado y NO está afiliado, respaldado ni asociado con los desarrolladores de Balandro.</description>
+       <description>Repository containing 01xKeven add-ons.</description>
+       <description lang="es_ES">Repositorio que contiene los addons de 01xKeven.</description>
        <platform>all</platform>
        <license>MIT</license>
        <source>https://github.com/01xKeven/kodi-addons</source>
