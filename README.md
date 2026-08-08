@@ -1,27 +1,27 @@
 # 01xKeven Repository
 
-Repositorio de addons de Kodi de **01xKeven**.
+Kodi addon repository by **01xKeven**.
 
-Contiene:
-- **repository.01xkeven** — addon de repositorio (instálalo una sola vez)
-- **plugin.video.guiaparental** — Control Parental IMDb
-- **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi para TMDb Helper
+Contains:
+- **repository.01xkeven** — the repository addon (install this once)
+- **plugin.video.guiaparental** — IMDb Parental Guide
+- **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi for TMDb Helper
 
-## Instalación en Kodi
+## Install in Kodi
 
-### Opción 1 — Repositorio (recomendada)
+### Option 1 — Repository (recommended)
 
-1. Descarga el zip del repositorio:
+1. Download the repository zip:
    `https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip`
-2. En Kodi: **Ajustes → Complementos → Instalar desde archivo zip** → selecciona el zip descargado.
-3. Ve a **Instalar desde repositorio → 01xKeven Repository** e instala los addons que quieras.
+2. In Kodi: **Settings → Add-ons → Install from zip file** → select the downloaded zip.
+3. Go to **Install from repository → 01xKeven Repository** and install the add-ons you want.
 
-### Opción 2 — URL del repo (Kodi 19+)
+### Option 2 — Repository URL (Kodi 19+)
 
-1. En Kodi ve a **Ajustes → Complementos → Instalar desde repositorio → Instalar desde URL** (si tu versión lo permite).
-2. Usa la URL: `https://01xkeven.github.io/kodi-addons/`
+1. In Kodi go to **Settings → Add-ons → Install from repository → Install from URL** (if your version supports it).
+2. Use the URL: `https://01xkeven.github.io/kodi-addons/`
 
-## Actualizaciones
+## Updating
 
-Este repo se actualiza subiendo nuevas versiones de los zips con el formato
-`<addon-id>-<version>.zip` y regenerando `addons.xml`, `addons.xml.gz` y `addons.xml.md5`.
+This repo is updated by pushing new addon zips using the naming convention
+`<addon-id>-<version>.zip` and regenerating `addons.xml`, `addons.xml.gz` and `addons.xml.md5`.
