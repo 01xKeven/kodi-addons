@@ -32,7 +32,3 @@ Este addon **NO está afiliado, respaldado ni asociado con los desarrolladores d
 1. In Kodi go to **Settings → Add-ons → Install from repository → Install from URL** (if your version supports it).
 2. Use the URL: `https://01xkeven.github.io/kodi-addons/`
 
-## Updating
-
-This repo is updated by pushing new addon zips using the naming convention
-`<addon-id>-<version>.zip` and regenerating `addons.xml`, `addons.xml.gz` and `addons.xml.md5`.
