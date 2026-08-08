@@ -7,10 +7,6 @@ Contains:
 - **plugin.video.guiaparental** — IMDb Parental Guide
 - **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi for TMDb Helper
 
-## Download / Descargar
-
-`https://01xkeven.github.io/kodi-addons/download/`
-
 ## About Balandro Bridge Multi
 
 **Balandro Bridge Multi requires the "Balandro" add-on (`plugin.video.balandro`) to be installed and enabled in order to work.** It is a search bridge that runs parallel searches across your enabled Balandro channels and consolidates the results.
