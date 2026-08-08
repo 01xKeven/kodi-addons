@@ -5,7 +5,7 @@
         <dir>
             <info>https://raw.githubusercontent.com/01xKeven/kodi-addons/main/addons.xml</info>
             <checksum>https://raw.githubusercontent.com/01xKeven/kodi-addons/main/addons.xml.md5</checksum>
-            <datadir zip="true">https://raw.githubusercontent.com/01xKeven/kodi-addons/main/</datadir>
+            <datadir zip="true">https://raw.githubusercontent.com/01xKeven/kodi-addons/main/zips/</datadir>
         </dir>
     </extension>
 
