@@ -11,8 +11,8 @@
   <extension point="xbmc.addon.metadata">
     <summary>Multi-source parallel search bridge between TMDb Helper and Balandro</summary>
     <summary lang="es_ES">Puente de búsqueda paralela multifuente entre TMDB Helper y Balandro</summary>
-    <description>Searches content simultaneously across all your enabled Balandro channels. Shows a real-time loading window and consolidates all links into a single list sorted by your language, quality and server priorities.</description>
-    <description lang="es_ES">Busca contenido simultáneamente en todos tus canales habilitados de Balandro. Muestra una ventana de carga en tiempo real y consolida todos los enlaces en una sola lista ordenada por tus prioridades de idioma, calidad y servidor.</description>
+    <description>Searches content simultaneously across all your enabled Balandro channels. Shows a real-time loading window and consolidates all links into a single list sorted by your language, quality and server priorities. REQUIRES the "Balandro" add-on (plugin.video.balandro) to be installed. This add-on is NOT affiliated with, endorsed by, or associated with the Balandro developers.</description>
+    <description lang="es_ES">Busca contenido simultáneamente en todos tus canales habilitados de Balandro. Muestra una ventana de carga en tiempo real y consolida todos los enlaces en una sola lista ordenada por tus prioridades de idioma, calidad y servidor. REQUIERE que el addon "Balandro" (plugin.video.balandro) esté instalado. Este addon NO está afiliado, respaldado ni asociado con los desarrolladores de Balandro.</description>
     <platform>all</platform>
   </extension>
 </addon>

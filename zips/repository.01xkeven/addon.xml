@@ -11,8 +11,8 @@
   <extension point="xbmc.addon.metadata">
     <summary>01xKeven addons repository</summary>
     <summary lang="es_ES">Repositorio de addons de 01xKeven</summary>
-    <description>Repository containing 01xKeven add-ons: Balandro Bridge Multi and IMDb Parental Guide.</description>
-    <description lang="es_ES">Repositorio que contiene los addons de 01xKeven: Balandro Bridge Multi y Control Parental IMDb.</description>
+    <description>Repository containing 01xKeven add-ons: Balandro Bridge Multi and IMDb Parental Guide. Balandro Bridge Multi requires the "Balandro" add-on (plugin.video.balandro) to be installed and is NOT affiliated with, endorsed by, or associated with the Balandro developers.</description>
+    <description lang="es_ES">Repositorio que contiene los addons de 01xKeven: Balandro Bridge Multi y Control Parental IMDb. Balandro Bridge Multi requiere que el addon "Balandro" (plugin.video.balandro) esté instalado y NO está afiliado, respaldado ni asociado con los desarrolladores de Balandro.</description>
     <platform>all</platform>
     <assets>
       <icon>icon.png</icon>
