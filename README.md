@@ -7,6 +7,14 @@ Contains:
 - **plugin.video.guiaparental** — IMDb Parental Guide
 - **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi for TMDb Helper
 
+## Download / Descargar
+
+Direct download links (click to download) / Enlaces de descarga directa (clic para descargar):
+
+- **[repository.01xkeven-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip)** — repository addon (install this first) / addon de repositorio (instálalo primero)
+- **[plugin.video.guiaparental-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/plugin.video.guiaparental/plugin.video.guiaparental-1.0.0.zip)** — IMDb Parental Guide / Control Parental IMDb
+- **[plugin.video.balandro.bridge.multi-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/plugin.video.balandro.bridge.multi/plugin.video.balandro.bridge.multi-1.0.0.zip)** — Balandro Bridge Multi for TMDb Helper
+
 ## About Balandro Bridge Multi
 
 **Balandro Bridge Multi requires the "Balandro" add-on (`plugin.video.balandro`) to be installed and enabled in order to work.** It is a search bridge that runs parallel searches across your enabled Balandro channels and consolidates the results.
@@ -23,8 +31,7 @@ Este addon **NO está afiliado, respaldado ni asociado con los desarrolladores d
 
 ### Option 1 — Repository (recommended)
 
-1. Download the repository zip:
-   `https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip`
+1. Download the repository zip: [repository.01xkeven-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip)
 2. In Kodi: **Settings → Add-ons → Install from zip file** → select the downloaded zip.
 3. Go to **Install from repository → 01xKeven Repository** and install the add-ons you want.
 
