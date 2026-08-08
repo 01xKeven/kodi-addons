@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="repository.01xkeven" name="01xKeven Repository" version="1.0.6" provider-name="01xKeven">
+<addon id="repository.01xkeven" name="01xKeven Repository" version="1.0.7" provider-name="01xKeven">
 
     <extension point="xbmc.addon.repository" name="01xKeven Repository">
         <dir>
