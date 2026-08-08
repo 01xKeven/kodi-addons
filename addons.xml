@@ -1,0 +1,67 @@
+<addons>
+<addon id="repository.01xkeven" name="01xKeven Repository" version="1.0.0" provider-name="01xKeven">
+  <requires>
+    <import addon="xbmc.addon" version="19.0.0"/>
+  </requires>
+  <extension point="xbmc.addon.repository" name="01xKeven Repository">
+    <dir>
+      <info compressed="false">https://01xkeven.github.io/kodi-addons/</info>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="es_ES">Repositorio de addons de 01xKeven</summary>
+    <summary lang="en_GB">01xKeven addons repository</summary>
+    <description lang="es_ES">Repositorio que contiene los addons de 01xKeven: Balandro Bridge Multi y Control Parental IMDb.</description>
+    <description lang="en_GB">Repository containing 01xKeven addons: Balandro Bridge Multi and IMDb Parental Guide.</description>
+    <platform>all</platform>
+    <assets>
+      <icon>icon.png</icon>
+    </assets>
+  </extension>
+</addon>
+<addon id="plugin.video.guiaparental" name="Control Parental IMDb" version="1.0.0" provider-name="01xKeven">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+    <import addon="script.module.requests" version="2.22.0"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="main.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py"/>
+  <extension point="xbmc.addon.metadata">
+    <summary>Control Parental IMDb / IMDb Parental Guide</summary>
+    <description>Muestra la guía de contenido parental de IMDb para películas y episodios. / Displays IMDb parental content guide for movies and episodes.</description>
+    <summary lang="en_GB">Displays IMDb Parental Guide</summary>
+    <description lang="en_GB">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
+    <summary lang="en_US">Displays IMDb Parental Guide</summary>
+    <description lang="en_US">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
+    <summary lang="en_us">Displays IMDb Parental Guide</summary>
+    <description lang="en_us">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
+    <summary lang="es_ES">Muestra la guía parental de IMDb</summary>
+    <description lang="es_ES">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
+    <summary lang="es_MX">Muestra la guía parental de IMDb</summary>
+    <description lang="es_MX">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
+    <summary lang="es_es">Muestra la guía parental de IMDb</summary>
+    <description lang="es_es">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
+    <platform>all</platform>
+    <assets>
+        <icon>resources/icon.png</icon>
+    </assets>
+  </extension>
+</addon>
+<addon id="plugin.video.balandro.bridge.multi" name="Balandro Bridge Multi para TMDb Helper" version="1.0.0" provider-name="Antigravity">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+    <import addon="plugin.video.balandro" version="1.0.0"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py" start="startup"/>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="es_ES">Puente de búsqueda paralela multifuente entre TMDB Helper y Balandro</summary>
+    <description lang="es_ES">Busca contenido simultáneamente en todos tus canales habilitados de Balandro. Muestra una ventana de carga en tiempo real y consolida todos los enlaces en una sola lista ordenada por tus prioridades de idioma, calidad y servidor.</description>
+    <platform>all</platform>
+  </extension>
+</addon>
+</addons>

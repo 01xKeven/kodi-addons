@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+    <!-- General -->
+    <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="true" />
+    <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
+    <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
+</settings>

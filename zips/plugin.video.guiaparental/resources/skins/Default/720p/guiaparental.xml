@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window>
+    <controls>
+        <control type="group">
+            <left>30</left>
+            <top>30</top>
+            <width>440</width>
+            <height>230</height>
+
+            <!-- Barra lateral izquierda -->
+            <control type="image" id="10">
+                <left>20</left>
+                <top>25</top>
+                <width>4</width>
+                <height>175</height>
+                <texture>rounded_bar.png</texture>
+                <colordiffuse>FFFFFFFF</colordiffuse>
+                <animation effect="fade" start="0" end="100" time="400" delay="0">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="300" delay="400">WindowClose</animation>
+            </control>
+
+            <!-- 1. Desnudos -->
+            <control type="label" id="101">
+                <left>40</left>
+                <top>25</top>
+                <width>390</width>
+                <height>30</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]Desnudos[/B]  ·  $INFO[Window.Property(Sexo.Text)]</label>
+                <animation effect="fade" start="0" end="100" time="400" delay="0">WindowOpen</animation>
+                <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="0">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="250" delay="0">WindowClose</animation>
+                <animation effect="slide" start="0,0" end="-30,0" time="250" tween="quadratic" easing="in" delay="0">WindowClose</animation>
+            </control>
+
+            <!-- 2. Violencia -->
+            <control type="label" id="102">
+                <left>40</left>
+                <top>60</top>
+                <width>390</width>
+                <height>30</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]Violencia[/B]  ·  $INFO[Window.Property(Violencia.Text)]</label>
+                <animation effect="fade" start="0" end="100" time="400" delay="150">WindowOpen</animation>
+                <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="150">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="250" delay="50">WindowClose</animation>
+                <animation effect="slide" start="0,0" end="-30,0" time="250" tween="quadratic" easing="in" delay="50">WindowClose</animation>
+            </control>
+
+            <!-- 3. Groserias -->
+            <control type="label" id="103">
+                <left>40</left>
+                <top>95</top>
+                <width>390</width>
+                <height>30</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]Groserias[/B]  ·  $INFO[Window.Property(Obscenidad.Text)]</label>
+                <animation effect="fade" start="0" end="100" time="400" delay="300">WindowOpen</animation>
+                <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="300">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="250" delay="100">WindowClose</animation>
+                <animation effect="slide" start="0,0" end="-30,0" time="250" tween="quadratic" easing="in" delay="100">WindowClose</animation>
+            </control>
+
+            <!-- 4. Alcohol/Drogas -->
+            <control type="label" id="104">
+                <left>40</left>
+                <top>130</top>
+                <width>390</width>
+                <height>30</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]Alcohol/Drogas[/B]  ·  $INFO[Window.Property(Alcohol.Text)]</label>
+                <animation effect="fade" start="0" end="100" time="400" delay="450">WindowOpen</animation>
+                <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="450">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="250" delay="150">WindowClose</animation>
+                <animation effect="slide" start="0,0" end="-30,0" time="250" tween="quadratic" easing="in" delay="150">WindowClose</animation>
+            </control>
+
+            <!-- 5. Escenas intensas -->
+            <control type="label" id="105">
+                <left>40</left>
+                <top>165</top>
+                <width>390</width>
+                <height>30</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]Escenas intensas[/B]  ·  $INFO[Window.Property(Terror.Text)]</label>
+                <animation effect="fade" start="0" end="100" time="400" delay="600">WindowOpen</animation>
+                <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="600">WindowOpen</animation>
+                <animation effect="fade" start="100" end="0" time="250" delay="200">WindowClose</animation>
+                <animation effect="slide" start="0,0" end="-30,0" time="250" tween="quadratic" easing="in" delay="200">WindowClose</animation>
+            </control>
+
+        </control>
+    </controls>
+</window>

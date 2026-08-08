@@ -1,0 +1,80 @@
+# Kodi Media Center translation file
+# Copyright (C) 2026
+# This file is distributed under the same license as the Control Parental IMDb package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: plugin.video.guiaparental\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-21 12:40-0400\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: 01xKeven\n"
+"Language-Team: Spanish\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: es_es\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "30000"
+msgstr "Desnudos"
+
+msgid "30001"
+msgstr "Violencia"
+
+msgid "30002"
+msgstr "Groserias"
+
+msgid "30003"
+msgstr "Alcohol/Drogas"
+
+msgid "30004"
+msgstr "Escenas intensas"
+
+msgid "30005"
+msgstr "Ninguno"
+
+msgid "30006"
+msgstr "Leve"
+
+msgid "30007"
+msgstr "Moderada"
+
+msgid "30008"
+msgstr "Severa"
+
+msgid "30009"
+msgstr "Control Parental IMDb"
+
+msgid "30010"
+msgstr "Conectando con IMDb..."
+
+msgid "30011"
+msgstr "Procesando clasificaciones..."
+
+msgid "30012"
+msgstr "Finalizando..."
+
+msgid "30013"
+msgstr "Sin Resultados"
+
+msgid "30014"
+msgstr "No se encontró guía parental para \"{title}\"."
+
+msgid "30015"
+msgstr "Error"
+
+msgid "30016"
+msgstr "El formato del ID de IMDb es incorrecto."
+
+msgid "30017"
+msgstr "No se pudo obtener la guía parental: {error}"
+
+msgid "30018"
+msgstr "Introduce el ID de IMDb (ttxxxxxxx)"
+
+msgid "30019"
+msgstr "General"
+
+msgid "30020"
+msgstr "Clave API de MdbList"
