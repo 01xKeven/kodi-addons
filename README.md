@@ -7,13 +7,13 @@ Contains:
 - **plugin.video.guiaparental** — IMDb Parental Guide
 - **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi for TMDb Helper
 
-## About Balandro Bridge Multi
+## About Balandro Bridge Multi 🇺🇸
 
 **Balandro Bridge Multi requires the "Balandro" add-on (`plugin.video.balandro`) to be installed and enabled in order to work.** It is a search bridge that runs parallel searches across your enabled Balandro channels and consolidates the results.
 
 This add-on is **NOT affiliated with, endorsed by, or associated with the Balandro developers or the Balandro repository**. It is an independent add-on made by 01xKeven that uses Balandro's public channels.
 
-## Acerca de Balandro Bridge Multi
+## Acerca de Balandro Bridge Multi 🇪🇸
 
 **Balandro Bridge Multi requiere que el addon "Balandro" (`plugin.video.balandro`) esté instalado y habilitado para funcionar.** Es un puente de búsqueda que lanza búsquedas en paralelo a través de tus canales habilitados de Balandro y consolida los resultados.
 
