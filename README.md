@@ -1,11 +1,5 @@
 # 01xKeven Repository
 
-Kodi addon repository by **01xKeven**.
-
-Contains:
-- **repository.01xkeven** — the repository addon (install this once)
-- **plugin.video.guiaparental** — IMDb Parental Guide
-- **plugin.video.balandro.bridge.multi** — Balandro Bridge Multi for TMDb Helper
 
 ## Install in Kodi
 
