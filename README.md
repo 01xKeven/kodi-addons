@@ -9,11 +9,7 @@ Contains:
 
 ## Download / Descargar
 
-Direct download links (click to download) / Enlaces de descarga directa (clic para descargar):
-
-- **[repository.01xkeven-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip)** — repository addon (install this first) / addon de repositorio (instálalo primero)
-- **[plugin.video.guiaparental-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/plugin.video.guiaparental/plugin.video.guiaparental-1.0.0.zip)** — IMDb Parental Guide / Control Parental IMDb
-- **[plugin.video.balandro.bridge.multi-1.0.0.zip](https://01xkeven.github.io/kodi-addons/zips/plugin.video.balandro.bridge.multi/plugin.video.balandro.bridge.multi-1.0.0.zip)** — Balandro Bridge Multi for TMDb Helper
+`https://01xkeven.github.io/kodi-addons/download/`
 
 ## About Balandro Bridge Multi
 

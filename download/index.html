@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Download 01xKeven Repository</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: linear-gradient(135deg, #1e1e2e 0%, #14141c 100%);
+    color: #eee;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .card {
+    background: #26263a;
+    border: 1px solid #3a3a55;
+    border-radius: 16px;
+    padding: 40px 34px;
+    max-width: 520px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  h1 { font-size: 1.35rem; margin-bottom: 6px; }
+  h1 .en { color: #7fd0ff; }
+  p.sub { color: #b9b9cf; font-size: .92rem; margin-bottom: 26px; line-height: 1.5; }
+  .lang-toggle { color: #8a8aa8; font-size: .8rem; margin-bottom: 18px; }
+  .lang-toggle a { color: #7fd0ff; text-decoration: none; }
+  .btn {
+    display: block;
+    background: #1e8fe0;
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.05rem;
+    padding: 16px 20px;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    transition: background .15s;
+  }
+  .btn:hover { background: #2ea0f0; }
+  .btn.secondary { background: #33334d; color: #ccc; font-weight: 500; font-size: .95rem; }
+  .btn.secondary:hover { background: #3d3d5c; }
+  .note { color: #8a8aa8; font-size: .8rem; margin-top: 14px; line-height: 1.5; }
+  .note .en { color: #b9b9cf; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1><span class="en">01xKeven Repository</span></h1>
+    <p class="sub" data-es="Descarga el repositorio completo como archivo .zip para instalar en Kodi."
+                   data-en="Download the full repository as a .zip file to install in Kodi."
+                   data-lang="en">Download the full repository as a .zip file to install in Kodi.</p>
+    <p class="lang-toggle">
+      <a href="#" data-lang="es">Español</a> · <a href="#" data-lang="en">English</a>
+    </p>
+
+    <a class="btn" href="https://github.com/01xKeven/kodi-addons/archive/refs/heads/main.zip"
+       data-es="Descargar repositorio (.zip)"
+       data-en="Download repository (.zip)">Download repository (.zip)</a>
+
+    <a class="btn secondary" href="https://01xkeven.github.io/kodi-addons/zips/repository.01xkeven/repository.01xkeven-1.0.0.zip"
+       data-es="Solo el addon de repositorio (.zip)"
+       data-en="Repository addon only (.zip)">Repository addon only (.zip)</a>
+
+    <p class="note">
+      <span class="en">After downloading, in Kodi go to Settings &rarr; Add-ons &rarr; Install from zip file and select the zip.</span>
+    </p>
+  </div>
+
+<script>
+  var els = document.querySelectorAll('[data-es],[data-en]');
+  function setLang(lang) {
+    els.forEach(function (el) {
+      var v = el.getAttribute('data-' + lang);
+      if (v !== null && v !== '') {
+        if (el.tagName === 'A') el.innerHTML = v; else el.textContent = v;
+      }
+    });
+    document.title = lang === 'es' ? 'Descargar Repositorio 01xKeven' : 'Download 01xKeven Repository';
+  }
+  document.querySelectorAll('.lang-toggle a').forEach(function (a) {
+    a.addEventListener('click', function (e) { e.preventDefault(); setLang(a.getAttribute('data-lang')); });
+  });
+</script>
+</body>
+</html>
