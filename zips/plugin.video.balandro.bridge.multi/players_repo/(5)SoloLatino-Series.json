@@ -1,0 +1,25 @@
+{
+    "name": "(5)SoloLatino-Series",
+    "plugin": "plugin.video.balandro.bridge.multi",
+    "priority": 200,
+    "is_resolvable": "true",
+    "assert": {
+        "play_episode": [
+            "showname",
+            "season",
+            "episode"
+        ]
+    },
+    "play_episode": [
+        "plugin://plugin.video.balandro.bridge.multi/?url=plugin://plugin.video.balandro/?ewogICAgImFjdGlvbiI6ICJzZWFyY2giLAogICAgImNhdGVnb3J5IjogIlNvbG9MYXRpbm8iLAogICAgImNoYW5uZWwiOiAic29sb2xhdGlubyIsCiAgICAiZXh0cmEiOiAidHZzaG93cyIsCiAgICAiZmFuYXJ0IjogIkM6XFxVc2Vyc1xcMDF4S2V2ZW5cXEFwcERhdGFcXFJvYW1pbmdcXEtvZGlcXGFkZG9uc1xccGx1Z2luLnZpZGVvLmJhbGFuZHJvXFxmYW5hcnQuanBnIiwKICAgICJpbmZvTGFiZWxzIjoge30sCiAgICAicGxvdCI6ICJbQ2FzdGVsbGFubywgTGF0aW5vLCBWb3NlXVtDUl1bQ1JdUGVsw61jdWxhcyBwb3IgZ8OpbmVyb3MgeSBhw7Fvcy4gU2VyaWVzIHBvciBHw6luZXJvcy4gUHVlZGUgcmVxdWVyaXIgZWwgdXNvIGRlIHByb3hpZXMgZW4gZnVuY2nDs24gZGVsIHBhw61zL29wZXJhZG9yYSBkZXNkZSBkZWwgcnVzc28uIiwKICAgICJzZWFyY2hfdHlwZSI6ICJ0dnNob3ciLAogICAgInRodW1ibmFpbCI6ICJDOlxcVXNlcnNcXDAxeEtldmVuXFxhcHBEYXRhXFxSb2FtaW5nXFxLb2RpXFxhZGRvbnNcXHBsdWdpbi52aWRlby5iYWxhbmRyb1xccmVzb3VyY2VzXFxtZWRpYVxcY2hhbm5lbHNcXHRodW1iXFxzb2xvbGF0aW5vLmpwZyIsCiAgICAidGl0bGUiOiAiW0NPTE9SIGhvdHBpbmtdQnVzY2FyIHNlcmllIC4uLltvckk9MF0uLi5bL0NPTE9SXSJ9&showname={showname}&showyear={showyear}&season={season}&episode={episode}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&tagline={tagline}&director={director}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}",
+        {
+            "title": "(?i)^({es-ES_showname}|{es-MX_showname}|{en_showname}|{original_name}|.+)",
+            "season": "{season}",
+            "episode": "{episode}"
+        }
+    ],
+    "fallback": {
+        "play_episode": "(6)Cuevana3Re-Series.json play_episode"
+    },
+    "is_folder": "false"
+}

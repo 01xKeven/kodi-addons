@@ -2132,9 +2132,195 @@ def check_and_run_migration():
         p_dialog.close()
         dialog.ok("Balandro Bridge Multi - Migración", "Se han migrado %d reproductores con éxito." % migrated_count)
 
+# ---------------------------------------------------------------
+# CONSTANTES PARA ACTUALIZACIÓN DE PLAYERS DESDE GITHUB
+# ---------------------------------------------------------------
+_GITHUB_TOKEN = ''
+_GITHUB_REPO  = '01xKeven/balandro-players'
+_GITHUB_API   = 'https://api.github.com/repos/' + _GITHUB_REPO + '/contents'
+_CLOUD_TS_FILE = os.path.join(
+    xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.balandro.bridge.multi'),
+    'cloud_players_last_update.txt'
+)
+
+def _github_get(path):
+    """Hace una peticion GET a la API de GitHub con autenticacion."""
+    try:
+        import urllib.request as ureq
+        req = ureq.Request(
+            _GITHUB_API + path,
+            headers={
+                'Authorization': 'token ' + _GITHUB_TOKEN,
+                'Accept': 'application/vnd.github.v3.raw',
+                'User-Agent': 'BalandroBridgeMulti'
+            }
+        )
+        with ureq.urlopen(req, timeout=15) as r:
+            return r.read()
+    except Exception as e:
+        xbmc.log('Balandro Bridge Multi [Cloud]: error en peticion GitHub - ' + str(e), xbmc.LOGERROR)
+        return None
+
+def _get_cloud_last_updated():
+    """Obtiene la fecha de la ultima actualizacion de la nube desde manifest.json."""
+    try:
+        import urllib.request as ureq
+        req = ureq.Request(
+            'https://raw.githubusercontent.com/' + _GITHUB_REPO + '/master/manifest.json',
+            headers={
+                'Authorization': 'token ' + _GITHUB_TOKEN,
+                'User-Agent': 'BalandroBridgeMulti'
+            }
+        )
+        with ureq.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode('utf-8'))
+        return data.get('last_updated', '')
+    except Exception:
+        return ''
+
+def update_players_from_cloud():
+    """Descarga todos los .json del repo privado de GitHub y reemplaza los players locales."""
+    p_dialog = xbmcgui.DialogProgress()
+    p_dialog.create('Balandro Bridge Multi', 'Conectando con GitHub...')
+    try:
+        # 1. Listar archivos del repo
+        p_dialog.update(10, 'Obteniendo lista de players...')
+        import urllib.request as ureq
+        req = ureq.Request(
+            'https://api.github.com/repos/' + _GITHUB_REPO + '/contents',
+            headers={
+                'Authorization': 'token ' + _GITHUB_TOKEN,
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'BalandroBridgeMulti'
+            }
+        )
+        with ureq.urlopen(req, timeout=15) as r:
+            files = json.loads(r.read().decode('utf-8'))
+
+        if p_dialog.iscanceled():
+            p_dialog.close()
+            return
+
+        players_files = [f for f in files if f['name'].endswith('.json') and f['name'] != 'manifest.json']
+        manifest_files = [f for f in files if f['name'] == 'manifest.json']
+
+        if not players_files:
+            p_dialog.close()
+            xbmcgui.Dialog().ok('Balandro Bridge Multi', 'No se encontraron players en la nube.')
+            return
+
+        # 2. Borrar todos los .json actuales de la carpeta de players de TMDb Helper
+        p_dialog.update(20, 'Eliminando players antiguos...')
+        players_dir = TMDB_PLAYERS_PATH
+        deleted = 0
+        for fname in os.listdir(players_dir):
+            if fname.endswith('.json'):
+                try:
+                    os.remove(os.path.join(players_dir, fname))
+                    deleted += 1
+                except Exception as e:
+                    xbmc.log('Balandro Bridge Multi [Cloud]: no se pudo borrar ' + fname + ' - ' + str(e), xbmc.LOGWARNING)
+
+        xbmc.log('Balandro Bridge Multi [Cloud]: eliminados %d players antiguos' % deleted, xbmc.LOGINFO)
+
+        # 3. Descargar e instalar cada player nuevo
+        total = len(players_files)
+        for idx, f in enumerate(players_files):
+            if p_dialog.iscanceled():
+                p_dialog.close()
+                return
+            pct = 20 + int(70 * (idx + 1) / total)
+            p_dialog.update(pct, 'Descargando: ' + f['name'])
+            try:
+                dl_req = ureq.Request(
+                    f['download_url'],
+                    headers={
+                        'Authorization': 'token ' + _GITHUB_TOKEN,
+                        'User-Agent': 'BalandroBridgeMulti'
+                    }
+                )
+                with ureq.urlopen(dl_req, timeout=15) as r:
+                    content = r.read()
+                dest = os.path.join(players_dir, f['name'])
+                with open(dest, 'wb') as out:
+                    out.write(content)
+                xbmc.log('Balandro Bridge Multi [Cloud]: descargado ' + f['name'], xbmc.LOGINFO)
+            except Exception as e:
+                xbmc.log('Balandro Bridge Multi [Cloud]: error descargando ' + f['name'] + ' - ' + str(e), xbmc.LOGERROR)
+
+        # 4. Guardar Unix timestamp local de cuando se hizo la actualizacion
+        p_dialog.update(95, 'Guardando fecha de actualizacion...')
+        try:
+            import time as _time
+            with open(_CLOUD_TS_FILE, 'w', encoding='utf-8') as tf:
+                tf.write(str(int(_time.time())))
+        except Exception as e:
+            xbmc.log('Balandro Bridge Multi [Cloud]: error guardando timestamp - ' + str(e), xbmc.LOGWARNING)
+
+        p_dialog.update(100, 'Players actualizados correctamente.')
+        xbmc.sleep(800)
+        p_dialog.close()
+
+        xbmcgui.Dialog().notification(
+            'Balandro Bridge Multi',
+            '[COLOR chartreuse]%d players actualizados desde la nube[/COLOR]' % total,
+            xbmcgui.NOTIFICATION_INFO, 4000
+        )
+        xbmc.log('Balandro Bridge Multi [Cloud]: %d players instalados correctamente.' % total, xbmc.LOGINFO)
+
+    except Exception as e:
+        p_dialog.close()
+        xbmc.log('Balandro Bridge Multi [Cloud]: error general - ' + str(e), xbmc.LOGERROR)
+        xbmcgui.Dialog().ok('Balandro Bridge Multi', 'Error al actualizar players:\n' + str(e))
+
+
 def show_player_manager_home():
     check_and_run_migration()
     balandro_icon = os.path.join(balandro_path, 'icon.png')
+
+    # --- Fecha de la ultima actualizacion en la nube ---
+    cloud_ts_label = ''
+    try:
+        if os.path.exists(_CLOUD_TS_FILE):
+            with open(_CLOUD_TS_FILE, 'r', encoding='utf-8') as f:
+                ts = f.read().strip()
+            if ts:
+                import datetime
+                # Puede ser Unix timestamp (entero) o ISO string (legacy)
+                try:
+                    dt = datetime.datetime.fromtimestamp(int(ts))
+                except (ValueError, OSError):
+                    try:
+                        dt = datetime.datetime.strptime(ts, '%Y-%m-%dT%H:%M:%SZ')
+                    except Exception:
+                        dt = None
+                if dt:
+                    # Kodi ya devuelve formato strftime directamente
+                    kodi_date = xbmc.getRegion('dateshort')  # ej: '%d/%m/%Y'
+                    kodi_time = xbmc.getRegion('time')        # ej: '%H:%M:%S' o '%I:%M:%S %p'
+                    try:
+                        date_str = dt.strftime(kodi_date)
+                    except Exception:
+                        date_str = dt.strftime('%d/%m/%Y')
+                    try:
+                        # Quitar segundos del formato de hora si los tiene
+                        kodi_time_short = kodi_time.replace(':%S', '').replace(':ss', '')
+                        time_str = dt.strftime(kodi_time_short)
+                    except Exception:
+                        time_str = dt.strftime('%H:%M')
+                    cloud_ts_label = date_str + ' ' + time_str
+    except Exception:
+        pass
+
+    update_desc = 'Descarga los players mas recientes del repositorio en la nube y reemplaza los actuales.'
+    if cloud_ts_label:
+        update_desc += '[CR][COLOR grey]Ultima actualizacion de la nube: %s[/COLOR]' % cloud_ts_label
+    else:
+        update_desc += '[CR][COLOR grey]Nunca actualizado desde la nube[/COLOR]'
+
+    update_label = '[B][COLOR deepskyblue]Actualizar Players desde la Nube[/COLOR][/B]'
+    if cloud_ts_label:
+        update_label += '  [COLOR grey](%s)[/COLOR]' % cloud_ts_label
 
     categories = [
         ('create', '[B]Crear nuevo Player[/B]',
@@ -2147,6 +2333,14 @@ def show_player_manager_home():
          'Players que soportan reproduccion de episodios de series',
          balandro_icon, True),
     ]
+
+    # --- Boton de actualizacion desde la nube ---
+    li_update = xbmcgui.ListItem(label=update_label)
+    li_update.setArt({'thumb': balandro_icon, 'icon': balandro_icon})
+    set_listitem_info(li_update, {'plot': update_desc, 'title': update_label})
+    li_update.setProperty('IsPlayable', 'false')
+    update_url = 'plugin://plugin.video.balandro.bridge.multi/?action=update_players_cloud'
+    xbmcplugin.addDirectoryItem(handle, update_url, li_update, False)
 
     for cat_id, cat_label, cat_desc, icon, is_folder in categories:
         li = xbmcgui.ListItem(label=cat_label)
@@ -3732,6 +3926,13 @@ def main():
     # -----------------------------------------------------------
     if action == 'absorb':
         _original_setResolvedUrl(handle, False, xbmcgui.ListItem())
+        return
+
+    # -----------------------------------------------------------
+    # action=update_players_cloud: descarga players desde GitHub
+    # -----------------------------------------------------------
+    if action == 'update_players_cloud':
+        update_players_from_cloud()
         return
 
     # -----------------------------------------------------------

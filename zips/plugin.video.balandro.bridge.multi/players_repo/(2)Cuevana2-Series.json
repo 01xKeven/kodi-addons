@@ -1,0 +1,25 @@
+{
+    "name": "(2)Cuevana2-Series",
+    "plugin": "plugin.video.balandro.bridge.multi",
+    "priority": 200,
+    "is_resolvable": "true",
+    "assert": {
+        "play_episode": [
+            "showname",
+            "season",
+            "episode"
+        ]
+    },
+    "play_episode": [
+        "plugin://plugin.video.balandro.bridge.multi/?url=plugin://plugin.video.balandro/?ewogICAgImFjdGlvbiI6ICJzZWFyY2giLAogICAgImNhdGVnb3J5IjogIkN1ZXZhbmEyIiwKICAgICJjaGFubmVsIjogImN1ZXZhbmEyIiwKICAgICJleHRyYSI6ICJ0dnNob3dzIiwKICAgICJmYW5hcnQiOiAiQzpcXFVzZXJzXFwwMXhLZXZlblxcQXBwRGF0YVxcUm9hbWluZ1xcS29kaVxcYWRkb25zXFxwbHVnaW4udmlkZW8uYmFsYW5kcm9cXGZhbmFydC5qcGciLAogICAgImluZm9MYWJlbHMiOiB7fSwKICAgICJwbG90IjogIltDYXN0ZWxsYW5vLCBMYXRpbm8sIFZvc2VdW0NSXVtDUl1QZWzDrWN1bGFzIHBvciBnw6luZXJvcy4gUHVlZGUgcmVxdWVyaXIgZWwgdXNvIGRlIHByb3hpZXMgZW4gZnVuY2nDs24gZGVsIHBhw61zL29wZXJhZG9yYSBkZXNkZSBlbCBxdWUgc2UgYWNjZWRlLiIsCiAgICAic2VhcmNoX3R5cGUiOiAidHZzaG93IiwKICAgICJ0aHVtYm5haWwiOiAiQzpcXFVzZXJzXFwwMXhLZXZlblxcQXBwRGF0YVxcUm9hbWluZ1xcS29kaVxcYWRkb25zXFxwbHVnaW4udmlkZW8uYmFsYW5kcm9cXHJlc291cmNlc1xcbWVkaWFcXGNoYW5uZWxzXFx0aHVtYlxcY3VldmFuYTIuanBnIiwKICAgICJ0aXRsZSI6ICJbQ09MT1IgaG90cGlua11CdXNjYXIgc2VyaWUgLi4uWy9DT0xPUl0iCn0%3D&showname={showname}&showyear={showyear}&season={season}&episode={episode}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&tagline={tagline}&director={director}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}",
+        {
+            "title": "(?i)^({es-ES_showname}|{es-MX_showname}|{en_showname}|{original_name}|.+)",
+            "season": "{season}",
+            "episode": "{episode}"
+        }
+    ],
+    "fallback": {
+        "play_episode": "(3)VerOnline-Series.json play_episode"
+    },
+    "is_folder": "false"
+}

@@ -1,0 +1,788 @@
+﻿{
+    "players":  [
+                    {
+                        "value":  "(1)BalandroMulti.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(1)BalandroMulti.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(1)BalandroMulti.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(1)LaMovie-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(1)LaMovie-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(1)LaMovie-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(1)LaMovie.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(1)LaMovie.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(1)LaMovie.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(10)HdFull-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(10)HdFull-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(10)HdFull-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(10)PelisPediaIs.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(10)PelisPediaIs.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(10)PelisPediaIs.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(11)GenteClic.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(11)GenteClic.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(11)GenteClic.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(12)Gnula.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(12)Gnula.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(12)Gnula.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(13)PlusHd.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(13)PlusHd.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(13)PlusHd.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(14)CineMundo.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(14)CineMundo.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(14)CineMundo.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(15)TodoCineClasico.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(15)TodoCineClasico.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(15)TodoCineClasico.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(16)Serieskao.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(16)Serieskao.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(16)Serieskao.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(2)Cuevana2-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(2)Cuevana2-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(2)Cuevana2-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(2)Cuevana2.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(2)Cuevana2.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(2)Cuevana2.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(3)SoloLatino.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(3)SoloLatino.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(3)SoloLatino.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(3)VerOnline-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(3)VerOnline-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(3)VerOnline-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(4)HdFull.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(4)HdFull.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(4)HdFull.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(4)SeriesKao-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(4)SeriesKao-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(4)SeriesKao-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(5)SoloLatino-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(5)SoloLatino-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(5)SoloLatino-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(5)UltraPelis.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(5)UltraPelis.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(5)UltraPelis.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(6)Cuevana3Re-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(6)Cuevana3Re-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(6)Cuevana3Re-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(6)Cuevana3Re.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(6)Cuevana3Re.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(6)Cuevana3Re.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(7)HomeCine-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(7)HomeCine-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(7)HomeCine-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(7)RePelisHd.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(7)RePelisHd.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(7)RePelisHd.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(8)HomeCine.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(8)HomeCine.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(8)HomeCine.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(8)RePelisHd-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(8)RePelisHd-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(8)RePelisHd-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(9)PelisForte.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(9)PelisForte.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(9)PelisForte.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    },
+                    {
+                        "value":  "(9)PelisPediaIs-Series.json",
+                        "PSPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo\\(9)PelisPediaIs-Series.json",
+                        "PSParentPath":  "Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\01xKeven\\AppData\\Roaming\\Kodi\\addons\\plugin.video.balandro.bridge.multi\\players_repo",
+                        "PSChildName":  "(9)PelisPediaIs-Series.json",
+                        "PSDrive":  {
+                                        "CurrentLocation":  "Users\\01xKeven",
+                                        "Name":  "C",
+                                        "Provider":  "Microsoft.PowerShell.Core\\FileSystem",
+                                        "Root":  "C:\\",
+                                        "Description":  "Disco local",
+                                        "MaximumSize":  null,
+                                        "Credential":  "System.Management.Automation.PSCredential",
+                                        "DisplayRoot":  null
+                                    },
+                        "PSProvider":  {
+                                           "ImplementingType":  "Microsoft.PowerShell.Commands.FileSystemProvider",
+                                           "HelpFile":  "System.Management.Automation.dll-Help.xml",
+                                           "Name":  "FileSystem",
+                                           "PSSnapIn":  "Microsoft.PowerShell.Core",
+                                           "ModuleName":  "Microsoft.PowerShell.Core",
+                                           "Module":  null,
+                                           "Description":  "",
+                                           "Capabilities":  52,
+                                           "Home":  "C:\\Users\\01xKeven",
+                                           "Drives":  "C"
+                                       },
+                        "PSIsContainer":  false
+                    }
+                ],
+    "last_updated":  "2026-08-11T15:36:51Z"
+}
