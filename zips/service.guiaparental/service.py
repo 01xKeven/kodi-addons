@@ -302,7 +302,7 @@ class ParentalPlayer(xbmc.Player):
 
 
 
-            # 3. Descargar la guía parental de MdbList
+            # 3. Descargar la guía parental de IMDb
             try:
                 movie_title, guide = main.get_parental_guide(imdb_id, progress_dialog=None, silent=True, media_type=media_type)
             except Exception as e:
