@@ -382,14 +382,14 @@ def main_loop():
     monitor = xbmc.Monitor()
     player = ParentalPlayer()
     
-    log("Servicio de Control Parental MdbList iniciado.")
+    log("Servicio de Control Parental IMDb iniciado.")
     
     while not monitor.abortRequested():
         if monitor.waitForAbort(1):
             break
             
     player.close_overlay()
-    log("Servicio de Control Parental MdbList detenido.")
+    log("Servicio de Control Parental IMDb detenido.")
 
 if __name__ == '__main__':
     main_loop()

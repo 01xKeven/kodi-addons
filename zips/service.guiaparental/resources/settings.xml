@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings version="1">
-    <section id="plugin.video.guiaparental">
+    <section id="service.guiaparental">
         <category label="30019">
-            <setting id="mdblist_apikey" type="text" label="30020" default="0cmajscves055oixkk32bjd5z"/>
+            <setting id="mdblist_apikey" type="text" label="30020" default=""/>
         </category>
     </section>
 </settings>
