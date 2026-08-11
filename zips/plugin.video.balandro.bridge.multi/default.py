@@ -2133,9 +2133,8 @@ def check_and_run_migration():
         dialog.ok("Balandro Bridge Multi - Migración", "Se han migrado %d reproductores con éxito." % migrated_count)
 
 # ---------------------------------------------------------------
-# CONSTANTES PARA ACTUALIZACIÓN DE PLAYERS DESDE GITHUB
+# CONSTANTES PARA ACTUALIZACIÓN DE PLAYERS DESDE GITHUB (repo público)
 # ---------------------------------------------------------------
-_GITHUB_TOKEN = ''
 _GITHUB_REPO  = '01xKeven/balandro-players'
 _GITHUB_API   = 'https://api.github.com/repos/' + _GITHUB_REPO + '/contents'
 _CLOUD_TS_FILE = os.path.join(
@@ -2144,13 +2143,12 @@ _CLOUD_TS_FILE = os.path.join(
 )
 
 def _github_get(path):
-    """Hace una peticion GET a la API de GitHub con autenticacion."""
+    """Hace una peticion GET a la API de GitHub (repo público, sin token)."""
     try:
         import urllib.request as ureq
         req = ureq.Request(
             _GITHUB_API + path,
             headers={
-                'Authorization': 'token ' + _GITHUB_TOKEN,
                 'Accept': 'application/vnd.github.v3.raw',
                 'User-Agent': 'BalandroBridgeMulti'
             }
@@ -2161,25 +2159,8 @@ def _github_get(path):
         xbmc.log('Balandro Bridge Multi [Cloud]: error en peticion GitHub - ' + str(e), xbmc.LOGERROR)
         return None
 
-def _get_cloud_last_updated():
-    """Obtiene la fecha de la ultima actualizacion de la nube desde manifest.json."""
-    try:
-        import urllib.request as ureq
-        req = ureq.Request(
-            'https://raw.githubusercontent.com/' + _GITHUB_REPO + '/master/manifest.json',
-            headers={
-                'Authorization': 'token ' + _GITHUB_TOKEN,
-                'User-Agent': 'BalandroBridgeMulti'
-            }
-        )
-        with ureq.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode('utf-8'))
-        return data.get('last_updated', '')
-    except Exception:
-        return ''
-
 def update_players_from_cloud():
-    """Descarga todos los .json del repo privado de GitHub y reemplaza los players locales."""
+    """Descarga todos los .json del repo público de GitHub y reemplaza los players locales."""
     p_dialog = xbmcgui.DialogProgress()
     p_dialog.create('Balandro Bridge Multi', 'Conectando con GitHub...')
     try:
@@ -2189,7 +2170,6 @@ def update_players_from_cloud():
         req = ureq.Request(
             'https://api.github.com/repos/' + _GITHUB_REPO + '/contents',
             headers={
-                'Authorization': 'token ' + _GITHUB_TOKEN,
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'BalandroBridgeMulti'
             }
@@ -2202,7 +2182,6 @@ def update_players_from_cloud():
             return
 
         players_files = [f for f in files if f['name'].endswith('.json') and f['name'] != 'manifest.json']
-        manifest_files = [f for f in files if f['name'] == 'manifest.json']
 
         if not players_files:
             p_dialog.close()
@@ -2234,10 +2213,7 @@ def update_players_from_cloud():
             try:
                 dl_req = ureq.Request(
                     f['download_url'],
-                    headers={
-                        'Authorization': 'token ' + _GITHUB_TOKEN,
-                        'User-Agent': 'BalandroBridgeMulti'
-                    }
+                    headers={'User-Agent': 'BalandroBridgeMulti'}
                 )
                 with ureq.urlopen(dl_req, timeout=15) as r:
                     content = r.read()
@@ -2272,6 +2248,8 @@ def update_players_from_cloud():
         p_dialog.close()
         xbmc.log('Balandro Bridge Multi [Cloud]: error general - ' + str(e), xbmc.LOGERROR)
         xbmcgui.Dialog().ok('Balandro Bridge Multi', 'Error al actualizar players:\n' + str(e))
+
+
 
 
 def show_player_manager_home():
