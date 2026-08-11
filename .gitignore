@@ -5,5 +5,3 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Balandro Bridge - settings privados
-zips/plugin.video.balandro.bridge.multi/resources/settings.xml
