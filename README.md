@@ -5,7 +5,7 @@
 
 ### Option 1 — Repository (recommended)
 
-1. Download the repository zip: [repository.01xkeven-1.0.9.zip](https://01xkeven.github.io/kodi-addons/repository.01xkeven-1.0.9.zip)
+1. Download the repository zip: [repository.01xkeven-1.1.0.zip](https://01xkeven.github.io/kodi-addons/repository.01xkeven-1.1.0.zip)
 2. In Kodi: **Settings → Add-ons → Install from zip file** → select the downloaded zip.
 3. Go to **Install from repository → 01xKeven Repository** and install the add-ons you want.
 

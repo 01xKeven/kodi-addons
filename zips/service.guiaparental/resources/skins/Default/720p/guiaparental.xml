@@ -27,7 +27,7 @@
                 <height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]Desnudos[/B]  ·  $INFO[Window.Property(Sexo.Text)]</label>
+                <label>[B]$ADDON[service.guiaparental 30000][/B]  ·  $INFO[Window.Property(Sexo.Text)]</label>
                 <animation effect="fade" start="0" end="100" time="400" delay="0">WindowOpen</animation>
                 <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="0">WindowOpen</animation>
                 <animation effect="fade" start="100" end="0" time="250" delay="0">WindowClose</animation>
@@ -42,7 +42,7 @@
                 <height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]Violencia[/B]  ·  $INFO[Window.Property(Violencia.Text)]</label>
+                <label>[B]$ADDON[service.guiaparental 30001][/B]  ·  $INFO[Window.Property(Violencia.Text)]</label>
                 <animation effect="fade" start="0" end="100" time="400" delay="150">WindowOpen</animation>
                 <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="150">WindowOpen</animation>
                 <animation effect="fade" start="100" end="0" time="250" delay="50">WindowClose</animation>
@@ -57,7 +57,7 @@
                 <height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]Groserias[/B]  ·  $INFO[Window.Property(Obscenidad.Text)]</label>
+                <label>[B]$ADDON[service.guiaparental 30002][/B]  ·  $INFO[Window.Property(Obscenidad.Text)]</label>
                 <animation effect="fade" start="0" end="100" time="400" delay="300">WindowOpen</animation>
                 <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="300">WindowOpen</animation>
                 <animation effect="fade" start="100" end="0" time="250" delay="100">WindowClose</animation>
@@ -72,7 +72,7 @@
                 <height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]Alcohol/Drogas[/B]  ·  $INFO[Window.Property(Alcohol.Text)]</label>
+                <label>[B]$ADDON[service.guiaparental 30003][/B]  ·  $INFO[Window.Property(Alcohol.Text)]</label>
                 <animation effect="fade" start="0" end="100" time="400" delay="450">WindowOpen</animation>
                 <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="450">WindowOpen</animation>
                 <animation effect="fade" start="100" end="0" time="250" delay="150">WindowClose</animation>
@@ -87,7 +87,7 @@
                 <height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]Escenas intensas[/B]  ·  $INFO[Window.Property(Terror.Text)]</label>
+                <label>[B]$ADDON[service.guiaparental 30004][/B]  ·  $INFO[Window.Property(Terror.Text)]</label>
                 <animation effect="fade" start="0" end="100" time="400" delay="600">WindowOpen</animation>
                 <animation effect="slide" start="-30,0" end="0,0" time="400" tween="quadratic" easing="out" delay="600">WindowOpen</animation>
                 <animation effect="fade" start="100" end="0" time="250" delay="200">WindowClose</animation>
