@@ -1,28 +1,20 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="service.guiaparental" name="Control Parental IMDb" version="1.0.8" provider-name="01xKeven">
+<addon id="service.guiaparental" name="Control Parental IMDb" version="1.0.9" provider-name="01xKeven">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="script.module.requests" version="2.22.0"/>
   </requires>
   <extension point="xbmc.service" library="service.py"/>
   <extension point="xbmc.addon.metadata">
-    <summary>Control Parental IMDb</summary>
-    <description>Muestra la guía de contenido parental de IMDb para películas y episodios.</description>
-    <summary lang="en_GB">Displays IMDb Parental Guide</summary>
-    <description lang="en_GB">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
-    <summary lang="en_US">Displays IMDb Parental Guide</summary>
-    <description lang="en_US">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
-    <summary lang="en_us">Displays IMDb Parental Guide</summary>
-    <description lang="en_us">This addon displays the parental content guide (violence, nudity, etc.) of a movie or episode using its IMDb ID.</description>
-    <summary lang="es_ES">Muestra la guía parental de IMDb</summary>
-    <description lang="es_ES">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
-    <summary lang="es_MX">Muestra la guía parental de IMDb</summary>
-    <description lang="es_MX">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
-    <summary lang="es_es">Muestra la guía parental de IMDb</summary>
-    <description lang="es_es">Este addon muestra la guía de contenido parental (violencia, desnudez, etc.) de una película o episodio utilizando su ID de IMDb.</description>
+    <summary>IMDb Parental Guide</summary>
+    <description>Displays the IMDb parental content guide for movies and episodes. Shows violence, nudity, profanity and more.</description>
+    <summary lang="es_ES">Guía Parental de IMDb</summary>
+    <description lang="es_ES">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra violencia, desnudez, groserías y más.</description>
+    <summary lang="es_MX">Guía Parental de IMDb</summary>
+    <description lang="es_MX">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra violencia, desnudez, groserías y más.</description>
     <platform>all</platform>
     <assets>
         <icon>resources/icon.png</icon>
     </assets>
   </extension>
-</addon>
+</addon>
