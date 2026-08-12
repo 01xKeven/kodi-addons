@@ -89,11 +89,22 @@ FALLBACK_STRINGS = {
 
 def get_language():
     try:
+        # Método 1: Código ISO 639-1 (ej. 'en', 'es')
         lang = xbmc.getLanguage(xbmc.ISO_639_1)
-        if lang and lang.lower().startswith('es'):
-            return 'es'
+        if lang:
+            return 'es' if lang.lower().startswith('es') else 'en'
     except Exception:
         pass
+    try:
+        # Método 2: Nombre en inglés del idioma (ej. 'English', 'Spanish')
+        lang_name = xbmc.getLanguage()
+        if lang_name:
+            if 'spanish' in lang_name.lower() or 'espanol' in lang_name.lower():
+                return 'es'
+            return 'en'
+    except Exception:
+        pass
+    # Defecto: inglés
     return 'en'
 
 def get_string(key):
@@ -105,9 +116,10 @@ def get_string(key):
                 return val
         except Exception:
             pass
-    # Fallback si getLocalizedString devuelve vacío o falla (p.ej. antes de reiniciar Kodi)
+    # Fallback si getLocalizedString devuelve vacío (p.ej. al arrancar Kodi)
     lang = get_language()
-    return FALLBACK_STRINGS[lang].get(key, str(key))
+    result = FALLBACK_STRINGS[lang].get(key, FALLBACK_STRINGS['en'].get(key, str(key)))
+    return result
 
 def log(msg, level=xbmc.LOGINFO):
     """Función para escribir en el log de Kodi."""
