@@ -26,7 +26,7 @@ msgid "30002"
 msgstr "Profanity"
 
 msgid "30003"
-msgstr "Alcohol/Drugs"
+msgstr "Alcohol & Drugs"
 
 msgid "30004"
 msgstr "Intense Scenes"

@@ -100,7 +100,7 @@ class ParentalGuideOverlay(object):
                     "SEXUAL_CONTENT": "Desnudos",
                     "VIOLENCE": "Violencia",
                     "PROFANITY": "Groserias",
-                    "ALCOHOL_DRUGS": "Alcohol/Drogas",
+                    "ALCOHOL_DRUGS": "Alcohol y Drogas",
                     "FRIGHTENING_INTENSE_SCENES": "Escenas intensas"
                 }.get(cat_key)
                 data = normalized.get(spanish_fallback)

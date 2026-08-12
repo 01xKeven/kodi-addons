@@ -26,7 +26,7 @@ msgid "30002"
 msgstr "Groserias"
 
 msgid "30003"
-msgstr "Alcohol/Drogas"
+msgstr "Alcohol y Drogas"
 
 msgid "30004"
 msgstr "Escenas intensas"
