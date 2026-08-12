@@ -3957,6 +3957,44 @@ def main():
             sys.argv[1] = handle
             apply_monkeypatch()
             platformtools.play_from_itemlist(links, matched_item)
+
+            # --- Monitor de 60 segundos tras selección manual ---
+            # Si el usuario para la reproducción en el primer minuto,
+            # se vuelve a mostrar la lista completa de enlaces automáticamente.
+            def _manual_play_monitor():
+                import time as _t
+                # Esperar hasta 8 segundos a que empiece la reproducción
+                deadline_start = _t.time() + 8.0
+                started = False
+                while _t.time() < deadline_start:
+                    if xbmc.Player().isPlaying():
+                        started = True
+                        break
+                    _t.sleep(0.3)
+
+                if not started:
+                    # Nunca comenzó a reproducir — no hacer nada
+                    xbmc.log("Balandro Bridge Multi [monitor manual]: reproduccion nunca inicio, sin accion.", xbmc.LOGINFO)
+                    return
+
+                xbmc.log("Balandro Bridge Multi [monitor manual]: reproduccion detectada, monitoreando 60s.", xbmc.LOGINFO)
+
+                # Monitorear durante 60 segundos desde que arrancó
+                deadline_watch = _t.time() + 60.0
+                while _t.time() < deadline_watch:
+                    _t.sleep(0.5)
+                    if not xbmc.Player().isPlaying():
+                        # El usuario paró dentro del primer minuto → reabrir lista
+                        xbmc.log("Balandro Bridge Multi [monitor manual]: parada antes de 60s — relanzando selector.", xbmc.LOGINFO)
+                        xbmc.sleep(600)  # Pequeña pausa para que Kodi limpie el reproductor
+                        xbmc.executebuiltin('RunPlugin(plugin://plugin.video.balandro.bridge.multi/?action=select_and_play)')
+                        return
+
+                xbmc.log("Balandro Bridge Multi [monitor manual]: 60s de reproduccion OK, sin accion.", xbmc.LOGINFO)
+
+            import threading as _t_manual
+            _t_manual.Thread(target=_manual_play_monitor, daemon=True).start()
+
         try:
             xbmcplugin.endOfDirectory(handle, succeeded=False)
         except Exception:

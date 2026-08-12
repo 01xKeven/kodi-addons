@@ -50,7 +50,7 @@
     </assets>
   </extension>
 </addon>
-<addon id="plugin.video.balandro.bridge.multi" name="Balandro Bridge Multi para TMDb Helper" version="1.0.7" provider-name="01xKeven">
+<addon id="plugin.video.balandro.bridge.multi" name="Balandro Bridge Multi para TMDb Helper" version="1.0.8" provider-name="01xKeven">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="plugin.video.balandro" version="1.0.0"/>
