@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window>
+	<visible>[Window.IsActive(FullscreenVideo) | Window.IsActive(Visualisation)] + ![Window.IsActive(VideoOSD) | Window.IsActive(MusicOSD) | Window.IsActive(SliderDialog)] + [Player.Seeking | Player.HasPerformedSeek(3)]</visible>
+	<controls>
+		<control type="group">
+			<posx>0</posx>
+			<posy>120r</posy>
+			<include>VisibleFadeEffect</include>
+			<animation effect="slide" start="0,120" end="0,0" time="200" easing="out" tween="quadratic">Visible</animation>
+			<animation effect="slide" start="0,0" end="0,120" time="200" easing="in" tween="quadratic">Hidden</animation>
+
+			<!-- Dark Frosted Background Bar -->
+			<control type="image">
+				<posx>0</posx>
+				<posy>0</posy>
+				<include>ScreenWidth</include>
+				<height>120</height>
+				<texture flipy="true">header.png</texture>
+				<colordiffuse>E005080E</colordiffuse>
+			</control>
+
+			<!-- Content Container -->
+			<control type="group">
+				<posx>40</posx>
+				<posy>15</posy>
+				<width>ScreenWidth</width>
+				<height>80</height>
+
+				<!-- Time Elapsed (Left) -->
+				<control type="label">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>160</width>
+					<height>30</height>
+					<font>font20_title</font>
+					<textcolor>white</textcolor>
+					<align>left</align>
+					<aligny>center</aligny>
+					<label>$INFO[Player.Time(hh:mm:ss)]</label>
+				</control>
+
+				<!-- Center Seek Status / Step Size (e.g. +00:10, 2x, PAUSA) -->
+				<control type="label">
+					<posx>180</posx>
+					<posy>0</posy>
+					<width>400</width>
+					<height>30</height>
+					<font>font20_title</font>
+					<align>left</align>
+					<aligny>center</aligny>
+					<textcolor>selected</textcolor>
+					<label>$VAR[SeekLabel]</label>
+				</control>
+
+				<!-- Total Duration (Right) -->
+				<control type="label">
+					<posx>80r</posx>
+					<posy>0</posy>
+					<width>160</width>
+					<height>30</height>
+					<font>font20_title</font>
+					<align>right</align>
+					<aligny>center</aligny>
+					<textcolor>lightgrey</textcolor>
+					<label>$INFO[Player.Duration(hh:mm:ss)]</label>
+				</control>
+
+				<!-- 16:9 Progress Bar -->
+				<control type="group">
+					<visible>String.IsEqual(Skin.AspectRatio,16:9)</visible>
+					<posx>0</posx>
+					<posy>35</posy>
+					<width>1626</width>
+					<height>30</height>
+
+					<!-- Translucent Track Background (Sleek Glass Line) -->
+					<control type="image">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1626</width>
+						<height>8</height>
+						<texture>white.png</texture>
+						<colordiffuse>30FFFFFF</colordiffuse>
+					</control>
+
+					<!-- Cache Buffer Stream Progress (50% opacity) -->
+					<control type="progress">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1626</width>
+						<height>8</height>
+						<info>Player.ProgressCache</info>
+						<midtexture colordiffuse="50FFFFFF">white.png</midtexture>
+						<texturebg colordiffuse="00000000">blank.png</texturebg>
+					</control>
+
+					<!-- Active Played Progress (Vibrant Blue Fill) -->
+					<control type="progress">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1626</width>
+						<height>8</height>
+						<info>Player.Progress</info>
+						<midtexture colordiffuse="blue">white.png</midtexture>
+						<texturebg colordiffuse="00000000">blank.png</texturebg>
+					</control>
+
+					<!-- Touch Seek Slider -->
+					<control type="slider" id="87">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>1626</width>
+						<height>24</height>
+						<action>seek</action>
+						<texturesliderbar>blank.png</texturesliderbar>
+						<textureslidernib>blank.png</textureslidernib>
+						<textureslidernibfocus>blank.png</textureslidernibfocus>
+					</control>
+				</control>
+
+				<!-- 4:3 Progress Bar -->
+				<control type="group">
+					<visible>String.IsEqual(Skin.AspectRatio,4:3)</visible>
+					<posx>0</posx>
+					<posy>35</posy>
+					<width>1200</width>
+					<height>30</height>
+
+					<!-- Translucent Track Background (Sleek Glass Line) -->
+					<control type="image">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1200</width>
+						<height>8</height>
+						<texture>white.png</texture>
+						<colordiffuse>30FFFFFF</colordiffuse>
+					</control>
+
+					<!-- Cache Buffer Stream Progress (50% opacity) -->
+					<control type="progress">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1200</width>
+						<height>8</height>
+						<info>Player.ProgressCache</info>
+						<midtexture colordiffuse="50FFFFFF">white.png</midtexture>
+						<texturebg colordiffuse="00000000">blank.png</texturebg>
+					</control>
+
+					<!-- Active Played Progress (Vibrant Blue Fill) -->
+					<control type="progress">
+						<posx>0</posx>
+						<posy>6</posy>
+						<width>1200</width>
+						<height>8</height>
+						<info>Player.Progress</info>
+						<midtexture colordiffuse="blue">white.png</midtexture>
+						<texturebg colordiffuse="00000000">blank.png</texturebg>
+					</control>
+
+					<!-- Touch Seek Slider -->
+					<control type="slider" id="87">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>1200</width>
+						<height>24</height>
+						<action>seek</action>
+						<texturesliderbar>blank.png</texturesliderbar>
+						<textureslidernib>blank.png</textureslidernib>
+						<textureslidernibfocus>blank.png</textureslidernibfocus>
+					</control>
+				</control>
+			</control>
+		</control>
+	</controls>
+</window>

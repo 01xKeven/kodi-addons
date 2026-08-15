@@ -1,0 +1,1101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<includes>
+	<include name="PlayerControlCommons">
+		<visible>!Window.IsVisible(SliderDialog)</visible>
+		<include>VisibleFadeEffect</include>
+
+		<!-- ========================================================= -->
+		<!-- 1. FULLSCREEN CINEMATIC DIMMER                            -->
+		<!-- ========================================================= -->
+		<control type="image">
+			<posx>0</posx>
+			<posy>0</posy>
+			<include>ScreenWidth</include>
+			<height>960</height>
+			<texture>black.png</texture>
+			<colordiffuse>55000000</colordiffuse>
+		</control>
+
+		<!-- ========================================================= -->
+		<!-- 2. MINIMALIST TOP BAR (Logo + Large Clock on Far Right)   -->
+		<!-- ========================================================= -->
+		<control type="group">
+			<posx>0</posx>
+			<posy>0</posy>
+			<include>ScreenWidth</include>
+			<height>75</height>
+
+			<control type="image">
+				<posx>0</posx>
+				<posy>0</posy>
+				<include>ScreenWidth</include>
+				<height>75</height>
+				<texture>header.png</texture>
+				<colordiffuse>D005080E</colordiffuse>
+			</control>
+
+			<!-- Kodi Logo Button -->
+			<control type="button">
+				<posx>25</posx>
+				<posy>6</posy>
+				<width>140</width>
+				<height>60</height>
+				<font></font>
+				<texturenofocus></texturenofocus>
+				<texturefocus></texturefocus>
+				<onclick>Dialog.Close(all)</onclick>
+				<onclick>ActivateWindow(Home)</onclick>
+			</control>
+			<control type="image">
+				<posx>25</posx>
+				<posy>16</posy>
+				<width>130</width>
+				<height>40</height>
+				<texture>special://xbmc/media/vendor_logo.png</texture>
+				<aspectratio>keep</aspectratio>
+			</control>
+
+			<!-- Large Current Time (Pegado a la derecha) -->
+			<control type="label">
+				<posx>35r</posx>
+				<posy>10</posy>
+				<width>450</width>
+				<height>52</height>
+				<align>right</align>
+				<aligny>center</aligny>
+				<font>font24_title</font>
+				<textcolor>white</textcolor>
+				<label>[COLOR grey]Hora actual:[/COLOR] $INFO[System.Time]</label>
+			</control>
+		</control>
+
+		<!-- ========================================================= -->
+		<!-- 3. CENTER HERO CONTROLS (Ergonomic for Thumbs)            -->
+		<!-- ========================================================= -->
+		<!-- 16:9 Center Cluster -->
+		<control type="group">
+			<visible>String.IsEqual(Skin.AspectRatio,16:9) + Window.IsVisible(VideoOSD)</visible>
+			<posx>0</posx>
+			<posy>365</posy>
+			<width>1706</width>
+			<height>110</height>
+			<animation effect="fade" time="200">Visible</animation>
+			<animation effect="fade" time="200">Hidden</animation>
+
+			<!-- StepBack -10s (Left) -->
+			<control type="group">
+				<posx>671</posx>
+				<posy>9</posy>
+				<width>82</width>
+				<height>82</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>95000000</colordiffuse>
+				</control>
+				<control type="button" id="901">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<onclick>StepBack</onclick>
+				</control>
+				<control type="image">
+					<posx>18</posx>
+					<posy>18</posy>
+					<width>46</width>
+					<height>46</height>
+					<texture>icon_button_refresh.png</texture>
+				</control>
+			</control>
+
+			<!-- HERO PLAY / PAUSE (Center 100x100) -->
+			<control type="group">
+				<posx>803</posx>
+				<posy>0</posy>
+				<width>100</width>
+				<height>100</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>100</width>
+					<height>100</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>BA000000</colordiffuse>
+				</control>
+				<control type="togglebutton">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>100</width>
+					<height>100</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<alttexturefocus colordiffuse="blue">roundbutton-focus.png</alttexturefocus>
+					<alttexturenofocus>blank.png</alttexturenofocus>
+					<usealttexture>Player.Paused | Player.Forwarding | Player.Rewinding</usealttexture>
+					<onclick>PlayerControl(Play)</onclick>
+				</control>
+				<control type="image">
+					<visible>!Player.Paused + !Player.Forwarding + !Player.Rewinding</visible>
+					<posx>25</posx>
+					<posy>25</posy>
+					<width>50</width>
+					<height>50</height>
+					<texture>osd_pause.png</texture>
+				</control>
+				<control type="image">
+					<visible>Player.Paused | Player.Forwarding | Player.Rewinding</visible>
+					<posx>27</posx>
+					<posy>25</posy>
+					<width>50</width>
+					<height>50</height>
+					<texture>osd_play.png</texture>
+				</control>
+			</control>
+
+			<!-- StepForward +10s (Right) -->
+			<control type="group">
+				<posx>953</posx>
+				<posy>9</posy>
+				<width>82</width>
+				<height>82</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>95000000</colordiffuse>
+				</control>
+				<control type="button" id="902">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<onclick>StepForward</onclick>
+				</control>
+				<control type="image">
+					<posx>18</posx>
+					<posy>18</posy>
+					<width>46</width>
+					<height>46</height>
+					<texture flipx="true">icon_button_refresh.png</texture>
+				</control>
+			</control>
+		</control>
+
+		<!-- 4:3 Center Cluster -->
+		<control type="group">
+			<visible>String.IsEqual(Skin.AspectRatio,4:3) + Window.IsVisible(VideoOSD)</visible>
+			<posx>0</posx>
+			<posy>365</posy>
+			<width>1280</width>
+			<height>110</height>
+			<animation effect="fade" time="200">Visible</animation>
+			<animation effect="fade" time="200">Hidden</animation>
+
+			<!-- StepBack -10s -->
+			<control type="group">
+				<posx>468</posx>
+				<posy>9</posy>
+				<width>82</width>
+				<height>82</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>95000000</colordiffuse>
+				</control>
+				<control type="button" id="901">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<onclick>StepBack</onclick>
+				</control>
+				<control type="image">
+					<posx>18</posx>
+					<posy>18</posy>
+					<width>46</width>
+					<height>46</height>
+					<texture>icon_button_refresh.png</texture>
+				</control>
+			</control>
+
+			<!-- Hero Play / Pause -->
+			<control type="group">
+				<posx>590</posx>
+				<posy>0</posy>
+				<width>100</width>
+				<height>100</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>100</width>
+					<height>100</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>BA000000</colordiffuse>
+				</control>
+				<control type="togglebutton">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>100</width>
+					<height>100</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<alttexturefocus colordiffuse="blue">roundbutton-focus.png</alttexturefocus>
+					<alttexturenofocus>blank.png</alttexturenofocus>
+					<usealttexture>Player.Paused | Player.Forwarding | Player.Rewinding</usealttexture>
+					<onclick>PlayerControl(Play)</onclick>
+				</control>
+				<control type="image">
+					<visible>!Player.Paused + !Player.Forwarding + !Player.Rewinding</visible>
+					<posx>25</posx>
+					<posy>25</posy>
+					<width>50</width>
+					<height>50</height>
+					<texture>osd_pause.png</texture>
+				</control>
+				<control type="image">
+					<visible>Player.Paused | Player.Forwarding | Player.Rewinding</visible>
+					<posx>27</posx>
+					<posy>25</posy>
+					<width>50</width>
+					<height>50</height>
+					<texture>osd_play.png</texture>
+				</control>
+			</control>
+
+			<!-- StepForward +10s -->
+			<control type="group">
+				<posx>730</posx>
+				<posy>9</posy>
+				<width>82</width>
+				<height>82</height>
+				<control type="image">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texture>roundbutton-focus.png</texture>
+					<colordiffuse>95000000</colordiffuse>
+				</control>
+				<control type="button" id="902">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>82</width>
+					<height>82</height>
+					<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+					<texturenofocus>blank.png</texturenofocus>
+					<onclick>StepForward</onclick>
+				</control>
+				<control type="image">
+					<posx>18</posx>
+					<posy>18</posy>
+					<width>46</width>
+					<height>46</height>
+					<texture flipx="true">icon_button_refresh.png</texture>
+				</control>
+			</control>
+		</control>
+
+		<!-- ========================================================= -->
+		<!-- 4. MASTER UNIFIED BOTTOM DECK (Prominent Info & Controls) -->
+		<!-- ========================================================= -->
+		<control type="group">
+			<posx>0</posx>
+			<posy>420r</posy>
+			<include>ScreenWidth</include>
+			<height>420</height>
+			<animation effect="slide" start="0,420" end="0,0" time="250" easing="out" tween="quadratic">Visible</animation>
+			<animation effect="slide" start="0,0" end="0,420" time="200" easing="in" tween="quadratic">Hidden</animation>
+
+			<!-- Solid Frosted Glass Backdrop -->
+			<control type="image">
+				<posx>0</posx>
+				<posy>0</posy>
+				<include>ScreenWidth</include>
+				<height>420</height>
+				<texture flipy="true">header.png</texture>
+				<colordiffuse>F805080E</colordiffuse>
+			</control>
+
+			<!-- Upper Accent Border Line -->
+			<control type="image">
+				<posx>0</posx>
+				<posy>0</posy>
+				<include>ScreenWidth</include>
+				<height>2</height>
+				<texture>white.png</texture>
+				<colordiffuse>25FFFFFF</colordiffuse>
+			</control>
+
+			<!-- ===================================================== -->
+			<!-- ROW 1: PROMINENT POSTER + TITLE + SINOPSIS + BADGES   -->
+			<!-- ===================================================== -->
+
+			<!-- 16:9 Layout -->
+			<control type="group">
+				<visible>String.IsEqual(Skin.AspectRatio,16:9)</visible>
+				<posx>35</posx>
+				<posy>15</posy>
+				<width>1636</width>
+				<height>240</height>
+
+				<!-- Poster Card (155x230 px) -->
+				<control type="group">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>155</width>
+					<height>230</height>
+
+					<!-- Shadow frame -->
+					<control type="image">
+						<posx>-3</posx>
+						<posy>-3</posy>
+						<width>161</width>
+						<height>236</height>
+						<texture border="3">panel.png</texture>
+						<colordiffuse>A0000000</colordiffuse>
+					</control>
+					<!-- Inner background -->
+					<control type="image">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>155</width>
+						<height>230</height>
+						<texture>black.png</texture>
+						<colordiffuse>E0000000</colordiffuse>
+					</control>
+					<!-- Artwork -->
+					<control type="image">
+						<posx>2</posx>
+						<posy>2</posy>
+						<width>151</width>
+						<height>226</height>
+						<texture fallback="DefaultVideoCover.png">$VAR[OSDImage]</texture>
+						<aspectratio align="center" aligny="center">keep</aspectratio>
+						<fadetime>IconCrossfadeTime</fadetime>
+					</control>
+				</control>
+
+				<!-- Information Block (Right of Poster) -->
+				<control type="group">
+					<posx>180</posx>
+					<posy>0</posy>
+					<width>1456</width>
+					<height>240</height>
+
+					<!-- Slogan / Series Title -->
+					<control type="group">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>1456</width>
+						<height>26</height>
+
+						<!-- Slogan / Tagline -->
+						<control type="label">
+							<visible>Window.IsVisible(VideoOSD) + !String.IsEmpty(VideoPlayer.Tagline)</visible>
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>1456</width>
+							<height>26</height>
+							<font>font22</font>
+							<textcolor>selected</textcolor>
+							<label>« $INFO[VideoPlayer.Tagline] »</label>
+						</control>
+						<control type="label">
+							<visible>Window.IsVisible(VideoOSD) + VideoPlayer.Content(Episodes) + String.IsEmpty(VideoPlayer.Tagline)</visible>
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>1456</width>
+							<height>26</height>
+							<font>font22</font>
+							<textcolor>selected</textcolor>
+							<label>$INFO[VideoPlayer.TVShowTitle]</label>
+						</control>
+						<control type="label">
+							<visible>Window.IsVisible(MusicOSD)</visible>
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>1456</width>
+							<height>26</height>
+							<font>font22</font>
+							<textcolor>selected</textcolor>
+							<label>$INFO[MusicPlayer.Artist]</label>
+						</control>
+					</control>
+
+					<!-- Large Title & Larger Media Quality Badges (Centered between Slogan and Metadata) -->
+					<control type="group">
+						<posx>0</posx>
+						<posy>34</posy>
+						<width>1456</width>
+						<height>48</height>
+
+						<!-- Main Title (Big, Bold & Clear) -->
+						<control type="label">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>970</width>
+							<height>48</height>
+							<font>font35_title</font>
+							<textcolor>white</textcolor>
+							<label>$VAR[OSDLabel2]</label>
+						</control>
+
+						<!-- Larger Video Media Badges (Right aligned) -->
+						<control type="group">
+							<visible>Window.IsVisible(VideoOSD)</visible>
+							<posx>980</posx>
+							<posy>2</posy>
+							<width>476</width>
+							<height>44</height>
+
+							<control type="grouplist">
+								<posx>0</posx>
+								<posy>0</posy>
+								<width>476</width>
+								<height>44</height>
+								<align>right</align>
+								<orientation>horizontal</orientation>
+								<itemgap>10</itemgap>
+
+								<control type="image">
+									<width>108</width>
+									<height>42</height>
+									<aspectratio align="center">keep</aspectratio>
+									<texture>$INFO[VideoPlayer.VideoCodec,flagging/video/,.png]</texture>
+								</control>
+								<control type="image">
+									<width>108</width>
+									<height>42</height>
+									<aspectratio align="center">keep</aspectratio>
+									<texture>$INFO[VideoPlayer.VideoResolution,flagging/video/,.png]</texture>
+								</control>
+								<control type="image">
+									<width>108</width>
+									<height>42</height>
+									<aspectratio align="center">keep</aspectratio>
+									<texture>$INFO[VideoPlayer.AudioCodec,flagging/audio/,.png]</texture>
+								</control>
+								<control type="image">
+									<width>108</width>
+									<height>42</height>
+									<aspectratio align="center">keep</aspectratio>
+									<texture>$INFO[VideoPlayer.AudioChannels,flagging/audio/,.png]</texture>
+								</control>
+							</control>
+						</control>
+					</control>
+
+					<!-- Metadata Line (Year • Genre - Sin minutos) -->
+					<control type="label">
+						<visible>Window.IsVisible(VideoOSD)</visible>
+						<posx>0</posx>
+						<posy>88</posy>
+						<width>1456</width>
+						<height>28</height>
+						<font>font22_title</font>
+						<textcolor>blue</textcolor>
+						<label>$VAR[OSDLabel1]</label>
+					</control>
+					<control type="label">
+						<visible>Window.IsVisible(MusicOSD)</visible>
+						<posx>0</posx>
+						<posy>88</posy>
+						<width>1456</width>
+						<height>28</height>
+						<font>font22_title</font>
+						<textcolor>blue</textcolor>
+						<label>$INFO[MusicPlayer.Album,, • ]$INFO[MusicPlayer.Genre]</label>
+					</control>
+
+					<!-- SINOPSIS BOX (Clear, readable font with auto-scroll) -->
+					<control type="textbox">
+						<visible>Window.IsVisible(VideoOSD)</visible>
+						<posx>0</posx>
+						<posy>122</posy>
+						<width>1456</width>
+						<height>122</height>
+						<font>font22</font>
+						<textcolor>lightgrey</textcolor>
+						<autoscroll time="3000" delay="4000" repeat="5000">true</autoscroll>
+						<label fallback="Sinopsis no disponible.">$INFO[VideoPlayer.Plot]</label>
+					</control>
+					<control type="textbox">
+						<visible>Window.IsVisible(MusicOSD)</visible>
+						<posx>0</posx>
+						<posy>122</posy>
+						<width>1456</width>
+						<height>122</height>
+						<font>font22</font>
+						<textcolor>lightgrey</textcolor>
+						<label>$VAR[OSDLabel3]  •  $VAR[OSDLabel4]</label>
+					</control>
+				</control>
+			</control>
+
+			<!-- 4:3 Layout -->
+			<control type="group">
+				<visible>String.IsEqual(Skin.AspectRatio,4:3)</visible>
+				<posx>30</posx>
+				<posy>15</posy>
+				<width>1220</width>
+				<height>240</height>
+
+				<control type="group">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>145</width>
+					<height>220</height>
+
+					<control type="image">
+						<posx>-3</posx>
+						<posy>-3</posy>
+						<width>151</width>
+						<height>226</height>
+						<texture border="3">panel.png</texture>
+						<colordiffuse>A0000000</colordiffuse>
+					</control>
+					<control type="image">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>145</width>
+						<height>220</height>
+						<texture>black.png</texture>
+						<colordiffuse>E0000000</colordiffuse>
+					</control>
+					<control type="image">
+						<posx>2</posx>
+						<posy>2</posy>
+						<width>141</width>
+						<height>216</height>
+						<texture fallback="DefaultVideoCover.png">$VAR[OSDImage]</texture>
+						<aspectratio align="center" aligny="center">keep</aspectratio>
+					</control>
+				</control>
+
+				<control type="group">
+					<posx>165</posx>
+					<posy>0</posy>
+					<width>1055</width>
+					<height>240</height>
+
+					<!-- Slogan -->
+					<control type="group">
+						<posx>0</posx>
+						<posy>0</posy>
+						<width>1055</width>
+						<height>26</height>
+						<control type="label">
+							<visible>Window.IsVisible(VideoOSD) + !String.IsEmpty(VideoPlayer.Tagline)</visible>
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>1055</width>
+							<height>26</height>
+							<font>font22</font>
+							<textcolor>selected</textcolor>
+							<label>« $INFO[VideoPlayer.Tagline] »</label>
+						</control>
+					</control>
+
+					<!-- Title (Centered) -->
+					<control type="label">
+						<posx>0</posx>
+						<posy>34</posy>
+						<width>1055</width>
+						<height>46</height>
+						<font>font30_title</font>
+						<textcolor>white</textcolor>
+						<label>$VAR[OSDLabel2]</label>
+					</control>
+
+					<!-- Metadata -->
+					<control type="label">
+						<posx>0</posx>
+						<posy>88</posy>
+						<width>1055</width>
+						<height>28</height>
+						<font>font22_title</font>
+						<textcolor>blue</textcolor>
+						<label>$VAR[OSDLabel1]</label>
+					</control>
+
+					<!-- Sinopsis -->
+					<control type="textbox">
+						<visible>Window.IsVisible(VideoOSD)</visible>
+						<posx>0</posx>
+						<posy>122</posy>
+						<width>1055</width>
+						<height>122</height>
+						<font>font22</font>
+						<textcolor>lightgrey</textcolor>
+						<autoscroll time="3000" delay="4000" repeat="5000">true</autoscroll>
+						<label fallback="Sinopsis no disponible.">$INFO[VideoPlayer.Plot]</label>
+					</control>
+				</control>
+			</control>
+
+			<!-- ===================================================== -->
+			<!-- ROW 2: MODERN TRANSLUCENT PROGRESS & SEEK BAR         -->
+			<!-- ===================================================== -->
+			<!-- 16:9 Translucent Scrubber -->
+			<control type="group">
+				<visible>String.IsEqual(Skin.AspectRatio,16:9)</visible>
+				<posx>35</posx>
+				<posy>265</posy>
+				<width>1636</width>
+				<height>60</height>
+
+				<!-- Time Elapsed -->
+				<control type="label">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>180</width>
+					<height>26</height>
+					<font>font22_title</font>
+					<textcolor>white</textcolor>
+					<aligny>center</aligny>
+					<label>$INFO[Player.Time(hh:mm:ss)]</label>
+				</control>
+
+				<!-- Seek / State Badge -->
+				<control type="label">
+					<posx>200</posx>
+					<posy>0</posy>
+					<width>1236</width>
+					<height>26</height>
+					<font>font22_title</font>
+					<align>center</align>
+					<aligny>center</aligny>
+					<textcolor>selected</textcolor>
+					<label>$VAR[SeekLabel]</label>
+				</control>
+
+				<!-- Duration -->
+				<control type="label">
+					<posx>1636</posx>
+					<posy>0</posy>
+					<width>180</width>
+					<height>26</height>
+					<align>right</align>
+					<aligny>center</aligny>
+					<font>font22_title</font>
+					<textcolor>lightgrey</textcolor>
+					<label>$INFO[Player.Duration(hh:mm:ss)]</label>
+				</control>
+
+				<!-- Translucent Track Background (Sleek Glass Line) -->
+				<control type="image">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1636</width>
+					<height>8</height>
+					<texture>white.png</texture>
+					<colordiffuse>30FFFFFF</colordiffuse>
+				</control>
+
+				<!-- Cache Buffer Stream Progress (50% opacity) -->
+				<control type="progress">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1636</width>
+					<height>8</height>
+					<info>Player.ProgressCache</info>
+					<midtexture colordiffuse="50FFFFFF">white.png</midtexture>
+					<texturebg colordiffuse="00000000">blank.png</texturebg>
+				</control>
+
+				<!-- Active Played Progress (Vibrant Blue Fill) -->
+				<control type="progress">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1636</width>
+					<height>8</height>
+					<info>Player.Progress</info>
+					<midtexture colordiffuse="blue">white.png</midtexture>
+					<texturebg colordiffuse="00000000">blank.png</texturebg>
+				</control>
+
+				<!-- Chapter Markers -->
+				<control type="ranges">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1636</width>
+					<height>8</height>
+					<info>Player.Chapters</info>
+					<righttexture colordiffuse="80FFFFFF">white.png</righttexture>
+				</control>
+
+				<!-- Cuts Markers -->
+				<control type="ranges">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1636</width>
+					<height>8</height>
+					<info>Player.Cuts</info>
+					<righttexture colordiffuse="red">red.png</righttexture>
+				</control>
+
+				<!-- Seamless Touch Seek Slider (No Bulky Circle) -->
+				<control type="slider" id="87">
+					<posx>0</posx>
+					<posy>20</posy>
+					<width>1636</width>
+					<height>30</height>
+					<action>seek</action>
+					<texturesliderbar>blank.png</texturesliderbar>
+					<textureslidernib>blank.png</textureslidernib>
+					<textureslidernibfocus>blank.png</textureslidernibfocus>
+				</control>
+			</control>
+
+			<!-- 4:3 Translucent Scrubber -->
+			<control type="group">
+				<visible>String.IsEqual(Skin.AspectRatio,4:3)</visible>
+				<posx>30</posx>
+				<posy>265</posy>
+				<width>1220</width>
+				<height>60</height>
+
+				<control type="label">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>180</width>
+					<height>26</height>
+					<font>font22_title</font>
+					<textcolor>white</textcolor>
+					<aligny>center</aligny>
+					<label>$INFO[Player.Time(hh:mm:ss)]</label>
+				</control>
+				<control type="label">
+					<posx>200</posx>
+					<posy>0</posy>
+					<width>820</width>
+					<height>26</height>
+					<font>font22_title</font>
+					<align>center</align>
+					<aligny>center</aligny>
+					<textcolor>selected</textcolor>
+					<label>$VAR[SeekLabel]</label>
+				</control>
+				<control type="label">
+					<posx>1220</posx>
+					<posy>0</posy>
+					<width>180</width>
+					<height>26</height>
+					<align>right</align>
+					<aligny>center</aligny>
+					<font>font20_title</font>
+					<textcolor>lightgrey</textcolor>
+					<label>$INFO[Player.Duration(hh:mm:ss)]</label>
+				</control>
+
+				<control type="image">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1220</width>
+					<height>8</height>
+					<texture>white.png</texture>
+					<colordiffuse>30FFFFFF</colordiffuse>
+				</control>
+				<control type="progress">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1220</width>
+					<height>8</height>
+					<info>Player.ProgressCache</info>
+					<midtexture colordiffuse="50FFFFFF">white.png</midtexture>
+					<texturebg colordiffuse="00000000">blank.png</texturebg>
+				</control>
+				<control type="progress">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1220</width>
+					<height>8</height>
+					<info>Player.Progress</info>
+					<midtexture colordiffuse="blue">white.png</midtexture>
+					<texturebg colordiffuse="00000000">blank.png</texturebg>
+				</control>
+				<control type="ranges">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1220</width>
+					<height>8</height>
+					<info>Player.Chapters</info>
+					<righttexture colordiffuse="80FFFFFF">white.png</righttexture>
+				</control>
+				<control type="ranges">
+					<posx>0</posx>
+					<posy>31</posy>
+					<width>1220</width>
+					<height>8</height>
+					<info>Player.Cuts</info>
+					<righttexture colordiffuse="red">red.png</righttexture>
+				</control>
+				<control type="slider" id="87">
+					<posx>0</posx>
+					<posy>20</posy>
+					<width>1220</width>
+					<height>30</height>
+					<action>seek</action>
+					<texturesliderbar>blank.png</texturesliderbar>
+					<textureslidernib>blank.png</textureslidernib>
+					<textureslidernibfocus>blank.png</textureslidernibfocus>
+				</control>
+			</control>
+
+			<!-- ===================================================== -->
+			<!-- ROW 3: CLEAN BOTTOM ACTION TOOLBAR & FINISH TIME      -->
+			<!-- ===================================================== -->
+			<control type="group">
+				<posx>0</posx>
+				<posy>335</posy>
+				<width>ScreenWidth</width>
+				<height>75</height>
+
+				<!-- Centered Playback Actions -->
+				<control type="grouplist">
+					<posx>0</posx>
+					<posy>0</posy>
+					<width>ScreenWidth</width>
+					<height>65</height>
+					<align>center</align>
+					<orientation>horizontal</orientation>
+					<itemgap>24</itemgap>
+
+					<!-- Direct Next Subtitle Button (Solid white matching Kodi OSD icons) -->
+					<control type="group">
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="button">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<onclick>NextSubtitle</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>osd_subtitles.png</texture>
+						</control>
+					</control>
+
+					<!-- Rewind 2x-32x -->
+					<control type="group">
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="button">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<onclick>PlayerControl(Rewind)</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>osd_rewind.png</texture>
+						</control>
+					</control>
+
+					<!-- Forward 2x-32x -->
+					<control type="group">
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="button">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<onclick>PlayerControl(Forward)</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>osd_forward.png</texture>
+						</control>
+					</control>
+
+					<!-- Stop -->
+					<control type="group">
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="button">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<onclick>PlayerControl(Stop)</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>osd_stop.png</texture>
+						</control>
+					</control>
+
+					<!-- Live TV Record -->
+					<control type="group">
+						<visible>PVR.CanRecordPlayingChannel</visible>
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="togglebutton">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<alttexturefocus colordiffuse="red">roundbutton-focus.png</alttexturefocus>
+							<alttexturenofocus colordiffuse="red">roundbutton-focus.png</alttexturenofocus>
+							<usealttexture>Player.Record</usealttexture>
+							<onclick>PVR.ToggleRecordPlayingChannel</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>osd_record.png</texture>
+						</control>
+					</control>
+
+					<!-- Settings (Audio Tracks, Video & Bookmarks Popup) -->
+					<control type="group">
+						<width>56</width>
+						<height>56</height>
+						<control type="image">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texture>roundbutton-focus.png</texture>
+							<colordiffuse>55000000</colordiffuse>
+						</control>
+						<control type="button">
+							<posx>0</posx>
+							<posy>0</posy>
+							<width>56</width>
+							<height>56</height>
+							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
+							<texturenofocus>blank.png</texturenofocus>
+							<onclick condition="String.IsEmpty(Window(Home).Property(PopupMenuVisible))">SetProperty(PopupMenuVisible,Show,Home)</onclick>
+							<onclick condition="!String.IsEmpty(Window(Home).Property(PopupMenuVisible))">ClearProperty(PopupMenuVisible,Home)</onclick>
+						</control>
+						<control type="image">
+							<posx>12</posx>
+							<posy>12</posy>
+							<width>32</width>
+							<height>32</height>
+							<texture>icon_button_settings.png</texture>
+						</control>
+					</control>
+				</control>
+
+				<!-- Finish Time on Far Right (Below Progress Bar, matching font of Hora actual) -->
+				<control type="label">
+					<visible>String.IsEqual(Skin.AspectRatio,16:9)</visible>
+					<posx>35r</posx>
+					<posy>12</posy>
+					<width>400</width>
+					<height>40</height>
+					<align>right</align>
+					<aligny>center</aligny>
+					<font>font24_title</font>
+					<textcolor>white</textcolor>
+					<label>[COLOR grey]Finaliza:[/COLOR] $INFO[Player.FinishTime]</label>
+				</control>
+				<control type="label">
+					<visible>String.IsEqual(Skin.AspectRatio,4:3)</visible>
+					<posx>30r</posx>
+					<posy>12</posy>
+					<width>350</width>
+					<height>40</height>
+					<align>right</align>
+					<aligny>center</aligny>
+					<font>font24_title</font>
+					<textcolor>white</textcolor>
+					<label>[COLOR grey]Finaliza:[/COLOR] $INFO[Player.FinishTime]</label>
+				</control>
+			</control>
+		</control>
+
+		<!-- ========================================================= -->
+		<!-- 5. POPUP MENU FOR AUDIO / SUBTITLES / SETTINGS            -->
+		<!-- ========================================================= -->
+		<include content="PopupMenu">
+			<param name="panel-posy">-420</param>
+			<param name="panel-height">640</param>
+		</include>
+	</include>
+</includes>
