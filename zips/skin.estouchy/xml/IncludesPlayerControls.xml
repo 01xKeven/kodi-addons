@@ -82,9 +82,9 @@
 			<animation effect="fade" time="200">Visible</animation>
 			<animation effect="fade" time="200">Hidden</animation>
 
-			<!-- StepBack -10s (Left) -->
+			<!-- StepBack -10s (Left Screen Edge) -->
 			<control type="group">
-				<posx>671</posx>
+				<posx>120</posx>
 				<posy>9</posy>
 				<width>82</width>
 				<height>82</height>
@@ -158,9 +158,9 @@
 				</control>
 			</control>
 
-			<!-- StepForward +10s (Right) -->
+			<!-- StepForward +10s (Right Screen Edge) -->
 			<control type="group">
-				<posx>953</posx>
+				<posx>1504</posx>
 				<posy>9</posy>
 				<width>82</width>
 				<height>82</height>
@@ -201,9 +201,9 @@
 			<animation effect="fade" time="200">Visible</animation>
 			<animation effect="fade" time="200">Hidden</animation>
 
-			<!-- StepBack -10s -->
+			<!-- StepBack -10s (Left Screen Edge) -->
 			<control type="group">
-				<posx>468</posx>
+				<posx>90</posx>
 				<posy>9</posy>
 				<width>82</width>
 				<height>82</height>
@@ -862,136 +862,136 @@
 			<!-- ===================================================== -->
 			<control type="group">
 				<posx>0</posx>
-				<posy>335</posy>
+				<posy>325</posy>
 				<width>ScreenWidth</width>
-				<height>75</height>
+				<height>78</height>
 
-				<!-- Centered Playback Actions -->
+				<!-- Centered Playback Actions (Enlarged 72x72) -->
 				<control type="grouplist">
 					<posx>0</posx>
 					<posy>0</posy>
 					<width>ScreenWidth</width>
-					<height>65</height>
+					<height>75</height>
 					<align>center</align>
 					<orientation>horizontal</orientation>
-					<itemgap>24</itemgap>
+					<itemgap>26</itemgap>
 
-					<!-- Direct Next Subtitle Button (Solid white matching Kodi OSD icons) -->
+					<!-- Direct Next Subtitle Button -->
 					<control type="group">
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="button">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<onclick>NextSubtitle</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>osd_subtitles.png</texture>
 						</control>
 					</control>
 
 					<!-- Rewind 2x-32x -->
 					<control type="group">
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="button">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<onclick>PlayerControl(Rewind)</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>osd_rewind.png</texture>
 						</control>
 					</control>
 
 					<!-- Forward 2x-32x -->
 					<control type="group">
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="button">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<onclick>PlayerControl(Forward)</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>osd_forward.png</texture>
 						</control>
 					</control>
 
 					<!-- Stop -->
 					<control type="group">
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="button">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<onclick>PlayerControl(Stop)</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>osd_stop.png</texture>
 						</control>
 					</control>
@@ -999,21 +999,21 @@
 					<!-- Live TV Record -->
 					<control type="group">
 						<visible>PVR.CanRecordPlayingChannel</visible>
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="togglebutton">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<alttexturefocus colordiffuse="red">roundbutton-focus.png</alttexturefocus>
@@ -1022,41 +1022,41 @@
 							<onclick>PVR.ToggleRecordPlayingChannel</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>osd_record.png</texture>
 						</control>
 					</control>
 
 					<!-- Settings (Audio Tracks, Video & Bookmarks Popup) -->
 					<control type="group">
-						<width>56</width>
-						<height>56</height>
+						<width>72</width>
+						<height>72</height>
 						<control type="image">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texture>roundbutton-focus.png</texture>
 							<colordiffuse>55000000</colordiffuse>
 						</control>
 						<control type="button">
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>56</width>
-							<height>56</height>
+							<width>72</width>
+							<height>72</height>
 							<texturefocus colordiffuse="blue">roundbutton-focus.png</texturefocus>
 							<texturenofocus>blank.png</texturenofocus>
 							<onclick condition="String.IsEmpty(Window(Home).Property(PopupMenuVisible))">SetProperty(PopupMenuVisible,Show,Home)</onclick>
 							<onclick condition="!String.IsEmpty(Window(Home).Property(PopupMenuVisible))">ClearProperty(PopupMenuVisible,Home)</onclick>
 						</control>
 						<control type="image">
-							<posx>12</posx>
-							<posy>12</posy>
-							<width>32</width>
-							<height>32</height>
+							<posx>15</posx>
+							<posy>15</posy>
+							<width>42</width>
+							<height>42</height>
 							<texture>icon_button_settings.png</texture>
 						</control>
 					</control>
@@ -1066,7 +1066,7 @@
 				<control type="label">
 					<visible>String.IsEqual(Skin.AspectRatio,16:9)</visible>
 					<posx>35r</posx>
-					<posy>12</posy>
+					<posy>16</posy>
 					<width>400</width>
 					<height>40</height>
 					<align>right</align>
@@ -1078,12 +1078,12 @@
 				<control type="label">
 					<visible>String.IsEqual(Skin.AspectRatio,4:3)</visible>
 					<posx>30r</posx>
-					<posy>12</posy>
-					<width>350</width>
+					<posy>16</posy>
+					<width>320</width>
 					<height>40</height>
 					<align>right</align>
 					<aligny>center</aligny>
-					<font>font24_title</font>
+					<font>font22_title</font>
 					<textcolor>white</textcolor>
 					<label>[COLOR grey]Finaliza:[/COLOR] $INFO[Player.FinishTime]</label>
 				</control>

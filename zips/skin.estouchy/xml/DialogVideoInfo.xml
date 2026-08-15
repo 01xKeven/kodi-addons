@@ -662,11 +662,11 @@
 			</focusedlayout>
 		</control>
 		<control type="grouplist" id="9000">
-			<posx>0</posx>
-			<posy>730</posy>
-			<width>1000</width>
-			<height>60</height>
-			<itemgap>2</itemgap>
+			<posx>10</posx>
+			<posy>725</posy>
+			<width>980</width>
+			<height>68</height>
+			<itemgap>6</itemgap>
 			<align>center</align>
 			<orientation>horizontal</orientation>
 			<onleft>9000</onleft>
@@ -675,7 +675,7 @@
 			<ondown>49</ondown>
 			<control type="togglebutton" id="8">
 				<description>Play/browse to Show</description>
-				<width>195</width>
+				<width>156</width>
 				<include>ButtonInfoDialogsCommonValues</include>
 				<label>208</label>
 				<alttexturefocus>list_focus.png</alttexturefocus>
@@ -685,32 +685,32 @@
 			</control>
 			<control type="button" id="5">
 				<description>Cast/Review</description>
-				<width>195</width>
+				<width>156</width>
 				<include>ButtonInfoDialogsCommonValues</include>
 				<label>206</label>
 			</control>
 			<control type="button" id="6">
 				<description>Refresh</description>
-				<width>195</width>
+				<width>156</width>
 				<include>ButtonInfoDialogsCommonValues</include>
 				<label>184</label>
 			</control>
 			<control type="button" id="10">
 				<description>Get Art</description>
-				<width>195</width>
+				<width>156</width>
 				<include>ButtonInfoDialogsCommonValues</include>
 				<label>13511</label>
 			</control>
 			<control type="button" id="11">
 				<description>Play Trailer</description>
-				<width>195</width>
+				<width>156</width>
 				<include>ButtonInfoDialogsCommonValues</include>
 				<label>20410</label>
 				<visible>!String.IsEmpty(ListItem.Trailer)</visible>
 			</control>
 			<control type="button" id="7">
 				<description>Rating button</description>
-				<width>195</width>
+				<width>156</width>
 				<label>38023</label>
 				<include>ButtonInfoDialogsCommonValues</include>
 			</control>

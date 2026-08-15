@@ -305,6 +305,8 @@
 			<font></font>
 			<texturefocus>grey.png</texturefocus>
 			<texturenofocus>grey.png</texturenofocus>
+			<onclick>noop</onclick>
+			<altclick>noop</altclick>
 			<animation effect="fade" time="300">Visible</animation>
 			<animation effect="fade" time="200">Hidden</animation>
 		</control>
@@ -506,11 +508,10 @@
 		<pulseonselect>false</pulseonselect>
 	</include>
 	<include name="ButtonInfoDialogsCommonValues">
-		<height>76</height>
-		<width>220</width>
+		<height>66</height>
 		<align>center</align>
 		<aligny>center</aligny>
-		<font>font22_title</font>
+		<font>font20_title</font>
 		<textcolor>white</textcolor>
 		<focusedcolor>white</focusedcolor>
 		<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -971,13 +972,13 @@
 		</item>
 	</include>
 	<include name="KeyboardButton">
-		<width min="92">auto</width>
-		<height>82</height>
+		<width min="104">auto</width>
+		<height>90</height>
 		<texturenofocus border="12">kb_key_nofocus.png</texturenofocus>
 		<texturefocus border="12">kb_key_focus.png</texturefocus>
 		<textcolor>white</textcolor>
 		<focusedcolor>white</focusedcolor>
-		<font>font30_title</font>
+		<font>font35_title</font>
 		<align>center</align>
 		<aligny>center</aligny>
 	</include>
