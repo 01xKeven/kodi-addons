@@ -324,7 +324,7 @@
 					<!-- IP button -->
 					<control type="button" id="307">
 						<description>IP Input button</description>
-						<width>120</width>
+						<width>140</width>
 						<height>90</height>
 						<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -339,7 +339,7 @@
 					<!-- Symbols button -->
 					<control type="togglebutton" id="304">
 						<description>Symbols button</description>
-						<width>130</width>
+						<width>150</width>
 						<height>90</height>
 						<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -354,40 +354,15 @@
 						<altlabel>[COLOR=blue]abc[/COLOR]</altlabel>
 					</control>
 
-					<!-- Paste from Clipboard button -->
-					<control type="group">
-						<width>130</width>
-						<height>90</height>
-						<control type="button">
-							<description>Paste button</description>
-							<posx>0</posx>
-							<posy>0</posy>
-							<width>130</width>
-							<height>90</height>
-							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
-							<texturefocus border="12">kb_key_focus.png</texturefocus>
-							<onclick>RunScript(special://skin/scripts/paste.py)</onclick>
-							<label></label>
-						</control>
-						<control type="image">
-							<posx>42</posx>
-							<posy>22</posy>
-							<width>46</width>
-							<height>46</height>
-							<aspectratio>keep</aspectratio>
-							<texture>icon_keyboard_paste.png</texture>
-						</control>
-					</control>
-
 					<!-- Previous arrow -->
 					<control type="group">
-						<width>110</width>
+						<width>130</width>
 						<height>90</height>
 						<control type="button" id="305">
 							<description>previous button</description>
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>110</width>
+							<width>130</width>
 							<height>90</height>
 							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 							<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -399,7 +374,7 @@
 						</control>
 						<control type="image">
 							<description>Previous Icon image</description>
-							<posx>30</posx>
+							<posx>40</posx>
 							<posy>25</posy>
 							<width>50</width>
 							<height>40</height>
@@ -410,13 +385,13 @@
 
 					<!-- Next arrow -->
 					<control type="group">
-						<width>110</width>
+						<width>130</width>
 						<height>90</height>
 						<control type="button" id="306">
 							<description>next button</description>
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>110</width>
+							<width>130</width>
 							<height>90</height>
 							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 							<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -428,7 +403,7 @@
 						</control>
 						<control type="image">
 							<description>Next Icon image</description>
-							<posx>30</posx>
+							<posx>40</posx>
 							<posy>25</posy>
 							<width>50</width>
 							<height>40</height>
@@ -440,7 +415,7 @@
 					<!-- SPACE BAR -->
 					<control type="button" id="32">
 						<description>SPACE button</description>
-						<width>500</width>
+						<width>580</width>
 						<height>90</height>
 						<texturenofocus border="12">kb_key_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
@@ -455,7 +430,7 @@
 					<!-- Layout switch button -->
 					<control type="button" id="309">
 						<description>Layout button</description>
-						<width>340</width>
+						<width>400</width>
 						<height>90</height>
 						<label>20177</label>
 						<onup>302</onup>
@@ -472,20 +447,20 @@
 					<!-- Show Password button -->
 					<control type="group">
 						<visible>Control.IsVisible(310)</visible>
-						<width>80</width>
+						<width>90</width>
 						<height>90</height>
 						<control type="button" id="310">
 							<description>show password button</description>
 							<posx>0</posx>
 							<posy>0</posy>
-							<width>80</width>
+							<width>90</width>
 							<height>90</height>
 							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 							<texturefocus border="12">kb_key_focus.png</texturefocus>
 							<label></label>
 						</control>
 						<control type="image">
-							<posx>15</posx>
+							<posx>20</posx>
 							<posy>25</posy>
 							<width>50</width>
 							<height>40</height>
@@ -712,7 +687,7 @@
 					<itemgap>6</itemgap>
 					<!-- IP button -->
 					<control type="button" id="307">
-						<width>110</width><height>90</height>
+						<width>120</width><height>90</height>
 						<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
 						<font>font22_title</font><textcolor>white</textcolor>
@@ -721,7 +696,7 @@
 					</control>
 					<!-- Symbols button -->
 					<control type="togglebutton" id="304">
-						<width>110</width><height>90</height>
+						<width>120</width><height>90</height>
 						<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
 						<alttexturenofocus border="12">kb_key_focus.png</alttexturenofocus>
@@ -731,55 +706,31 @@
 						<label>ãéö</label>
 						<altlabel>[COLOR=blue]abc[/COLOR]</altlabel>
 					</control>
-					<!-- Paste from Clipboard button -->
-					<control type="group">
-						<width>110</width>
-						<height>90</height>
-						<control type="button">
-							<description>Paste button</description>
-							<posx>0</posx>
-							<posy>0</posy>
-							<width>110</width>
-							<height>90</height>
-							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
-							<texturefocus border="12">kb_key_focus.png</texturefocus>
-							<onclick>RunScript(special://skin/scripts/paste.py)</onclick>
-							<label></label>
-						</control>
-						<control type="image">
-							<posx>32</posx>
-							<posy>22</posy>
-							<width>46</width>
-							<height>46</height>
-							<aspectratio>keep</aspectratio>
-							<texture>icon_keyboard_paste.png</texture>
-						</control>
-					</control>
 					<!-- Previous arrow -->
 					<control type="group">
-						<width>90</width><height>90</height>
+						<width>100</width><height>90</height>
 						<control type="button" id="305">
-							<posx>0</posx><posy>0</posy><width>90</width><height>90</height>
+							<posx>0</posx><posy>0</posy><width>100</width><height>90</height>
 							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 							<texturefocus border="12">kb_key_focus.png</texturefocus>
 							<label></label>
 						</control>
-						<control type="image"><posx>20</posx><posy>25</posy><width>50</width><height>40</height><texture flipx="true">icon_keyboard_arrowkey.png</texture></control>
+						<control type="image"><posx>25</posx><posy>25</posy><width>50</width><height>40</height><texture flipx="true">icon_keyboard_arrowkey.png</texture></control>
 					</control>
 					<!-- Next arrow -->
 					<control type="group">
-						<width>90</width><height>90</height>
+						<width>100</width><height>90</height>
 						<control type="button" id="306">
-							<posx>0</posx><posy>0</posy><width>90</width><height>90</height>
+							<posx>0</posx><posy>0</posy><width>100</width><height>90</height>
 							<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 							<texturefocus border="12">kb_key_focus.png</texturefocus>
 							<label></label>
 						</control>
-						<control type="image"><posx>20</posx><posy>25</posy><width>50</width><height>40</height><texture>icon_keyboard_arrowkey.png</texture></control>
+						<control type="image"><posx>25</posx><posy>25</posy><width>50</width><height>40</height><texture>icon_keyboard_arrowkey.png</texture></control>
 					</control>
 					<!-- Space Bar -->
 					<control type="button" id="32">
-						<width>360</width><height>90</height>
+						<width>400</width><height>90</height>
 						<texturenofocus border="12">kb_key_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
 						<font>font26_title</font><textcolor>white</textcolor>
@@ -788,7 +739,7 @@
 					</control>
 					<!-- Layout Switch -->
 					<control type="button" id="309">
-						<width>260</width><height>90</height>
+						<width>310</width><height>90</height>
 						<texturenofocus border="12">kb_action_nofocus.png</texturenofocus>
 						<texturefocus border="12">kb_key_focus.png</texturefocus>
 						<font>font20_title</font><textcolor>white</textcolor>
