@@ -1,4 +1,5 @@
 import sys
+import re
 import xbmc
 import xbmcgui
 import xbmcaddon
@@ -40,6 +41,8 @@ STRING_MAPPING = {
     'error_format': 30016,
     'error_connect': 30017,
     'keyboard_prompt': 30018,
+    'post_credits': 30021,
+    'audio_only': 30022,
 }
 
 FALLBACK_STRINGS = {
@@ -62,7 +65,9 @@ FALLBACK_STRINGS = {
         'error_title': "Error",
         'error_format': "El formato del ID de IMDb es incorrecto.",
         'error_connect': "No se pudo obtener la guía parental: {error}",
-        'keyboard_prompt': "Introduce el ID de IMDb (ttxxxxxxx)"
+        'keyboard_prompt': "Introduce el ID de IMDb (ttxxxxxxx)",
+        'post_credits': "Post-Créditos",
+        'audio_only': "Solo audio"
     },
     'en': {
         'SEXUAL_CONTENT': "Nudity",
@@ -83,7 +88,9 @@ FALLBACK_STRINGS = {
         'error_title': "Error",
         'error_format': "The format of the IMDb ID is incorrect.",
         'error_connect': "Could not retrieve parental guide: {error}",
-        'keyboard_prompt': "Enter IMDb ID (ttxxxxxxx)"
+        'keyboard_prompt': "Enter IMDb ID (ttxxxxxxx)",
+        'post_credits': "Post-Credits",
+        'audio_only': "Audio only"
     }
 }
 
@@ -191,16 +198,92 @@ def get_episode_imdb_id(series_id, season, episode):
         log(f"Error buscando ID de episodio en GraphQL: {e}", level=xbmc.LOGWARNING)
     return None
 
+def parse_crazy_credits(crazy_credits_edges):
+    """
+    Analiza las entradas de crazyCredits para extraer la información de post-créditos.
+    Retorna un diccionario con:
+      - 'has_stinger': bool
+      - 'stinger_text': str
+      - 'stinger_color': str (formato hex Kodi AARRGGBB)
+    """
+    if not crazy_credits_edges:
+        return {
+            'has_stinger': False,
+            'stinger_text': get_string("none"),
+            'stinger_color': "FF7F8C8D"
+        }
+
+    mid_credits = 0
+    after_credits = 0
+    audio_only = 0
+    generic_scenes = 0
+
+    for edge in crazy_credits_edges:
+        text = edge.get('node', {}).get('text', {}).get('plaidHtml', '').lower()
+        
+        # Filtro para ignorar notas de trivia general/resumen entre episodios
+        if re.search(r'\b(only\s+\d+\s+episodes|episodes\s+have\s+post|episodes\s+got|there\s+are\s+\w+\s+extra\s+scenes|two\s+extra\s+scenes)\b', text):
+            continue
+
+        # Filtros de exclusión (logos, dedicatorias, etc.)
+        if any(x in text for x in ['logo', 'in memory of', 'dedicated to', 'aspect ratio', 'soundtrack', 'tribute', 'filmed in']):
+            if not any(x in text for x in ['scene', 'trailer', 'dialogue', 'audio', 'sound', 'appears after', 'during the credits', 'after the closing credits']):
+                continue
+
+        # Detección de tipos de escena
+        is_mid = any(x in text for x in ['mid-credit', 'mid credit', 'during the credit', 'during the closing credit', 'during the end credit', 'throughout the credit'])
+        is_after = any(x in text for x in ['after the credit', 'after the closing credit', 'after the end credit', 'at the end of the closing credit', 'end of the credits', 'after the main credits', 'scene in the closing credits', 'scene at the end of the closing credits'])
+        is_audio = any(x in text for x in ['audio', 'sound of', 'voice of', 'heard after', 'hammering']) and not any(x in text for x in ['scene', 'video', 'footage'])
+
+        if is_audio and not (is_mid or is_after):
+            audio_only += 1
+        elif is_mid and is_after:
+            mid_credits += 1
+            after_credits += 1
+        elif is_mid:
+            mid_credits += 1
+        elif is_after:
+            after_credits += 1
+        elif 'scene' in text and ('credit' in text or 'after' in text):
+            generic_scenes += 1
+
+    total_scenes = mid_credits + after_credits + generic_scenes
+
+    if total_scenes == 0 and audio_only > 0:
+        return {
+            'has_stinger': True,
+            'stinger_text': get_string("audio_only"),
+            'stinger_color': "FFF1C40F"
+        }
+
+    if total_scenes == 0:
+        return {
+            'has_stinger': False,
+            'stinger_text': get_string("none"),
+            'stinger_color': "FF7F8C8D"
+        }
+
+    if total_scenes > 0:
+        stinger_txt = str(total_scenes)
+    else:
+        stinger_txt = get_string("none")
+
+    return {
+        'has_stinger': True,
+        'stinger_text': stinger_txt,
+        'stinger_color': "FF00E5FF"
+    }
+
 def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=None):
     """
     Obtiene la guía parental directamente de IMDb usando la API de GraphQL.
-    Devuelve (title, parental_guide_list) o (None, None) en caso de error.
+    Devuelve (title, parental_guide_list, stinger_info) o (None, None, None) en caso de error.
     """
     if not imdb_id or not imdb_id.startswith('tt') or not imdb_id[2:].isdigit():
         log(f"ID de IMDb inválido: {imdb_id}", level=xbmc.LOGERROR)
         if not silent:
             xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_format"))
-        return None, None
+        return None, None, None
 
     if progress_dialog:
         progress_dialog.update(20, get_string("connecting"))
@@ -225,6 +308,15 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
                 }
               }
             }
+            crazyCredits(first: 10) {
+              edges {
+                node {
+                  text {
+                    plaidHtml
+                  }
+                }
+              }
+            }
           }
         }
         """ % imdb_id
@@ -238,35 +330,40 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
             'Accept-Language': 'en-US,en;q=0.9,es;q=0.8'
         }
         
-        log(f"Consultando IMDb GraphQL para la guía parental: {imdb_id}")
+        log(f"Consultando IMDb GraphQL para la guía parental y post-créditos: {imdb_id}")
         r = requests.post(url, json={'query': query}, headers=headers, timeout=12)
 
         if r.status_code != 200:
             log(f"IMDb GraphQL respondió con código {r.status_code}", level=xbmc.LOGWARNING)
-            return imdb_id, None
+            return imdb_id, None, None
 
         data = r.json()
         title_data = data.get("data", {}).get("title")
         if not title_data:
             log(f"No hay datos de título en GraphQL para ID: {imdb_id}")
-            return imdb_id, None
+            return imdb_id, None, None
             
         movie_title = title_data.get("titleText", {}).get("text", imdb_id)
         parents_guide = title_data.get("parentsGuide")
+        
+        # Procesar post-créditos
+        crazy_credits_edges = title_data.get("crazyCredits", {}).get("edges", [])
+        stinger_info = parse_crazy_credits(crazy_credits_edges)
+        
         if not parents_guide:
             log(f"No hay guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, {}
+            return movie_title, {}, stinger_info
 
         categories = parents_guide.get("categories", [])
         if not categories:
             log(f"No hay categorías de guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, {}
+            return movie_title, {}, stinger_info
 
     except Exception as err:
         log(f"Error al conectar con IMDb GraphQL: {err}", level=xbmc.LOGERROR)
         if not silent:
             xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_connect").format(error=err))
-        return None, None
+        return None, None, None
 
     if progress_dialog:
         progress_dialog.update(70, get_string("processing"))
@@ -314,7 +411,7 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
     if progress_dialog:
         progress_dialog.update(95, get_string("finalizing"))
 
-    return movie_title, parental_guide
+    return movie_title, parental_guide, stinger_info
 
 
 def process_id(imdb_id):
@@ -324,7 +421,14 @@ def process_id(imdb_id):
     pDialog = xbmcgui.DialogProgress()
     pDialog.create(get_string("title"), get_string("connecting"))
 
-    movie_title, guide = get_parental_guide(imdb_id, pDialog)
+    res = get_parental_guide(imdb_id, pDialog)
+    if res and len(res) == 3:
+        movie_title, guide, stinger_info = res
+    elif res and len(res) == 2:
+        movie_title, guide = res
+        stinger_info = None
+    else:
+        movie_title, guide, stinger_info = None, None, None
 
     if not pDialog.iscanceled():
         pDialog.update(100, get_string("finalizing"))
@@ -337,6 +441,15 @@ def process_id(imdb_id):
                 visual_info = SEVERITY_VISUALS.get(item['severity_class'], {'color': 'white', 'char': ' '})
                 color = visual_info['color']
                 text += f"{visual_info['char']} [B]{item['category']}:[/B] [COLOR={color}]{item['severity_text']}[/COLOR]\n\n"
+
+            if stinger_info and stinger_info.get('stinger_text'):
+                color_map = {
+                    "FF00E5FF": "cyan",
+                    "FFF1C40F": "yellow",
+                    "FF7F8C8D": "grey"
+                }
+                c_name = color_map.get(stinger_info.get('stinger_color', ''), 'white')
+                text += f"🎬 [B]{get_string('post_credits')}:[/B] [COLOR={c_name}]{stinger_info['stinger_text']}[/COLOR]\n"
 
             xbmcgui.Dialog().textviewer(f"{get_string('title')}: {movie_title}", text)
         else:

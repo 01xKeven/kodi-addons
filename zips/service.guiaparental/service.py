@@ -46,12 +46,13 @@ class ParentalGuideOverlay(object):
     """HUD no intrusivo inyectado en la ventana de reproducción, con fade suave."""
 
     def __init__(self):
-        self.window = xbmcgui.Window(12005)   # WINDOW_FULLSCREEN_VIDEO
-        self.bar    = None                     # ControlImage
-        self.labels = []                       # lista de (ControlLabel, LabelData)
+        self.window    = xbmcgui.Window(12005)   # WINDOW_FULLSCREEN_VIDEO
+        self.bar       = None                     # ControlImage vertical
+        self.separator = None                     # ControlImage horizontal divisoria
+        self.labels    = []                       # lista de (ControlLabel, LabelData)
 
     # ------------------------------------------------------------------
-    def show_guide(self, ratings):
+    def show_guide(self, ratings, stinger_info=None):
         log("Construyendo HUD con fade suave...")
 
         severity_colors = {
@@ -72,7 +73,7 @@ class ParentalGuideOverlay(object):
             return cat_name
 
         normalized = {}
-        for item in ratings:
+        for item in (ratings or []):
             raw = item.get('raw_category')
             if raw:
                 normalized[raw] = item
@@ -82,9 +83,11 @@ class ParentalGuideOverlay(object):
         categories_keys = ["SEXUAL_CONTENT", "VIOLENCE", "PROFANITY", "ALCOHOL_DRUGS", "FRIGHTENING_INTENSE_SCENES"]
         texture = os.path.join(ADDON_PATH, 'resources', 'skins', 'Default', '720p', 'rounded_bar.png')
 
+        bar_height = 226 if stinger_info else 175
+
         # ── Barra lateral (ControlImage) ─────────────────────────────
         try:
-            self.bar = xbmcgui.ControlImage(-1000, 55, 4, 175, texture)
+            self.bar = xbmcgui.ControlImage(-1000, 55, 4, bar_height, texture)
             self.window.addControl(self.bar)
             self.bar.setColorDiffuse("00FFFFFF")   # transparente antes de moverse
             self.bar.setPosition(50, 55)           # mover a posición correcta (ya invisible)
@@ -133,6 +136,32 @@ class ParentalGuideOverlay(object):
                 log(f"Error etiqueta {cat_label}: {e}", level=xbmc.LOGWARNING)
             y += 35
 
+        # ── 6ª Línea: Post-Créditos ──────────────────────────────────
+        if stinger_info:
+            y_sep = y + 7
+            y_lbl = y + 15
+            # Línea divisoria horizontal sutil (creada fuera de pantalla para evitar parpadeo previo al fade)
+            try:
+                self.separator = xbmcgui.ControlImage(-1000, y_sep, 230, 1, texture)
+                self.window.addControl(self.separator)
+                self.separator.setColorDiffuse("00FFFFFF")
+                self.separator.setPosition(70, y_sep)
+            except Exception as e:
+                log(f"Error separador: {e}", level=xbmc.LOGWARNING)
+
+            st_label = main.get_string("post_credits")
+            st_text  = stinger_info.get("stinger_text", main.get_string("none"))
+            st_color = stinger_info.get("stinger_color", "FF00E5FF")
+
+            ld_st = LabelData(st_label, st_text, st_color)
+            try:
+                lbl_st = xbmcgui.ControlLabel(70, y_lbl, 390, 30, ld_st.make_text(0x00),
+                                             font='font12', textColor='0x00000000')
+                self.window.addControl(lbl_st)
+                self.labels.append((lbl_st, ld_st))
+            except Exception as e:
+                log(f"Error etiqueta Post-Créditos: {e}", level=xbmc.LOGWARNING)
+
         # ── Animación de entrada escalonada ───────────────────────────
         # Fade-in de la barra primero
         if self.bar:
@@ -141,10 +170,14 @@ class ParentalGuideOverlay(object):
                 time.sleep(_STEP_S)
 
         # Fade-in de cada etiqueta con retardo entre ellas
-        for lbl, ld in self.labels:
+        for i, (lbl, ld) in enumerate(self.labels):
+            is_last = (i == len(self.labels) - 1) and (self.separator is not None)
             for alpha in _FADE_IN:
                 try:
                     lbl.setLabel(ld.make_text(alpha))
+                    if is_last and self.separator:
+                        sep_a = int(alpha * 0.25)
+                        self.separator.setColorDiffuse(f"{sep_a:02X}FFFFFF")
                 except Exception:
                     pass
                 time.sleep(_STEP_S)
@@ -154,10 +187,14 @@ class ParentalGuideOverlay(object):
         log("Cerrando HUD con fade-out...")
 
         # Fade-out de etiquetas en orden inverso
-        for lbl, ld in reversed(self.labels):
+        for i, (lbl, ld) in enumerate(reversed(self.labels)):
+            is_first = (i == 0) and (self.separator is not None)
             for alpha in _FADE_OUT:
                 try:
                     lbl.setLabel(ld.make_text(alpha))
+                    if is_first and self.separator:
+                        sep_a = int(alpha * 0.25)
+                        self.separator.setColorDiffuse(f"{sep_a:02X}FFFFFF")
                 except Exception:
                     pass
                 time.sleep(_STEP_S)
@@ -177,13 +214,19 @@ class ParentalGuideOverlay(object):
                 self.window.removeControl(lbl)
             except Exception:
                 pass
+        if self.separator:
+            try:
+                self.window.removeControl(self.separator)
+            except Exception:
+                pass
         if self.bar:
             try:
                 self.window.removeControl(self.bar)
             except Exception:
                 pass
-        self.labels = []
-        self.bar    = None
+        self.labels    = []
+        self.bar       = None
+        self.separator = None
 
 
 
@@ -292,6 +335,7 @@ class ParentalPlayer(xbmc.Player):
                     media_type = 'show'
 
             # Si es episodio, resolver el IMDb ID específico del episodio
+            show_imdb_id = imdb_id
             if media_type == 'show' and season_num and episode_num:
                 ep_id = self._get_episode_imdb_id(imdb_id, season_num, episode_num)
                 if ep_id:
@@ -300,17 +344,31 @@ class ParentalPlayer(xbmc.Player):
                 else:
                     log(f"No se encontró ID de episodio, usando ID de serie: {imdb_id}", level=xbmc.LOGWARNING)
 
-
-
             # 3. Descargar la guía parental de IMDb
             try:
-                movie_title, guide = main.get_parental_guide(imdb_id, progress_dialog=None, silent=True, media_type=media_type)
+                res = main.get_parental_guide(imdb_id, progress_dialog=None, silent=True, media_type=media_type)
+                if res and len(res) == 3:
+                    movie_title, guide, stinger_info = res
+                elif res and len(res) == 2:
+                    movie_title, guide = res
+                    stinger_info = None
+                else:
+                    movie_title, guide, stinger_info = None, None, None
+
+                # Si es un episodio y no tiene guía propia en IMDb, heredar la guía general de la serie
+                if media_type == 'show' and not guide and show_imdb_id and show_imdb_id != imdb_id:
+                    log(f"El episodio no tiene guía propia en IMDb, obteniendo guía de la serie: {show_imdb_id}")
+                    s_res = main.get_parental_guide(show_imdb_id, progress_dialog=None, silent=True, media_type='show')
+                    if s_res and len(s_res) >= 2 and s_res[1]:
+                        guide = s_res[1]
+                        if not movie_title:
+                            movie_title = s_res[0]
             except Exception as e:
                 log(f"Error al descargar la guía parental: {e}", level=xbmc.LOGERROR)
                 return
 
-            if not guide:
-                log(f"No se encontró información de guía parental para el ID: {imdb_id}.")
+            if not guide and not stinger_info:
+                log(f"No se encontró información para el ID: {imdb_id}.")
                 return
 
             # 4. Crear y mostrar la ventana superpuesta en la pantalla
@@ -320,10 +378,10 @@ class ParentalPlayer(xbmc.Player):
             log(f"Mostrando overlay inyectado para: {movie_title}")
             try:
                 self.active_overlay = ParentalGuideOverlay()
-                self.active_overlay.show_guide(guide)
+                self.active_overlay.show_guide(guide, stinger_info=stinger_info)
                 
-                # 5. Mantener en pantalla por exactamente 7 segundos
-                for _ in range(70):
+                # 5. Mantener en pantalla por exactamente 8 segundos
+                for _ in range(80):
                     if self.stop_event.is_set() or not self.isPlayingVideo():
                         break
                     time.sleep(0.1)

@@ -78,3 +78,9 @@ msgstr "General"
 
 msgid "30020"
 msgstr "MdbList API Key"
+
+msgid "30021"
+msgstr "Post-Credits"
+
+msgid "30022"
+msgstr "Audio only"
