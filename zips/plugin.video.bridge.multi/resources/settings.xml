@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+    <!-- Categoría 1: General -->
+    <category label="General">
+        <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="0" />
+        <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="false" />
+        <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="false" />
+        <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
+        <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
+        
+        <setting type="sep" />
+        <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />
+        <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 20 - 30)" default="25" range="5,1,35" option="int" />
+        <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 6 - 10)" default="8" range="1,1,25" option="int" />
+        <setting id="verify_timeout" type="slider" label="Tiempo límite por servidor en verificación (segundos) (Recomendado: 8 - 12)" default="10" range="3,1,30" option="int" />
+        <setting type="sep" />
+        <setting type="lsep" label="[COLOR deepskyblue]Sincronización Nube (GitHub):[/COLOR]" />
+        <setting id="cloud_repo_url" type="text" label="Repositorio de GitHub (Players)" default="https://github.com/01xKeven/Players-Multi" />
+    </category>
+
+    <!-- Categoría 2: Idioma -->
+    <category label="Ordenar y/ó Filtrar por Idioma">
+        <setting id="filter_lang_enabled" type="bool" label="Opciones" default="true" />
+        <setting id="preferencia_idioma_esp" type="enum" label="Idioma [COLOR red][B]Esp[/B][/COLOR] (Castellano de España)" values="Descartar|Primero|Segundo|Tercero" default="2" visible="eq(-1,true)" />
+        <setting id="preferencia_idioma_lat" type="enum" label="Idioma [COLOR red][B]Lat[/B][/COLOR] (Castellano de América)" values="Descartar|Primero|Segundo|Tercero" default="1" visible="eq(-2,true)" />
+        <setting id="preferencia_idioma_vos" type="enum" label="Idioma [COLOR red][B]Vose, Vos, Vo[/B][/COLOR] (versiones Subtituladas ó en V.O.)" values="Descartar|Primero|Segundo|Tercero" default="3" visible="eq(-3,true)" />
+    </category>
+
+    <!-- Categoría 3: Calidad -->
+    <category label="Ordenar por Calidad">
+        <setting id="filter_quality_enabled" type="bool" label="Opciones" default="true" />
+        <setting id="servers_sort_quality" type="enum" label="En cada Idioma ordenar los enlaces por" values="Orden Web|Calidad Alta|Calidad Baja" default="1" visible="eq(-1,true)" />
+    </category>
+
+    <!-- Categoría 4: Servidores -->
+    <category label="Filtrar Servidores">
+        <setting id="filter_servers_enabled" type="bool" label="Opciones" default="true" />
+        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="voe,doodstream,vidmoly" visible="eq(-1,true)" />
+        <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="uqload,torrent" visible="eq(-2,true)" />
+        <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
+    </category>
+</settings>

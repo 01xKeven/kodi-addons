@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.video.bridge.multi" name="Bridge Multi para TMDb Helper (Alfa / Balandro)" version="1.0.0" provider-name="01xKeven">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+    <import addon="plugin.video.alfa" version="3.0.0" optional="true"/>
+    <import addon="plugin.video.balandro" version="1.0.0" optional="true"/>
+    <import addon="script.module.requests"/>
+    <import addon="script.module.beautifulsoup4" optional="true"/>
+    <import addon="script.module.html5lib" optional="true"/>
+    <import addon="script.module.js2py" optional="true"/>
+    <import addon="script.module.pyaes" optional="true"/>
+    <import addon="script.module.rijndael" optional="true"/>
+    <import addon="script.module.brotlipython" optional="true"/>
+    <import addon="script.module.requests-toolbelt" optional="true"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py" start="startup"/>
+  <extension point="xbmc.addon.metadata">
+    <summary>Multi-source parallel search bridge between TMDb Helper and Alfa / Balandro</summary>
+    <summary lang="es_ES">Puente unificado de búsqueda multifuente entre TMDb Helper y Alfa / Balandro</summary>
+    <description>Universal bridge combining parallel search across all Alfa and Balandro channels into unified directory listings with link verification, language/quality sorting, torrent support, and player management.</description>
+    <description lang="es_ES">Puente universal que combina la búsqueda paralela en todos los canales de Alfa y Balandro en listas unificadas con verificación de enlaces, ordenación por idioma y calidad, soporte torrent y gestor de players.</description>
+    <platform>all</platform>
+  </extension>
+</addon>
