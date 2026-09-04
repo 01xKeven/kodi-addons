@@ -3088,6 +3088,61 @@ def set_listitem_info(listitem, info=None, meta=None):
     try: listitem.setInfo('video', legacy_info)
     except: pass
 
+def _force_list_view():
+    """Fuerza la visualización en vista de Lista (List) independientemente del skin activo en Kodi."""
+    skin_id = ''
+    try:
+        skin_id = str(xbmc.getSkinDir() or '').lower()
+    except Exception:
+        pass
+
+    # Mapeo de IDs de vista Lista para skins populares de Kodi (50 es el estándar universal de Kodi)
+    skin_view_map = {
+        'skin.estuary': 50,
+        'skin.estouchy': 50,
+        'skin.confluence': 50,
+        'skin.aeon.nox.silvo': 50,
+        'skin.aeon.tajo': 50,
+        'skin.amber': 50,
+        'skin.apptv': 50,
+        'skin.bello.7': 50,
+        'skin.bello.8': 50,
+        'skin.box': 50,
+        'skin.arctic.horizon': 50,
+        'skin.arctic.horizon.2': 50,
+        'skin.arctic.fuse': 50,
+        'skin.arctic.zephyr.reloaded': 50,
+        'skin.titan': 50,
+        'skin.titan.bingie.mod': 50,
+        'skin.aura': 50,
+        'skin.auramod': 50,
+        'skin.embuary': 50,
+        'skin.phenomenal': 50,
+        'skin.ftv': 50,
+        'skin.mimic.lr': 50,
+        'skin.pellucid': 50
+    }
+    view_id = skin_view_map.get(skin_id, 50)
+
+    try:
+        xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
+    except Exception:
+        pass
+
+    def _apply_delayed():
+        # Re-aplicar tras un breve momento para asegurar que Kodi haya montado el contenedor
+        for delay in (150, 400):
+            xbmc.sleep(delay)
+            try:
+                xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_apply_delayed, daemon=True).start()
+    except Exception:
+        pass
+
 def show_links_as_directory():
     xbmc.log("Bridge Multi: show_links_as_directory llamado", xbmc.LOGINFO)
     links = []
@@ -3224,8 +3279,10 @@ def show_links_as_directory():
             continue
 
 
+    xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
     xbmcplugin.setContent(handle, 'files')
     xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+    _force_list_view()
 
 # ---------------------------------------------------------
 # Playback Handler (Native Delegates for Alfa & Balandro)
