@@ -213,41 +213,99 @@ def parse_crazy_credits(crazy_credits_edges):
             'stinger_color': "FF7F8C8D"
         }
 
-    mid_credits = 0
-    after_credits = 0
+    def clean_stinger_text(t):
+        t = re.sub(r'<[^>]+>', ' ', t)
+        t = t.replace('&#39;', "'").replace('&quot;', '"').replace('&amp;', '&')
+        t = re.sub(r'^(spoiler\s*:\s*|in\s+a\s+|there\s+is\s+a\s+)', '', t, flags=re.IGNORECASE)
+        return t.strip()
+
+    def are_duplicate_scenes(t1, t2):
+        w1 = set(re.findall(r'\b[a-z]{4,}\b', t1.lower()))
+        w2 = set(re.findall(r'\b[a-z]{4,}\b', t2.lower()))
+        stop_words = {
+            'credits', 'scene', 'after', 'during', 'closing', 'ending', 'appears', 
+            'there', 'shows', 'movie', 'scenes', 'credit', 'beginning', 'first',
+            'another', 'extra', 'final', 'mid-credit', 'post-credit', 'leads',
+            'spoilers', 'spoiler'
+        }
+        w1 -= stop_words
+        w2 -= stop_words
+        if w1 and w2:
+            overlap = len(w1 & w2)
+            jaccard = overlap / len(w1 | w2)
+            if overlap >= 3:
+                return True
+            if overlap >= 2 and jaccard > 0.25:
+                return True
+        return False
+
+    mid_scenes = []
+    after_scenes = []
     audio_only = 0
-    generic_scenes = 0
 
     for edge in crazy_credits_edges:
-        text = edge.get('node', {}).get('text', {}).get('plaidHtml', '').lower()
+        raw_text = edge.get('node', {}).get('text', {}).get('plaidHtml', '')
+        text = raw_text.lower()
         
-        # Filtro para ignorar notas de trivia general/resumen entre episodios
-        if re.search(r'\b(only\s+\d+\s+episodes|episodes\s+have\s+post|episodes\s+got|there\s+are\s+\w+\s+extra\s+scenes|two\s+extra\s+scenes)\b', text):
+        # 1. Filtro para ignorar notas de trivia general/resumen entre episodios
+        if re.search(r'\b(only\s+\d+\s+episodes|episodes\s+have\s+post|episodes\s+got|there\s+are\s+\w+\s+extra\s+scenes|two\s+extra\s+scenes|last\s+episode,\s+there\s+are)\b', text):
             continue
 
-        # Filtros de exclusión (logos, dedicatorias, etc.)
-        if any(x in text for x in ['logo', 'in memory of', 'dedicated to', 'aspect ratio', 'soundtrack', 'tribute', 'filmed in']):
-            if not any(x in text for x in ['scene', 'trailer', 'dialogue', 'audio', 'sound', 'appears after', 'during the credits', 'after the closing credits']):
+        # 2. Ignorar menciones de dibujos, tipografías, disclaimer o logos que NO sean escenas narrativas
+        if any(x in text for x in ['animated sequence featuring', 'illustrated drawings', 'drawings of', 'disclaimer in the closing', 'logo in the opening', 'costume designers', 'statement at the start', 'style and font of', 'concept art paintings']):
+            continue
+
+        # 3. Filtros clásicos de exclusión (dedicatorias, logos, etc.)
+        if any(x in text for x in ['dedicated to', 'in memory of', 'aspect ratio', 'soundtrack', 'tribute', 'filmed in', 'special thanks']):
+            if not any(x in text for x in ['scene', 'dialogue', 'audio', 'appears after', 'after the closing credits', 'hammer hitting']):
                 continue
 
-        # Detección de tipos de escena
-        is_mid = any(x in text for x in ['mid-credit', 'mid credit', 'during the credit', 'during the closing credit', 'during the end credit', 'throughout the credit'])
-        is_after = any(x in text for x in ['after the credit', 'after the closing credit', 'after the end credit', 'at the end of the closing credit', 'end of the credits', 'after the main credits', 'scene in the closing credits', 'scene at the end of the closing credits'])
-        is_audio = any(x in text for x in ['audio', 'sound of', 'voice of', 'heard after', 'hammering']) and not any(x in text for x in ['scene', 'video', 'footage'])
+        # 4. Listas múltiples en HTML (ej. Guardians of the Galaxy Vol. 2)
+        if '<ul>' in raw_text:
+            li_items = re.findall(r'<li>(.*?)</li>', raw_text, flags=re.IGNORECASE)
+            if len(li_items) >= 2:
+                for li in li_items:
+                    c_li = clean_stinger_text(li)
+                    if not any(are_duplicate_scenes(c_li, s) for s in after_scenes):
+                        after_scenes.append(c_li)
+                continue
 
-        if is_audio and not (is_mid or is_after):
+        # 5. Detección de audio exclusivo (ej. martilleo en Endgame)
+        is_audio = any(x in text for x in ['sound of a hammer', 'sound of', 'voice of', 'heard after', 'hammering']) and not any(x in text for x in ['scene', 'video', 'footage', 'epilogue', 'post-credit'])
+        is_scene = any(x in text for x in ['scene', 'epilogue', 'post-credits epilogue', 'mid-credits', 'post-credits', 'after the credits', 'after the closing credits', 'trailer for'])
+
+        if is_audio and not is_scene:
             audio_only += 1
-        elif is_mid and is_after:
-            mid_credits += 1
-            after_credits += 1
-        elif is_mid:
-            mid_credits += 1
-        elif is_after:
-            after_credits += 1
-        elif 'scene' in text and ('credit' in text or 'after' in text):
-            generic_scenes += 1
+            continue
 
-    total_scenes = mid_credits + after_credits + generic_scenes
+        # 6. Ignorar menciones explícitas de que NO hay escena
+        if 'does not have a scene' in text or 'no scene' in text:
+            continue
+
+        # 7. Ignorar acciones menores de música / créditos
+        if 'walks off with the music' in text or 'picks up his walkman' in text:
+            continue
+
+        # 8. Clasificación de tipo
+        is_mid = any(x in text for x in ['mid-credit', 'mid credit', 'during the credit', 'during the closing credit', 'during the end credit', 'throughout the credit', 'beginning of the credits'])
+        is_after = any(x in text for x in ['after the credit', 'after the closing credit', 'after the end credit', 'at the end of the closing credit', 'end of the credits', 'after the main credits', 'scene in the closing credits', 'scene at the end of the closing credits', 'post-credits epilogue', 'trailer for'])
+
+        cleaned = clean_stinger_text(raw_text)
+
+        if not is_mid and not is_after and is_scene:
+            is_after = True
+
+        if is_mid and not is_after:
+            if not any(are_duplicate_scenes(cleaned, s) for s in mid_scenes):
+                mid_scenes.append(cleaned)
+        elif is_after and not is_mid:
+            if not any(are_duplicate_scenes(cleaned, s) for s in after_scenes):
+                after_scenes.append(cleaned)
+        elif is_mid and is_after:
+            if not any(are_duplicate_scenes(cleaned, s) for s in mid_scenes) and not any(are_duplicate_scenes(cleaned, s) for s in after_scenes):
+                after_scenes.append(cleaned)
+
+    total_scenes = len(mid_scenes) + len(after_scenes)
 
     if total_scenes == 0 and audio_only > 0:
         return {
@@ -263,14 +321,9 @@ def parse_crazy_credits(crazy_credits_edges):
             'stinger_color': "FF7F8C8D"
         }
 
-    if total_scenes > 0:
-        stinger_txt = str(total_scenes)
-    else:
-        stinger_txt = get_string("none")
-
     return {
         'has_stinger': True,
-        'stinger_text': stinger_txt,
+        'stinger_text': str(total_scenes),
         'stinger_color': "FF00E5FF"
     }
 
