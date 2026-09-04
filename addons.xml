@@ -199,4 +199,85 @@
     <platform>all</platform>
   </extension>
 </addon>
+<addon id="repository.alfa-addon" name="[COLOR red]Alfa Add-on[/COLOR] Repo" version="1.0.8" provider-name="Alfa Development Group">
+    <requires>
+        <import addon="xbmc.addon" version="12.0.0"/>
+    </requires>
+    <extension point="xbmc.addon.repository" name="Alfa Add-on Repo">
+        <dir>
+            <info compressed="false">https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/</datadir>
+        </dir>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="ca">Repositori d'Alfa Add-on</summary>
+        <summary lang="en">Alfa Add-on Repository</summary>
+        <summary lang="es">Repositorio de Alfa Add-on</summary>
+        <summary lang="it">Repository di Alfa Add-on</summary>
+        <summary lang="pt">Repositório de Alfa Add-on</summary>
+        <description lang="ca">Repositori per instal·lar Alfa Addon, un dels principals add-ons de contingut de parla hispana al món, successor al conegut Pelisalacarta-ce. També es proveeix algunes utilitats addicionals.</description>
+        <description lang="en">Repository to install Alfa Addon, one of the main Spanish-speaking content add-ons in the world, successor to the well-known Pelisalacarta-ce. Some additional utilities are also provided.</description>
+        <description lang="es">Repositorio para instalar Alfa Addon, uno de los principales add-ons de contenido de habla hispana en el mundo, sucesor al conocido Pelisalacarta-ce. También se provee de algunas utilidades adicionales.</description>
+        <description lang="it">Repository per installare Alfa Addon, uno dei principali add-on di contenuti di lingua spagnola nel mondo, successore del noto Pelisalacarta-ce. Vengono fornite anche alcune utilità aggiuntive.</description>
+        <description lang="pt">Repositório para instalação do Alfa Addon, um dos principais add-ons de conteúdo em língua espanhola do mundo, sucessor do conhecido Pelisalacarta-ce. Alguns utilitários adicionais também são fornecidos.</description>
+        <disclaimer lang="ca">[COLOR red]Els propietaris i distribuïdors d'aquest complemento no proveeixen ni distribueixen cap contingut mostrat pel complemento ni tenen affiliación alguna amb els proveïdors de l'contingut.[/COLOR]</disclaimer>
+        <disclaimer lang="en">[COLOR red]The owners and submitters to this add-on do not host or distribute any of the content displayed by these add-ons nor do they have any affiliation with the content providers.[/COLOR]</disclaimer>
+        <disclaimer lang="es">[COLOR red]Los propietarios y distribuidores de este add-on no proveen ni distribuyen ningún contenido mostrado por el add-on ni tienen afiliación alguna con los proveedores del contenido.[/COLOR]</disclaimer>
+        <disclaimer lang="it">[COLOR red]I proprietari e i distributori di questo add-on aggiuntivo non forniscono o distribuiscono alcun contenuto visualizzato dal add-on aggiuntivo né hanno alcuna affiliazione con i fornitori di contenuti.[/COLOR]</disclaimer>
+        <disclaimer lang="pt">[COLOR red]Os proprietários e distribuidores deste add-on não fornecem ou distribuem qualquer conteúdo exibido pelo add-on nem têm qualquer afiliação com os provedores de conteúdo.[/COLOR]</disclaimer>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
+        </assets>
+        <source>https://github.com/alfa-addon/alfa-repo</source>
+    </extension>
+</addon>
+<addon id="repository.balandro" name="[COLOR aqua]Balandro[/COLOR] Repo" version="4.0.1" provider-name="Team Balandro">
+
+    <extension point="xbmc.addon.repository" name="balandro repo">
+        <dir>
+            <info>https://raw.githubusercontent.com/repobal/base/main/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/repobal/base/main/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/repobal/base/main/</datadir>
+        </dir>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+       <summary>Repositorio de Balandro</summary>
+       <assets>
+          <icon>icon.png</icon>
+          <fanart>fanart.jpg</fanart>
+       </assets>
+       <news>
+       [COLOR cyan][B]Repositorio para instalar el addon de vídeo Balandro[/B][/COLOR]
+
+       [COLOR darkorange][B]Versión  [/COLOR][COLOR yellow]4.0.1[/COLOR][COLOR red]  Marzo 2024[/B][/COLOR]
+
+       [COLOR goldenrod][B]Media Centers:[/B][/COLOR]
+           [COLOR tan][B]Kodi Versiones Oficiales Soportadas:[/B][/COLOR]
+           [COLOR plum][B]22.x Piers,  21.x Omega,  20.x Nexus,  19.x Matrix,[/B][/COLOR]
+           [COLOR plum][B]18.x Leia  y  17.x Krypton[/B][/COLOR]
+
+       [COLOR springgreen][B]Fuente[/COLOR]  [COLOR cyan]repobal.github.io/base/[/B][/COLOR]
+
+       [COLOR firebrick][B]Team[/COLOR]  [COLOR orange]https://github.com/repobal[/B][/COLOR]
+
+       [COLOR limegreen][B]Contacto:[/B][/COLOR]
+           Foro  www.mimediacenter.info/foro/
+           Telegram  t.me/balandro_asesor
+           Team  t.me/Balandro_team
+       </news>
+       <summary>Balandro es un Navegador de Páginas Webs</summary>
+       <description>[COLOR moccasin][B]Navega con Kodi por Páginas Webs para poder ver sus contenidos de manera fácil. [COLOR yellow]Balandro es desde el año [COLOR cyan]2018[COLOR yellow] un MOD derivado de [COLOR yellowgreen]Pelisalacarta y Alfa[COLOR yellow],[COLOR mediumaquamarine] y tiene como objeto, permitir visualizar [COLOR deepskyblue]Películas[COLOR mediumaquamarine], [COLOR hotpink]Series[COLOR mediumaquamarine], [COLOR darkcyan]Documentales[COLOR mediumaquamarine], etc., todo a través de Internet y directamente desde su sistema Media Center. [COLOR orchid]Este Add-On es tan solo un mero Ejercicio de Aprendizaje del Lenguaje de Programación Python y se distribuye sin Ningún Contenido Multimedia adjunto al mismo [COLOR lightgrey][I]En consecuencia solo las Webs son Plenamente Responsables de los contenidos que publiquen.[/I][/B][/COLOR]</description>
+       <disclaimer>[COLOR aqua][B]Los Propietarios y Distribuidores de este Add-On no Proveen ni Distribuyen Ningún Contenido Mostrado por el Add-On, ni Tienen Afiliación alguna con los Proveedores/Webs de contenidos. [COLOR tan]Está Prohibida su distribución, solo ó junto con Contenidos Multimedia Protegidos por los Derechos de Autor. [COLOR chocolate]Si este tipo de contenido está Prohibido en su País, solamente Usted será el Responsable de su uso. [COLOR white]La vulneración de estas prohibiciones Exonerarán de cualquier Culpa a sus Autores, [COLOR red]Siendo el unico Responsable quien lo haya Distribuido ó Utilizado Ilegalmente.[/B][/COLOR]</disclaimer>
+       <platform>all</platform>
+       <license>GNU GPL v3</license>
+       <source>https://repobal.github.io/base/</source>
+       <forum>https://www.mimediacenter.info/foro/</forum>
+    </extension>
+
+    <extension point="xbmc.service" library="service.py" start="login|startup" />
+</addon>
 </addons>
