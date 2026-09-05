@@ -15,7 +15,12 @@ import types
 builtins.sys = sys
 builtins.basestring = str
 builtins.unicode = str
-socket.setdefaulttimeout(30)
+# Timeout global de sockets: ninguna operacion de red puede colgarse mas de 10s
+# en la capa del SO (antes 30s). httptools impone sus propios timeouts (15s
+# por defecto); este es el techo de seguridad para sockets crudos (TMDB, etc.).
+# Causa raiz del freeze de series: pelispanda.episodios() tardaba 100-150s en
+# un regex catastrofico reteniendo el GIL; ya corregido en el canal via JSON.
+socket.setdefaulttimeout(10)
 
 import urllib
 import urllib.parse as uparse
@@ -464,45 +469,158 @@ def _get_balandro_modules():
         xbmc.log("Bridge Multi: Error cargando Balandro: " + str(e), xbmc.LOGWARNING)
         return None
 
+_dialog_silence_depth = 0
+_dialog_silence_lock = threading.Lock()
+_dialog_orig_pt = {}
+_dialog_orig_tmdb = {}
+_dialog_orig_tmdb = {}
+_orig_dialog_class = None
+_search_in_progress = False
+
+class _SilentDialog:
+    def __init__(self, *args, **kwargs): pass
+    def ok(self, *args, **kwargs): return True
+    def yesno(self, *args, **kwargs): return True
+    def select(self, *args, **kwargs): return -1
+    def multiselect(self, *args, **kwargs): return []
+    def notification(self, *args, **kwargs): return None
+    def textviewer(self, *args, **kwargs): pass
+    def input(self, *args, **kwargs): return ''
+    def browse(self, *args, **kwargs): return ''
+    def numeric(self, *args, **kwargs): return 0
+    def contextmenu(self, *args, **kwargs): return -1
+
+def _apply_silence_all():
+    global _orig_dialog_class
+    if hasattr(xbmcgui, 'Dialog') and xbmcgui.Dialog is not _SilentDialog:
+        if _orig_dialog_class is None:
+            _orig_dialog_class = xbmcgui.Dialog
+        try:
+            xbmcgui.Dialog = _SilentDialog
+        except:
+            pass
+
+    for m_name, m_mod in list(sys.modules.items()):
+        if not m_mod:
+            continue
+        if hasattr(m_mod, 'Dialog') and getattr(m_mod, 'Dialog', None) is not _SilentDialog:
+            try:
+                setattr(m_mod, 'Dialog', _SilentDialog)
+            except:
+                pass
+
+        if 'platformtools' in m_name:
+            if m_name not in _dialog_orig_pt:
+                _dialog_orig_pt[m_name] = {
+                    'dialog_ok': getattr(m_mod, 'dialog_ok', None),
+                    'dialog_notification': getattr(m_mod, 'dialog_notification', None),
+                    'dialog_yesno': getattr(m_mod, 'dialog_yesno', None),
+                    'dialog_select': getattr(m_mod, 'dialog_select', None),
+                    'dialog_multiselect': getattr(m_mod, 'dialog_multiselect', None),
+                }
+            m_mod.dialog_ok = lambda *args, **kwargs: None
+            m_mod.dialog_notification = lambda *args, **kwargs: None
+            m_mod.dialog_yesno = lambda *args, **kwargs: True
+            m_mod.dialog_select = lambda *args, **kwargs: -1
+            m_mod.dialog_multiselect = lambda *args, **kwargs: []
+
+        if hasattr(m_mod, 'platformtools') and getattr(m_mod, 'platformtools', None):
+            try:
+                pt = getattr(m_mod, 'platformtools')
+                pt_id = id(pt)
+                if pt_id not in _dialog_orig_pt:
+                    _dialog_orig_pt[pt_id] = {
+                        'mod': pt,
+                        'dialog_ok': getattr(pt, 'dialog_ok', None),
+                        'dialog_notification': getattr(pt, 'dialog_notification', None),
+                        'dialog_yesno': getattr(pt, 'dialog_yesno', None),
+                        'dialog_select': getattr(pt, 'dialog_select', None),
+                        'dialog_multiselect': getattr(pt, 'dialog_multiselect', None),
+                    }
+                pt.dialog_ok = lambda *args, **kwargs: None
+                pt.dialog_notification = lambda *args, **kwargs: None
+                pt.dialog_yesno = lambda *args, **kwargs: True
+                pt.dialog_select = lambda *args, **kwargs: -1
+                pt.dialog_multiselect = lambda *args, **kwargs: []
+            except:
+                pass
+
+        if 'core.tmdb' in m_name or m_name == 'tmdb' or (hasattr(m_mod, 'tmdb') and getattr(m_mod, 'tmdb', None)):
+            t_targets = []
+            if 'core.tmdb' in m_name or m_name == 'tmdb':
+                t_targets.append((m_name, m_mod))
+            if hasattr(m_mod, 'tmdb') and getattr(m_mod, 'tmdb', None):
+                t_targets.append((m_name + '.tmdb', getattr(m_mod, 'tmdb')))
+            for t_name, t_obj in t_targets:
+                if t_name not in _dialog_orig_tmdb:
+                    _dialog_orig_tmdb[t_name] = {
+                        'obj': t_obj,
+                        'set_infoLabels': getattr(t_obj, 'set_infoLabels', None),
+                        'set_infoLabels_itemlist': getattr(t_obj, 'set_infoLabels_itemlist', None),
+                        'set_infoLabels_item': getattr(t_obj, 'set_infoLabels_item', None),
+                    }
+                _dummy_sil = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                try:
+                    t_obj.set_infoLabels = _dummy_sil
+                    t_obj.set_infoLabels_itemlist = _dummy_sil
+                    if hasattr(t_obj, 'set_infoLabels_item'):
+                        t_obj.set_infoLabels_item = lambda *args, **kwargs: 0
+                except: pass
+
+def _restore_silence_all():
+    global _orig_dialog_class
+    with _dialog_silence_lock:
+        if _orig_dialog_class is not None and hasattr(xbmcgui, 'Dialog'):
+            try:
+                xbmcgui.Dialog = _orig_dialog_class
+            except:
+                pass
+            _orig_dialog_class = None
+
+        for k, v in list(_dialog_orig_pt.items()):
+            try:
+                if isinstance(k, str) and k in sys.modules:
+                    m = sys.modules[k]
+                    for fn, orig in v.items():
+                        if orig is not None: setattr(m, fn, orig)
+                elif isinstance(k, int) and 'mod' in v:
+                    m = v['mod']
+                    for fn in ('dialog_ok', 'dialog_notification', 'dialog_yesno', 'dialog_select', 'dialog_multiselect'):
+                        orig = v.get(fn)
+                        if orig is not None: setattr(m, fn, orig)
+            except: pass
+        _dialog_orig_pt.clear()
+
+        for k, v in list(_dialog_orig_tmdb.items()):
+            try:
+                m = v.get('obj')
+                if m is not None:
+                    for fn in ('set_infoLabels', 'set_infoLabels_itemlist', 'set_infoLabels_item'):
+                        orig = v.get(fn)
+                        if orig is not None: setattr(m, fn, orig)
+                elif k in sys.modules:
+                    m = sys.modules[k]
+                    for fn, orig in v.items():
+                        if orig is not None: setattr(m, fn, orig)
+            except: pass
+        _dialog_orig_tmdb.clear()
+
 @contextmanager
 def silenced_dialogs():
-    pt_mod = sys.modules.get('platformcode.platformtools')
-    orig_ok = getattr(pt_mod, 'dialog_ok', None) if pt_mod else None
-    orig_notif = getattr(pt_mod, 'dialog_notification', None) if pt_mod else None
-    orig_yesno = getattr(pt_mod, 'dialog_yesno', None) if pt_mod else None
-    orig_select = getattr(pt_mod, 'dialog_select', None) if pt_mod else None
-    orig_multiselect = getattr(pt_mod, 'dialog_multiselect', None) if pt_mod else None
-
-    tmdb_mod = sys.modules.get('core.tmdb')
-    orig_sil = getattr(tmdb_mod, 'set_infoLabels', None) if tmdb_mod else None
-    orig_sill = getattr(tmdb_mod, 'set_infoLabels_itemlist', None) if tmdb_mod else None
-    orig_sili = getattr(tmdb_mod, 'set_infoLabels_item', None) if tmdb_mod else None
-    _dummy_sil = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+    global _dialog_silence_depth
+    with _dialog_silence_lock:
+        _apply_silence_all()
+        _dialog_silence_depth += 1
 
     try:
-        if pt_mod:
-            pt_mod.dialog_ok = lambda *args, **kwargs: None
-            pt_mod.dialog_notification = lambda *args, **kwargs: None
-            pt_mod.dialog_yesno = lambda *args, **kwargs: True
-            pt_mod.dialog_select = lambda *args, **kwargs: -1
-            pt_mod.dialog_multiselect = lambda *args, **kwargs: []
-        if tmdb_mod:
-            tmdb_mod.set_infoLabels = _dummy_sil
-            tmdb_mod.set_infoLabels_itemlist = _dummy_sil
-            if hasattr(tmdb_mod, 'set_infoLabels_item'):
-                tmdb_mod.set_infoLabels_item = lambda *args, **kwargs: 0
         yield
     finally:
-        if pt_mod:
-            if orig_ok: pt_mod.dialog_ok = orig_ok
-            if orig_notif: pt_mod.dialog_notification = orig_notif
-            if orig_yesno: pt_mod.dialog_yesno = orig_yesno
-            if orig_select: pt_mod.dialog_select = orig_select
-            if orig_multiselect: pt_mod.dialog_multiselect = orig_multiselect
-        if tmdb_mod:
-            if orig_sil: tmdb_mod.set_infoLabels = orig_sil
-            if orig_sill: tmdb_mod.set_infoLabels_itemlist = orig_sill
-            if orig_sili: tmdb_mod.set_infoLabels_item = orig_sili
+        with _dialog_silence_lock:
+            _dialog_silence_depth -= 1
+            if _dialog_silence_depth <= 0:
+                _dialog_silence_depth = 0
+                if not _search_in_progress:
+                    _restore_silence_all()
 
 def _prepare_playable_link(link, engine='alfa'):
     """Prepara un enlace decodificando URLs protegidas (ej. data_url base64 en Cinecalidad)
@@ -975,11 +1093,13 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
     """
     result_title = _safe_str(result_title)
     if not result_title: return 0
+    low_title = result_title.lower().strip()
 
-    # 1. Media Type Guard
+    if any(p in low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or low_title.startswith('>>') or low_title.startswith('<<') or low_title.endswith('>>') or low_title.endswith('<<'):
+        return 0
+
     url_str = _safe_str(getattr(item, 'url', '')).lower() if item else ''
     content_type = _safe_str(getattr(item, 'contentType', '')).lower() if item else ''
-    low_title = result_title.lower()
 
     if is_series is False:
         # Searching for movie
@@ -1270,6 +1390,47 @@ def _get_torrent_client():
         return None, None
 
 
+def _resolve_torrent_url(link, engine='balandro'):
+    """Resuelve la URL real (magnet/.torrent) de un enlace torrent.
+    1) Decodifica data_url (cinecalidad* guardan ahi el magnet con url vacia).
+    2) Si sigue sin ser magnet/.torrent, pide al play() del canal.
+    Devuelve (url, detalle_fallo). No lanza nada ni muestra ventanas."""
+    fail_detail = ''
+    try:
+        prep = _prepare_playable_link(link, engine=engine)
+    except Exception:
+        prep = None
+    torrent_url = _safe_str(getattr(prep, 'url', '') or '') if prep is not None else ''
+    if not torrent_url:
+        torrent_url = _safe_str(getattr(link, 'url', '') or '')
+    if (not torrent_url or (not torrent_url.startswith('magnet:') and not torrent_url.endswith('.torrent'))) \
+            and _safe_str(getattr(link, 'data_url', '') or ''):
+        try:
+            _switch_engine_environment(engine)
+            _ch_dbg = _safe_str(getattr(link, 'channel', '') or '').strip()
+            if _ch_dbg:
+                _ch_mod = __import__('channels.' + _ch_dbg, fromlist=[''])
+                if hasattr(_ch_mod, 'play'):
+                    with silenced_dialogs():
+                        _p_res = _ch_mod.play(link.clone() if hasattr(link, 'clone') else link)
+                    if isinstance(_p_res, str) and _p_res.strip():
+                        # El canal devuelve texto (ej. 'Tiene Acortador del enlace')
+                        fail_detail = re.sub(r'\[/?COLOR[^\]]*\]|\[/?B\]|\[CR\]', '', _p_res).strip()
+                    else:
+                        _cand = None
+                        if isinstance(_p_res, list) and _p_res:
+                            _cand = _p_res[0]
+                            if isinstance(_cand, list):
+                                _cand = _cand[0] if _cand else None
+                        elif hasattr(_p_res, 'url'):
+                            _cand = _p_res
+                        if _cand is not None and _safe_str(getattr(_cand, 'url', '') or ''):
+                            torrent_url = _safe_str(getattr(_cand, 'url', '') or '')
+                            xbmc.log("Bridge Multi: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
+        except Exception as _e:
+            xbmc.log("Bridge Multi: torrent canal.play error: %s" % _e, xbmc.LOGINFO)
+    return torrent_url, fail_detail
+
 def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     """Reproduce un link torrent usando el cliente configurado en Balandro.
 
@@ -1280,6 +1441,14 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     """
     if not torrent_url:
         return False
+
+    # Defensa: solo magnets o .torrent llegan al cliente (una pagina web o un
+    # acortador darian "Invalid input" en Elementum).
+    _tl = torrent_url.strip()
+    if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
+        xbmc.log('Bridge Multi: _play_torrent_link rechaza URL no-torrent: %s...' % _tl[:80], xbmc.LOGWARNING)
+        return False
+    torrent_url = _tl
 
     _tor_id, _tor_tpl = _get_torrent_client()
     if not (_tor_id and _tor_tpl):
@@ -1541,6 +1710,13 @@ def _filter_and_sort_links(links):
 
     b_prefs = _get_filter_prefs()
 
+    # PASO 0: desempate por confianza del match (los anclados por TMDb/IMDb o
+    # año primero dentro de igual calidad/servidor/idioma). Al ser el primer
+    # sorted estable, solo ordena entre empatados: no quita ni agrega nada.
+    try:
+        safe_links = sorted(safe_links, key=lambda it: -int(getattr(it, 'bridge_score', 0) or 0))
+    except: pass
+
     # PASO 1 de Balandro: filter_and_sort_by_quality
     # 0: Orden Web, 1: Calidad Alta (descendente), 2: Calidad Baja (ascendente)
     sort_q = b_prefs.get('servers_sort_quality', 1)
@@ -1626,6 +1802,19 @@ def _extract_valid_streams(video_urls):
                 res.append(['', entry])
     return res if res else None
 
+def _link_cache_key(lnk):
+    """Huella estable de un enlace para reutilizar su resolucion.
+    Dos enlaces con la misma huella son intercambiables (mismos atributos),
+    asi que resolver uno solo da el mismo resultado final que resolver ambos.
+    Se excluye 'video_urls' (es el producto de la resolucion, no la entrada)."""
+    try:
+        d = dict(getattr(lnk, '__dict__', {}) or {})
+        d.pop('video_urls', None)
+        return json.dumps(d, sort_keys=True, default=str, ensure_ascii=False)
+    except Exception:
+        return '%s|%s|%s|%s' % (getattr(lnk, 'server', ''), getattr(lnk, 'url', ''),
+                                getattr(lnk, 'title', ''), getattr(lnk, 'language', ''))
+
 def _verify_links_headless(links, engine='alfa', p_dialog=None):
     if not links: return []
 
@@ -1662,28 +1851,22 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     orig_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(verify_timeout)
 
-    def _test_worker(orig_idx, lnk):
-        # Doble salvaguarda: si es torrent, jamás verificar por red
-        if _is_torrent_link(lnk):
-            with lock:
-                if orig_idx not in finished_indices:
-                    finished_indices.add(orig_idx)
-                    verified_results[orig_idx] = lnk
-                checked_count[0] += 1
-            return
+    # Cache de resoluciones: los mismos enlaces (misma huella) se resuelven
+    # una sola vez por red y el resto reutiliza el resultado. El clone() de
+    # Balandro es deepcopy, asi que cada indice recibe un objeto independiente
+    # con el mismo contenido -> el resultado final no cambia.
+    prep_cache = {}
+    _CACHE_MISS = object()
 
+    def _resolve_one(lnk):
         test_item = lnk.clone() if hasattr(lnk, 'clone') else lnk
         video_urls = None
         puedes = False
         try:
             prep = _prepare_playable_link(test_item, engine=engine)
-            if not prep: return
+            if not prep: return None
             if _is_torrent_link(prep):
-                with lock:
-                    if orig_idx not in finished_indices:
-                        finished_indices.add(orig_idx)
-                        verified_results[orig_idx] = prep
-                return
+                return prep
 
             actual_srv = (getattr(prep, 'server', '') or _get_link_server_name(prep)).lower().strip()
             raw_srv = (getattr(prep, 'server', '') or '').lower().strip()
@@ -1691,7 +1874,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             pwd = getattr(prep, 'password', '')
 
             if not url and not getattr(prep, 'video_urls', None):
-                return
+                return None
 
             servers_to_try = []
             if actual_srv and actual_srv not in ('directo', 'none', ''): servers_to_try.append(actual_srv)
@@ -1719,10 +1902,38 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 valid_streams = _extract_valid_streams(video_urls)
                 if valid_streams:
                     prep.video_urls = valid_streams
-                    with lock:
-                        if orig_idx not in finished_indices:
-                            finished_indices.add(orig_idx)
-                            verified_results[orig_idx] = prep
+                    return prep
+            return None
+        except Exception:
+            return None
+
+    def _test_worker(orig_idx, lnk):
+        # Doble salvaguarda: si es torrent, jamás verificar por red
+        if _is_torrent_link(lnk):
+            with lock:
+                if orig_idx not in finished_indices:
+                    finished_indices.add(orig_idx)
+                    verified_results[orig_idx] = lnk
+                checked_count[0] += 1
+            return
+
+        try:
+            _ckey = _link_cache_key(lnk)
+            with lock:
+                _hit = prep_cache.get(_ckey, _CACHE_MISS)
+            if _hit is _CACHE_MISS:
+                _res = _resolve_one(lnk)
+                with lock:
+                    prep_cache[_ckey] = _res
+            else:
+                _res = _hit
+            if _res is None:
+                return
+            _cp = _res.clone() if hasattr(_res, 'clone') else _res
+            with lock:
+                if orig_idx not in finished_indices:
+                    finished_indices.add(orig_idx)
+                    verified_results[orig_idx] = _cp
         except Exception: pass
         finally:
             with lock:
@@ -1794,7 +2005,7 @@ def _build_bridge_terms(target_title, alt_terms, all_names):
             if core_clean and core_clean.lower() not in seen_clean:
                 seen_clean.add(core_clean.lower())
                 terms.append(core_clean)
-    return terms[:8]
+    return terms[:4]
 
 
 _tmdb_translations_cache = {}
@@ -1887,9 +2098,9 @@ def _resolve_localized_metadata(tmdb_id=None, is_series=False, season=None, epis
                                     if p and not tmdb_oth_plot: tmdb_oth_plot = p
                                     if tg and not tmdb_oth_tagline: tmdb_oth_tagline = tg
                                     if tt and not tmdb_oth_title: tmdb_oth_title = tt
-                        # Complementar títulos en _tmdb_titles_cache para búsquedas paralelas
+                        # Complementar títulos en _tmdb_titles_cache para búsquedas paralelas (solo para series completas o películas, NUNCA títulos de episodios)
                         all_t = [x for x in [tmdb_mx_title, tmdb_es_title, tmdb_oth_title] if x]
-                        if all_t:
+                        if all_t and not is_ep:
                             ck = f"{tmdb_id_str}_{1 if is_series else 0}"
                             if ck not in _tmdb_titles_cache:
                                 _tmdb_titles_cache[ck] = []
@@ -2160,7 +2371,11 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
     if not mods:
         return None, None
     Item = mods['Item']
-    terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
+    if is_series:
+        cleaned_target = _clean_search_term(target_title)
+        terms_to_try = [cleaned_target] if cleaned_target else []
+    else:
+        terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
     if not terms_to_try:
         cleaned = _clean_search_term(target_title)
         if cleaned:
@@ -2168,31 +2383,66 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
         else:
             return None, None
     xbmc.log("Bridge Multi: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
+    canal = None
+    with _engine_lock:
+        try:
+            _switch_engine_environment('alfa')
+            canal = __import__('channels.' + channel_id, fromlist=[''])
+            try:
+                if hasattr(canal, 'canonical') and isinstance(canal.canonical, dict):
+                    canal.canonical['global_search_active'] = True
+            except:
+                pass
+            if hasattr(canal, 'platformtools') and getattr(canal, 'platformtools', None):
+                try:
+                    canal.platformtools.dialog_yesno = lambda *args, **kwargs: True
+                    canal.platformtools.dialog_ok = lambda *args, **kwargs: None
+                    canal.platformtools.dialog_select = lambda *args, **kwargs: -1
+                    canal.platformtools.dialog_multiselect = lambda *args, **kwargs: []
+                    canal.platformtools.dialog_notification = lambda *args, **kwargs: None
+                except:
+                    pass
+            if hasattr(canal, 'tmdb') and getattr(canal, 'tmdb', None):
+                try:
+                    canal.tmdb.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    canal.tmdb.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    canal.tmdb.set_infoLabels_item = lambda *args, **kwargs: 0
+                except:
+                    pass
+            if hasattr(canal, 'httptools') and getattr(canal, 'httptools', None):
+                try:
+                    _ht = canal.httptools
+                    _orig_dp_proxy = getattr(_ht, 'downloadpage_proxy', None)
+                    if _orig_dp_proxy:
+                        def _fast_dp_proxy(c_name, url, *args, **kwargs):
+                            kwargs['timeout'] = min(3, kwargs.get('timeout', 3) or 3)
+                            try:
+                                r = _ht.downloadpage(url, *args, **kwargs)
+                                if r and getattr(r, 'sucess', False) and len(getattr(r, 'data', '') or '') > 200:
+                                    return r
+                            except: pass
+                            return type('Resp', (), {'sucess': False, 'code': 500, 'data': '', 'headers': {}})()
+                        _ht.downloadpage_proxy = _fast_dp_proxy
+                except:
+                    pass
+        except Exception as e:
+            xbmc.log("Bridge Multi: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            return None, None
+
+    search_actions = []
+    if not base_item and hasattr(canal, 'mainlist'):
+        try:
+            with silenced_dialogs():
+                mainlist_items = canal.mainlist(Item(channel=channel_id))
+                search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
+        except Exception as e:
+            xbmc.log("Bridge Multi: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            search_actions = []
+
     for cur_term in terms_to_try:
         if xbmc.Monitor().abortRequested():
             break
         results = []
-        canal = None
-        search_actions = []
-        with _engine_lock:
-            try:
-                _switch_engine_environment('alfa')
-                canal = __import__('channels.' + channel_id, fromlist=[''])
-                try:
-                    if hasattr(canal, 'canonical') and isinstance(canal.canonical, dict):
-                        canal.canonical['global_search_active'] = True
-                except:
-                    pass
-                try:
-                    with silenced_dialogs():
-                        mainlist_items = canal.mainlist(Item(channel=channel_id)) if hasattr(canal, 'mainlist') else []
-                        search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
-                except Exception as e:
-                    xbmc.log("Bridge Multi: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
-                    search_actions = []
-            except Exception as e:
-                xbmc.log("Bridge Multi: %s import error term '%s': %s" % (channel_id, cur_term, str(e)), xbmc.LOGINFO)
-                continue
         with silenced_dialogs():
             if search_actions:
                 for s_act in search_actions:
@@ -2285,9 +2535,9 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
             title_check = getattr(it, 'title', '') or getattr(it, 'contentTitle', '') or getattr(it, 'contentSerieName', '')
             if not title_check:
                 continue
-            # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad)
-            _low_title = _safe_str(title_check).lower()
-            if 'pagina siguiente' in _low_title or ('siguiente' in _low_title and '>>' in _low_title) or _low_title.strip().startswith('>>'):
+            # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad, PelisPedia, HDFull)
+            _low_title = _safe_str(title_check).lower().strip()
+            if any(p in _low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or _low_title.startswith('>>') or _low_title.startswith('<<') or _low_title.endswith('>>') or _low_title.endswith('<<'):
                 xbmc.log(f"Bridge Multi: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
                 continue
             score = score_match(title_check, target_year, all_names, target_tmdb=target_tmdb, item=it, target_imdb=target_imdb, is_series=is_series)
@@ -2298,10 +2548,27 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
         candidates.sort(key=lambda c: c[0], reverse=True)
 
         for score, it, title_check in candidates:
-            xbmc.log("Bridge Multi: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)" % (channel_id, score, title_check, cur_term, target_year, target_tmdb), xbmc.LOGINFO)
+            # Confianza del match (solo pelis): sin TMDb/IMDb ni año no se puede
+            # distinguir homonimos (ej. Buddy 1997 vs Buddy 2026). No rechaza,
+            # solo marca para ordenar/avisar.
+            try:
+                _w_weak = (not is_series and not _get_item_tmdb(it) and not _get_item_imdb(it)
+                           and not _get_item_year(it, title_check))
+            except Exception:
+                _w_weak = False
+            xbmc.log("Bridge Multi: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)%s" % (channel_id, score, title_check, cur_term, target_year, target_tmdb, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
             if is_series and hasattr(canal, 'episodios'):
                 try:
-                    ep_list = canal.episodios(it)
+                    if target_tmdb:
+                        if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                            it.infoLabels = {}
+                        it.infoLabels['tmdb_id'] = str(target_tmdb)
+                        it.infoLabels['tvdb_id'] = str(target_tmdb)
+                        it.tvdb_id = str(target_tmdb)
+                    it.perpage = 500
+                    it.page = 0
+                    with silenced_dialogs():
+                        ep_list = canal.episodios(it)
                     if not ep_list:
                         xbmc.log("Bridge Multi: %s episodios vacio para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
                     for ep in (ep_list or []):
@@ -2310,7 +2577,8 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                         if ep_season == int(s_num or 1) and ep_episode == int(e_num or 1):
                             links = None
                             try:
-                                links = canal.findvideos(ep) if hasattr(canal, 'findvideos') else None
+                                with silenced_dialogs():
+                                    links = canal.findvideos(ep) if hasattr(canal, 'findvideos') else None
                             except Exception as e:
                                 xbmc.log("Bridge Multi: %s findvideos(ep) error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                             if links and isinstance(links, list) and len(links) > 0:
@@ -2331,13 +2599,18 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
             elif hasattr(canal, 'findvideos'):
                 try:
-                    links = canal.findvideos(it)
+                    with silenced_dialogs():
+                        links = canal.findvideos(it)
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                         if valid:
                             for l in valid:
                                 l.channel = channel_id
                                 l.bridge_engine = 'alfa'
+                                try:
+                                    l.bridge_score = int(score)
+                                    l.bridge_weak = bool(_w_weak)
+                                except: pass
                             xbmc.log("Bridge Multi: %s OK peli %d enlaces para '%s'" % (channel_id, len(valid), title_check), xbmc.LOGINFO)
                             return it, valid
                         else:
@@ -2348,6 +2621,8 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     xbmc.log("Bridge Multi: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                     import traceback
                     xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
+        if is_series and candidates:
+            break
     return None, None
 
 def _search_channel_balandro(channel_id, target_title, target_year, is_series, s_num, e_num, all_names, base_item=None, alt_terms=None, target_tmdb=None, target_imdb=None):
@@ -2355,7 +2630,11 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
     if not mods:
         return None, None
     Item = mods['Item']
-    terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
+    if is_series:
+        cleaned_target = _clean_search_term(target_title)
+        terms_to_try = [cleaned_target] if cleaned_target else []
+    else:
+        terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
     if not terms_to_try:
         cleaned = _clean_search_term(target_title)
         if cleaned:
@@ -2363,31 +2642,137 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
         else:
             return None, None
     xbmc.log("Bridge Multi [Balandro]: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
+    canal = None
+    with _engine_lock:
+        try:
+            _switch_engine_environment('balandro')
+            canal = __import__('channels.' + channel_id, fromlist=[''])
+            try:
+                if hasattr(canal, 'canonical') and isinstance(canal.canonical, dict):
+                    canal.canonical['global_search_active'] = True
+            except:
+                pass
+            if hasattr(canal, 'platformtools') and getattr(canal, 'platformtools', None):
+                try:
+                    canal.platformtools.dialog_yesno = lambda *args, **kwargs: True
+                    canal.platformtools.dialog_ok = lambda *args, **kwargs: None
+                    canal.platformtools.dialog_select = lambda *args, **kwargs: -1
+                    canal.platformtools.dialog_multiselect = lambda *args, **kwargs: []
+                    canal.platformtools.dialog_notification = lambda *args, **kwargs: None
+                except:
+                    pass
+            if hasattr(canal, 'tmdb') and getattr(canal, 'tmdb', None):
+                try:
+                    canal.tmdb.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    canal.tmdb.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    canal.tmdb.set_infoLabels_item = lambda *args, **kwargs: 0
+                except:
+                    pass
+            if hasattr(canal, 'httptools') and getattr(canal, 'httptools', None):
+                try:
+                    _ht = canal.httptools
+                    if getattr(getattr(_ht, 'downloadpage_proxy', None), '_bridge_fast', False) is not True:
+                        def _fast_dp_proxy(c_name, url, *args, **kwargs):
+                            kwargs['timeout'] = min(5, kwargs.get('timeout', 5) or 5)
+                            try:
+                                r = _ht.downloadpage(url, *args, **kwargs)
+                                if r and getattr(r, 'sucess', False) and len(getattr(r, 'data', '') or '') > 200:
+                                    return r
+                            except: pass
+                            return type('Resp', (), {'sucess': False, 'code': 500, 'data': '', 'headers': {}})()
+                        _fast_dp_proxy._bridge_fast = True
+                        _ht.downloadpage_proxy = _fast_dp_proxy
+                except:
+                    pass
+            # Parche en runtime (solo memoria, sin tocar disco externo):
+            # pelispanda.episodios() usa un regex con multiples ".*?" + DOTALL
+            # sobre el JSON completo de la serie (~58KB) que provoca backtracking
+            # catastrofico (100-150s reteniendo el GIL = freeze total de Kodi).
+            # Se sustituye la extraccion por json.loads (0.003s) replicando su
+            # logica posterior (paginacion, titulos, idiomas). Si el JSON falla,
+            # se delega a la funcion original del canal.
+            if str(channel_id).lower() == 'pelispanda' and hasattr(canal, 'episodios'):
+                try:
+                    if getattr(canal.episodios, '_bridge_json_safe', False) is not True:
+                        _orig_panda_episodios = canal.episodios
+                        def _pelispanda_episodios_safe(item, *args, **kwargs):
+                            try:
+                                import json as _pjs
+                                import re as _pre
+                                if not getattr(item, 'page', None): item.page = 0
+                                if not getattr(item, 'perpage', None): item.perpage = 50
+                                _data = canal.do_downloadpage(item.url)
+                                _data = _pre.sub(r'\n|\r|\t|\s{2}|&nbsp;', '', _data)
+                                _matches = []
+                                _obj = _pjs.loads(_data)
+                                _dls = _obj.get('downloads', []) if isinstance(_obj, dict) else []
+                                _season = str(getattr(item, 'contentSeason', ''))
+                                for _d in (_dls or []):
+                                    if not isinstance(_d, dict): continue
+                                    if str(_d.get('season', '')) != _season: continue
+                                    _matches.append((str(_d.get('episode', '')), str(_d.get('quality', '')),
+                                                     str(_d.get('size', '')), str(_d.get('download_link', '')),
+                                                     str(_d.get('language', ''))))
+                            except Exception:
+                                try:
+                                    return _orig_panda_episodios(item, *args, **kwargs)
+                                except Exception as _e2:
+                                    xbmc.log("Bridge Multi [Balandro]: pelispanda episodios fallback error: %s" % _e2, xbmc.LOGINFO)
+                                    return []
+                            try:
+                                if item.page == 0 and item.perpage == 50:
+                                    item.perpage = len(_matches) or 50
+                                _itemlist = []
+                                for _epis, _qlty, _size, _link, _lang in _matches[item.page * item.perpage:]:
+                                    _lang = _lang.replace('\\/', '/')
+                                    if 'Latino/Ingles' in _lang: _lang = 'Lat'
+                                    elif 'Castellano/Ingles' in _lang: _lang = 'Esp'
+                                    elif 'Latino/Japones' in _lang: _lang = 'Vos'
+                                    elif 'Castellano' in _lang: _lang = 'Esp'
+                                    elif 'Latino' in _lang: _lang = 'Lat'
+                                    elif 'Subtitulado' in _lang: _lang = 'Vose'
+                                    elif 'Version Original' in _lang: _lang = 'VO'
+                                    _link = _link.replace('\\/', '/')
+                                    _titulo = str(item.contentSeason) + 'x' + str(_epis) + ' ' + str(getattr(item, 'contentSerieName', '')).replace('&#038;', '&').replace('&#8217;', "'")
+                                    try:
+                                        _itemlist.append(item.clone(action='findvideos', url=_link, title=_titulo, language=_lang, quality=_qlty, size=_size,
+                                                                    contentType='episode', contentSeason=item.contentSeason, contentEpisodeNumber=_epis))
+                                    except Exception:
+                                        break
+                                    if len(_itemlist) >= item.perpage:
+                                        break
+                                return _itemlist
+                            except Exception as _e3:
+                                xbmc.log("Bridge Multi [Balandro]: pelispanda episodios safe error: %s" % _e3, xbmc.LOGINFO)
+                                return []
+                        _pelispanda_episodios_safe._bridge_json_safe = True
+                        canal.episodios = _pelispanda_episodios_safe
+                except:
+                    pass
+            # Canales solo-peliculas (sin temporadas ni episodios) no pueden
+            # resolver episodios de series: se omiten con log explicito en vez
+            # de buscar para nada (ej. repelishd).
+            if is_series and not hasattr(canal, 'temporadas') and not hasattr(canal, 'episodios'):
+                xbmc.log("Bridge Multi [Balandro]: %s sin soporte para series (solo peliculas), omitido" % channel_id, xbmc.LOGINFO)
+                return None, None
+        except Exception as e:
+            xbmc.log("Bridge Multi [Balandro]: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            return None, None
+
+    search_actions = []
+    if not base_item and hasattr(canal, 'mainlist'):
+        try:
+            with silenced_dialogs():
+                mainlist_items = canal.mainlist(Item(channel=channel_id))
+                search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
+        except Exception as e:
+            xbmc.log("Bridge Multi [Balandro]: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            search_actions = []
+
     for cur_term in terms_to_try:
         if xbmc.Monitor().abortRequested():
             break
         results = []
-        canal = None
-        search_actions = []
-        with _engine_lock:
-            try:
-                _switch_engine_environment('balandro')
-                canal = __import__('channels.' + channel_id, fromlist=[''])
-                try:
-                    if hasattr(canal, 'canonical') and isinstance(canal.canonical, dict):
-                        canal.canonical['global_search_active'] = True
-                except:
-                    pass
-                try:
-                    with silenced_dialogs():
-                        mainlist_items = canal.mainlist(Item(channel=channel_id)) if hasattr(canal, 'mainlist') else []
-                        search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
-                except Exception as e:
-                    xbmc.log("Bridge Multi [Balandro]: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
-                    search_actions = []
-            except Exception as e:
-                xbmc.log("Bridge Multi [Balandro]: %s import error term '%s': %s" % (channel_id, cur_term, str(e)), xbmc.LOGINFO)
-                continue
         with silenced_dialogs():
             if search_actions:
                 for s_act in search_actions:
@@ -2477,9 +2862,9 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
             title_check = getattr(it, 'title', '') or getattr(it, 'contentTitle', '') or getattr(it, 'contentSerieName', '')
             if not title_check:
                 continue
-            # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad)
-            _low_title = _safe_str(title_check).lower()
-            if 'pagina siguiente' in _low_title or ('siguiente' in _low_title and '>>' in _low_title) or _low_title.strip().startswith('>>'):
+            # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad, PelisPedia, HDFull)
+            _low_title = _safe_str(title_check).lower().strip()
+            if any(p in _low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or _low_title.startswith('>>') or _low_title.startswith('<<') or _low_title.endswith('>>') or _low_title.endswith('<<'):
                 xbmc.log(f"Bridge Multi: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
                 continue
             score = score_match(title_check, target_year, all_names, target_tmdb=target_tmdb, item=it, target_imdb=target_imdb, is_series=is_series)
@@ -2495,7 +2880,12 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
         candidates.sort(key=lambda c: c[0], reverse=True)
 
         for score, it, title_check in candidates:
-            xbmc.log("Bridge Multi [Balandro]: %s MATCH (score=%d) '%s' para term '%s'" % (channel_id, score, title_check, cur_term), xbmc.LOGINFO)
+            try:
+                _w_weak = (not is_series and not _get_item_tmdb(it) and not _get_item_imdb(it)
+                           and not _get_item_year(it, title_check))
+            except Exception:
+                _w_weak = False
+            xbmc.log("Bridge Multi [Balandro]: %s MATCH (score=%d) '%s' para term '%s'%s" % (channel_id, score, title_check, cur_term, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
             if is_series:
                 _target_s = int(s_num or 1)
                 _target_e = int(e_num or 1)
@@ -2578,6 +2968,10 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                     if not hasattr(sea_item, 'infoLabels') or not isinstance(sea_item.infoLabels, dict):
                                         sea_item.infoLabels = {}
                                     sea_item.infoLabels['tmdb_id'] = str(target_tmdb)
+                                    sea_item.infoLabels['tvdb_id'] = str(target_tmdb)
+                                    sea_item.tvdb_id = str(target_tmdb)
+                                sea_item.perpage = 500
+                                sea_item.page = 0
                                 with silenced_dialogs():
                                     ep_list = canal.episodios(sea_item)
                                 _rep_ep, _rep_lk = _try_ep_list(ep_list)
@@ -2598,6 +2992,10 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                             if not hasattr(_it_fallback, 'infoLabels') or not isinstance(_it_fallback.infoLabels, dict):
                                 _it_fallback.infoLabels = {}
                             _it_fallback.infoLabels['tmdb_id'] = str(target_tmdb)
+                            _it_fallback.infoLabels['tvdb_id'] = str(target_tmdb)
+                            _it_fallback.tvdb_id = str(target_tmdb)
+                        _it_fallback.perpage = 500
+                        _it_fallback.page = 0
                         with silenced_dialogs():
                             ep_list = canal.episodios(_it_fallback)
                         xbmc.log('Bridge Multi [Balandro]: %s episodios fallback(s=%s) -> %d items' % (channel_id, _target_s, len(ep_list) if ep_list else 0), xbmc.LOGINFO)
@@ -2609,16 +3007,23 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
 
             elif hasattr(canal, 'findvideos'):
                 try:
-                    links = canal.findvideos(it)
+                    with silenced_dialogs():
+                        links = canal.findvideos(it)
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                         if valid:
                             for l in valid:
                                 l.channel = channel_id
                                 l.bridge_engine = 'balandro'
+                                try:
+                                    l.bridge_score = int(score)
+                                    l.bridge_weak = bool(_w_weak)
+                                except: pass
                             return it, valid
                 except Exception as e:
                     xbmc.log("Bridge Multi [Balandro]: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+        if is_series and candidates:
+            break
     return None, None
 
 def _search_on_player(player_file, engine, is_series, target_title, target_year, s_num, e_num, all_names, alt_terms=None, target_tmdb=None, target_imdb=None):
@@ -2668,7 +3073,7 @@ def _search_on_player(player_file, engine, is_series, target_title, target_year,
 # ---------------------------------------------------------
 # Master Parallel Search Execution
 # ---------------------------------------------------------
-def run_parallel_search(engine='alfa'):
+def _run_parallel_search_impl(engine='alfa'):
     p_title = title or get_param('title') or get_param('title_es') or get_param('title_lat') or get_param('title_orig') or get_param('title_en') or ''
     p_showname = showname or get_param('showname') or ''
     p_year = year or get_param('year') or ''
@@ -2682,12 +3087,19 @@ def run_parallel_search(engine='alfa'):
     if is_series and engine == 'alfa':
         xbmc.log("Bridge Multi: Alfa solo soporta películas. Cambiando motor a Balandro para series.", xbmc.LOGINFO)
         engine = 'balandro'
-    target_title = (p_showname if is_series else p_title) or ''
-    target_year = p_showyear if is_series else p_year
+
+    if is_series:
+        target_title = (p_showname or p_title or '').strip()
+        target_year = p_showyear or p_year
+        all_names = [t for t in [target_title, p_showname] if t]
+        alt_terms = [t for t in all_names if t != target_title]
+    else:
+        target_title = (p_title or '').strip()
+        target_year = p_year
+        all_names = [t for t in [target_title, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig')] if t]
+        alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en')] if t and t != target_title]
     target_tmdb = p_tmdb
     target_imdb = p_imdb
-    all_names = [t for t in [target_title, p_title, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig'), p_showname] if t]
-    alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en'), p_showname, p_title] if t and t != target_title]
 
     enabled_players = []
     prefix = 'Alfa-' if engine == 'alfa' else 'Balandro-'
@@ -2709,21 +3121,20 @@ def run_parallel_search(engine='alfa'):
 
     if not enabled_players: return [], None
 
-    timeout_secs = max(10, _get_int_setting('search_timeout', 40))
-    # Series requieren navegar temporada->episodio->links: toman el doble de tiempo que pelicula
+    timeout_secs = min(18, max(8, _get_int_setting('search_timeout', 14)))
     if is_series:
-        timeout_secs = timeout_secs * 2
-        xbmc.log('Bridge Multi: modo serie, timeout extendido a %ds' % timeout_secs, xbmc.LOGINFO)
-    max_search_workers = max(1, _get_int_setting('search_threads_max', 25))
+        timeout_secs = min(20, timeout_secs + 2)
+        xbmc.log('Bridge Multi: modo serie, timeout ajustado a %ds' % timeout_secs, xbmc.LOGINFO)
+    max_search_workers = min(6, max(1, _get_int_setting('search_threads_max', 6)))
 
     total_channels = len(enabled_players)
     engine_name = 'Alfa' if engine == 'alfa' else 'Balandro'
     p_dialog = xbmcgui.DialogProgress()
     p_dialog.create('Bridge Multi (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
-    # Complementar titulos solo si faltan variantes (cache + 2 peticiones paralelas 3s) - ya con dialogo visible
+    # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
         _distinct = len(set([_safe_str(x).lower().strip() for x in all_names if x]))
-        if target_tmdb and _distinct < 3:
+        if target_tmdb and not is_series and _distinct < 3:
             p_dialog.update(5, 'Obteniendo titulos TMDB...')
             fetched = _fetch_tmdb_titles(target_tmdb, is_series)
             xbmc.log(f"Bridge Multi: fetched TMDB titles for {target_tmdb}: {fetched}", xbmc.LOGINFO)
@@ -2781,7 +3192,7 @@ def run_parallel_search(engine='alfa'):
 
     start_time = time.time()
     thread_start_times = {}
-    channel_timeout = timeout_secs
+    channel_timeout = 10 if is_series else 8
     i = 0
     while not xbmc.Monitor().abortRequested():
         now = time.time()
@@ -2816,9 +3227,16 @@ def run_parallel_search(engine='alfa'):
         p_dialog.update(pct, '%s (%d/%d canales)\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, lines[0], lines[1], active_str))
 
         elapsed = now - start_time
-        if completed >= total_channels or elapsed > timeout_secs: break
+        if completed >= total_channels or elapsed > timeout_secs:
+            break
+
+        # Sin salida temprana por nº de enlaces: se espera a TODOS los canales
+        # (o al timeout global) para no descartar a los mas lentos. El bucle
+        # ya termina solo cuando completan todos (completed >= total).
+
         if p_dialog.iscanceled():
-            if elapsed > 5 or len(results_dict) > 0: break
+            if elapsed > 4 or len(results_dict) > 0:
+                break
         time.sleep(0.1)
 
     try:
@@ -2826,9 +3244,17 @@ def run_parallel_search(engine='alfa'):
     except: pass
     # Esperar animacion de cierre del Progress antes de procesar resultados (evita hang)
     try:
-        xbmc.sleep(300)
+        xbmc.sleep(200)
     except:
-        time.sleep(0.3)
+        time.sleep(0.2)
+
+    # Si tras el bucle no hay enlaces pero hay hilos vivos, esperar hasta 2s de gracia revisando results_dict
+    if not results_dict:
+        _grace_start = time.time()
+        while time.time() - _grace_start < 2.0:
+            if results_dict or xbmc.Monitor().abortRequested():
+                break
+            time.sleep(0.1)
 
     all_links = []
     matched_item = None
@@ -2840,6 +3266,16 @@ def run_parallel_search(engine='alfa'):
 
     all_links = _filter_and_sort_links(all_links)
     return all_links, matched_item
+
+def run_parallel_search(engine='alfa'):
+    global _search_in_progress
+    _search_in_progress = True
+    _apply_silence_all()
+    try:
+        return _run_parallel_search_impl(engine=engine)
+    finally:
+        _search_in_progress = False
+        _restore_silence_all()
 
 # ---------------------------------------------------------
 # Serialization and UI List Directory Display
@@ -2861,6 +3297,19 @@ def _deserialize_item(d, engine='alfa'):
     if not mods: return None
     Item = mods['Item']
     InfoLabels = mods['InfoLabels']
+    it = Item()
+    it.__dict__.update(d)
+    for k, v in d.items():
+        try: setattr(it, k, v)
+        except: pass
+    if 'infoLabels' in it.__dict__ and not isinstance(it.__dict__['infoLabels'], InfoLabels):
+        it.__dict__['infoLabels'] = InfoLabels(it.__dict__['infoLabels'])
+    return it
+
+def _deserialize_item_fast(Item, InfoLabels, d):
+    """Igual que _deserialize_item pero con las clases ya resueltas: evita
+    recargar los modulos del motor una vez por enlace al pintar la lista."""
+    if not d or not Item or not InfoLabels: return None
     it = Item()
     it.__dict__.update(d)
     for k, v in d.items():
@@ -2968,7 +3417,7 @@ def sync_tmdbhelper_playerstring(meta=None):
     except Exception as ex:
         xbmc.log(f"Bridge Multi: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
 
-def set_listitem_info(listitem, info=None, meta=None):
+def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
     if info is None: info = {}
     if meta is None: meta = {}
 
@@ -3018,12 +3467,13 @@ def set_listitem_info(listitem, info=None, meta=None):
         listitem.setProperty('script.trakt.ids', json.dumps(trakt_payload))
 
     art_dict = {}
-    if poster_val:
-        art_dict['poster'] = poster_val
-        art_dict['thumb'] = poster_val
-        art_dict['icon'] = poster_val
-    if fanart_val:
-        art_dict['fanart'] = fanart_val
+    if not skip_art:
+        if poster_val:
+            art_dict['poster'] = poster_val
+            art_dict['thumb'] = poster_val
+            art_dict['icon'] = poster_val
+        if fanart_val:
+            art_dict['fanart'] = fanart_val
     if art_dict:
         try: listitem.setArt(art_dict)
         except: pass
@@ -3257,8 +3707,15 @@ def show_links_as_directory():
         try:
             with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f: cache = json.load(f)
             engine = cache.get('engine', 'alfa')
-            links = [_deserialize_item(lnk, engine) for lnk in cache.get('links', [])]
-            matched_item = _deserialize_item(cache.get('item'), engine)
+            # Clases resueltas una sola vez (no una por enlace)
+            _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+            if _d_mods:
+                _d_Item, _d_Info = _d_mods['Item'], _d_mods['InfoLabels']
+                links = [_deserialize_item_fast(_d_Item, _d_Info, lnk) for lnk in cache.get('links', [])]
+                matched_item = _deserialize_item_fast(_d_Item, _d_Info, cache.get('item'))
+            else:
+                links = [_deserialize_item(lnk, engine) for lnk in cache.get('links', [])]
+                matched_item = _deserialize_item(cache.get('item'), engine)
             meta = cache.get('meta', {})
         except: pass
 
@@ -3275,6 +3732,9 @@ def show_links_as_directory():
 
     # Etiqueta de estado de verificacion (solo informativa, no es boton clicable)
     verified_only = meta.get('verified_only', False)
+    # Se acumula todo y se envia a Kodi en una sola llamada (mucho mas rapido
+    # con muchos enlaces que un addDirectoryItem por enlace).
+    _dir_listing = []
     if verified_only:
         v_label = '[B][COLOR lime]>> [OK] [ENLACES VERIFICADOS Y DISPONIBLES][/COLOR][/B]'
         v_li = xbmcgui.ListItem(label=v_label)
@@ -3289,7 +3749,7 @@ def show_links_as_directory():
         except Exception: pass
         v_li.setProperty('title', v_label)
         v_li.setProperty('IsPlayable', 'false')
-        xbmcplugin.addDirectoryItem(handle, '', v_li, False)
+        _dir_listing = [('', v_li, False)]
 
     media_key_main = _get_media_key(meta, matched_item)
     is_s = bool(meta.get('season') and meta.get('episode'))
@@ -3315,8 +3775,11 @@ def show_links_as_directory():
             lang = _format_language(lnk)
             qual = _format_quality(lnk)
             ch = _format_channel(lnk)
+            # Marca de confianza: match solo por titulo, sin anio ni IDs, puede
+            # ser un homonimo de otro anio (ej. Buddy 1997 vs Buddy 2026).
+            _weak_str = ' [COLOR orange][sin confirmar][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
 
-            lbl = '[B][COLOR deepskyblue]%s[/COLOR][/B] | [COLOR lime]%s[/COLOR] | [COLOR gold]%s[/COLOR] | [COLOR grey](%s)[/COLOR]%s' % (srv, lang, qual, ch, bm_str)
+            lbl = '[B][COLOR deepskyblue]%s[/COLOR][/B] | [COLOR lime]%s[/COLOR] | [COLOR gold]%s[/COLOR] | [COLOR grey](%s)[/COLOR]%s%s' % (srv, lang, qual, ch, _weak_str, bm_str)
             play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s' % (idx, engine)
             li = xbmcgui.ListItem(label=lbl)
             li.setPath(play_url)
@@ -3339,23 +3802,16 @@ def show_links_as_directory():
             if meta.get('tagline'):
                 info['tagline'] = meta['tagline']
             try:
-                set_listitem_info(li, info, meta)
+                # skip_art=True: el arte ya se fijo arriba con setArt (evita
+                # fijarlo dos veces por enlace). El titulo ya lo fija
+                # set_listitem_info via VideoInfoTag, no se repite abajo.
+                set_listitem_info(li, info, meta, skip_art=True)
             except Exception as e:
                 xbmc.log(f"Bridge Multi: set_listitem_info error idx {idx}: {e}", xbmc.LOGINFO)
 
             # Reforzar de forma explícita e inequívoca el título y etiqueta del enlace
             li.setLabel(lbl)
             li.setLabel2(ch)
-            try:
-                vt = li.getVideoInfoTag()
-                if vt:
-                    vt.setTitle(lbl)
-            except Exception:
-                pass
-            try:
-                li.setInfo('video', {'title': lbl})
-            except Exception:
-                pass
             li.setProperty('title', lbl)
 
             # Menu contextual (boton C o clic largo): acciones sin ocupar espacio en la lista
@@ -3373,7 +3829,7 @@ def show_links_as_directory():
             li.addContextMenuItems(_ctx_items)
 
             li.setProperty('IsPlayable', 'false')
-            xbmcplugin.addDirectoryItem(handle, play_url, li, False)
+            _dir_listing.append((play_url, li, False))
         except Exception as e:
             xbmc.log(f"Bridge Multi: show_links skip idx {idx} error: {e}", xbmc.LOGINFO)
             import traceback
@@ -3381,6 +3837,13 @@ def show_links_as_directory():
             continue
 
 
+    if _dir_listing:
+        try:
+            xbmcplugin.addDirectoryItems(handle, _dir_listing)
+        except Exception:
+            for _u, _li, _f in _dir_listing:
+                try: xbmcplugin.addDirectoryItem(handle, _u, _li, _f)
+                except: pass
     xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
     xbmcplugin.setContent(handle, 'movies')
     _apply_saved_view_mode()
@@ -3717,10 +4180,15 @@ def _autoplay_link(link, handle, engine, matched_item=None):
 
     # ── Torrent → cliente configurado en Balandro (con enriquecimiento TMDb) ─
     if _is_torrent_link(link):
-        torrent_url = _safe_str(getattr(link, 'url', '') or '')
         _absorb = xbmcgui.ListItem()
+        torrent_url, _fail_detail = _resolve_torrent_url(link, engine=engine)
+        _tl = (torrent_url or '').strip()
+        if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
+            xbmc.log('Bridge Multi autoplay: torrent no reproducible (%s)' % (_fail_detail or 'sin URL'), xbmc.LOGINFO)
+            xbmcplugin.setResolvedUrl(handle, False, _absorb)
+            return False
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
-        return _play_torrent_link(torrent_url, matched_item=matched_item)
+        return _play_torrent_link(_tl, matched_item=matched_item)
 
 
     server_name = (_safe_str(getattr(link, 'server', '') or '').strip().capitalize()
@@ -3850,9 +4318,15 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
 
     # 1. Enlace Torrent → cliente configurado en Balandro (con enriquecimiento TMDb)
     if _is_torrent_link(link):
-        torrent_url = _safe_str(getattr(link, 'url', '') or '')
-        _play_torrent_link(torrent_url, matched_item=matched_item, meta=meta)
-        return True
+        _ch_dbg = _safe_str(getattr(link, 'channel', '') or '')
+        torrent_url, _fail_detail = _resolve_torrent_url(link, engine=engine)
+        _tl = (torrent_url or '').strip()
+        if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
+            msg = _fail_detail or 'Enlace torrent sin URL reproducible'
+            xbmc.log("Bridge Multi: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
+            xbmcgui.Dialog().notification('Bridge Multi', msg, '', 4000)
+            return False
+        return _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
 
     # 2. Preparar enlace (resolver canal.play y data_url)
     prepared = _prepare_playable_link(link, engine=engine)
@@ -4188,6 +4662,134 @@ def check_and_run_migration():
                 if os.path.exists(new_path): os.remove(new_path)
                 os.rename(fpath, new_path)
         except Exception: pass
+
+def _player_engine_channel(player_data, fname):
+    """Extrae (engine, channel) de un player de TMDbHelper.
+    Decodifica el item base64 de play_movie/play_episode; si falla, deriva
+    engine y canal del nombre del archivo."""
+    refs = []
+    for key in ('play_movie', 'play_episode'):
+        val = player_data.get(key)
+        urls = []
+        if isinstance(val, list):
+            urls = [el for el in val if isinstance(el, str) and el.startswith('plugin://')]
+        elif isinstance(val, str) and val.startswith('plugin://'):
+            urls = [val]
+        for url in urls:
+            engine = ''
+            if 'plugin.video.balandro/' in url:
+                engine = 'balandro'
+            elif 'plugin.video.alfa/' in url:
+                engine = 'alfa'
+            else:
+                continue
+            marker = 'plugin.video.%s/?' % engine
+            channel = ''
+            if marker in url:
+                try:
+                    b64 = url.split(marker, 1)[1].split('&', 1)[0]
+                    b64 = uparse.unquote(b64)
+                    b64 += '=' * (-len(b64) % 4)
+                    channel = str(json.loads(base64.b64decode(b64).decode('utf-8')).get('channel', '') or '').strip().lower()
+                except Exception:
+                    channel = ''
+                if not channel:
+                    # Formato alternativo ?channel=xxx&... (ej. Balandro-Gnulatv)
+                    try:
+                        m = re.search(r'[?&]channel=([^&]+)', url)
+                        if m:
+                            channel = uparse.unquote(m.group(1)).strip().lower()
+                    except Exception:
+                        pass
+            if channel:
+                refs.append((engine, channel))
+    if not refs:
+        m = re.match(r'^(Alfa|Balandro)[\-_]?(.+?)(-(Series|Movies?))?\.json$', fname or '', flags=re.IGNORECASE)
+        if m:
+            refs.append((m.group(1).lower(), m.group(2).strip().lower()))
+    return refs
+
+def _channel_display_name(base, channel):
+    """Nombre visible del canal (ej. 'Gnula'). Lee su descriptor si existe,
+    si no usa el id tal cual."""
+    try:
+        with open(os.path.join(base, 'channels', channel + '.json'), 'r', encoding='utf-8') as f:
+            name = json.load(f).get('name', '')
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    return channel
+
+def check_orphan_players():
+    """Arranque de Kodi: muestra una ventana SOLO si algun player apunta a un
+    canal que no existe en Balandro/Alfa. Si todos existen, no muestra nada."""
+    try:
+        if not os.path.isdir(TMDB_PLAYERS_PATH):
+            return
+        missing = []
+        for fname in sorted(os.listdir(TMDB_PLAYERS_PATH)):
+            if not fname.endswith('.json') or fname.startswith('(1)'):
+                continue
+            fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    p_data = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(p_data, dict):
+                continue
+            if str(p_data.get('disabled', '')).lower() in ('true', '1') or p_data.get('disabled') is True:
+                continue
+            for engine, channel in _player_engine_channel(p_data, fname):
+                if not engine or not channel:
+                    continue
+                base = balandro_path if engine == 'balandro' else alfa_path
+                try:
+                    avail = [x.lower() for x in os.listdir(os.path.join(base, 'channels'))]
+                except Exception:
+                    avail = []
+                exists = (channel + '.py').lower() in avail
+                if not exists and engine == 'alfa' and channel in ('planb', 'plan_b'):
+                    # PlanB de Alfa vive en lib/ (no en channels/) y Bridge lo
+                    # resuelve de forma especial (_search_planb).
+                    try:
+                        libfiles = [x.lower() for x in os.listdir(os.path.join(base, 'lib'))]
+                    except Exception:
+                        libfiles = []
+                    exists = any(x.startswith('planb') and x.endswith('.py') for x in libfiles)
+                if not exists:
+                    missing.append((fname, channel, engine))
+        if not missing:
+            xbmc.log('Bridge Multi: todos los players tienen su canal en Balandro/Alfa', xbmc.LOGINFO)
+            return
+        xbmc.log('Bridge Multi: players huerfanos: %s' % ['%s (canal "%s" no existe en %s)' % t for t in missing], xbmc.LOGWARNING)
+        try:
+            mon = xbmc.Monitor()
+            if not mon.waitForAbort(8):
+                # Ventana normal: Cerrar o ir al gestor. Si los huerfanos son de
+                # un solo motor, el boton lleva directo a su lista de players.
+                # Se muestra el nombre del canal, no el archivo del player.
+                msg_lines = []
+                for fname, channel, engine in missing[:12]:
+                    base = balandro_path if engine == 'balandro' else alfa_path
+                    msg_lines.append('%s: no existe en %s' % (_channel_display_name(base, channel), engine))
+                if len(missing) > 12:
+                    msg_lines.append('... y %d mas' % (len(missing) - 12))
+                engines = sorted(set(e for _, _, e in missing))
+                if len(engines) == 1:
+                    url = 'plugin://plugin.video.bridge.multi/?view=list_players&engine=%s' % engines[0]
+                else:
+                    url = 'plugin://plugin.video.bridge.multi/?view=home'
+                go = xbmcgui.Dialog().yesno('Bridge Multi: canal no existente',
+                                            'Estos players apuntan a canales que no existen:\n%s' % '\n'.join(msg_lines),
+                                            nolabel='Cerrar', yeslabel='Ir al gestor')
+                if go:
+                    xbmc.executebuiltin('ActivateWindow(videos,"%s",return)' % url)
+        except Exception as e:
+            xbmc.log('Bridge Multi: no se pudo mostrar aviso de huerfanos: %s' % e, xbmc.LOGINFO)
+    except Exception as e:
+        xbmc.log('Bridge Multi: check_orphan_players error: %s' % e, xbmc.LOGWARNING)
 
 # ---------------------------------------------------------
 # Player Management Menus
@@ -5280,9 +5882,16 @@ def main():
         if os.path.exists(SEARCH_CACHE_FILE):
             try:
                 with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f: cache = json.load(f)
-                eng = cache.get('engine', eng)
-                links = [_deserialize_item(lnk, eng) for lnk in cache.get('links', [])]
-                matched_item = _deserialize_item(cache.get('item'), engine=eng)
+                engine = cache.get('engine', 'alfa')
+                # Clases resueltas una sola vez (no una por enlace)
+                _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+                if _d_mods:
+                    _d_Item, _d_Info = _d_mods['Item'], _d_mods['InfoLabels']
+                    links = [_deserialize_item_fast(_d_Item, _d_Info, lnk) for lnk in cache.get('links', [])]
+                    matched_item = _deserialize_item_fast(_d_Item, _d_Info, cache.get('item'))
+                else:
+                    links = [_deserialize_item(lnk, engine) for lnk in cache.get('links', [])]
+                    matched_item = _deserialize_item(cache.get('item'), engine)
                 meta = cache.get('meta', {})
             except: pass
 

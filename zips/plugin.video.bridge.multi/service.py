@@ -8,6 +8,8 @@ def run_service():
         import default
         if hasattr(default, 'check_and_run_migration'):
             default.check_and_run_migration()
+        if hasattr(default, 'check_orphan_players'):
+            default.check_orphan_players()
     except Exception as e:
         xbmc.log("Bridge Multi Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
 
