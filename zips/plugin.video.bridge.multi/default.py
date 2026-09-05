@@ -3089,41 +3089,69 @@ def set_listitem_info(listitem, info=None, meta=None):
     try: listitem.setInfo('video', legacy_info)
     except: pass
 
-def _force_list_view():
-    """Fuerza la visualización en vista de Lista (List) independientemente del skin activo en Kodi."""
-    skin_id = ''
+VIEW_MODE_FILE = os.path.join(BRIDGE_DATA_PATH, 'saved_view_mode.json')
+
+def _get_saved_view_mode():
+    """Obtiene el ID de vista guardado por el usuario o detectado desde la base de datos de Kodi."""
+    # 1. Archivo persistente del addon
     try:
-        skin_id = str(xbmc.getSkinDir() or '').lower()
+        if os.path.exists(VIEW_MODE_FILE):
+            with open(VIEW_MODE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                vid = int(data.get('view_id', 0))
+                if 45 <= vid <= 650:
+                    return vid
     except Exception:
         pass
 
-    # Mapeo de IDs de vista Lista para skins populares de Kodi (50 es el estándar universal de Kodi)
-    skin_view_map = {
-        'skin.estuary': 50,
-        'skin.estouchy': 50,
-        'skin.confluence': 50,
-        'skin.aeon.nox.silvo': 50,
-        'skin.aeon.tajo': 50,
-        'skin.amber': 50,
-        'skin.apptv': 50,
-        'skin.bello.7': 50,
-        'skin.bello.8': 50,
-        'skin.box': 50,
-        'skin.arctic.horizon': 50,
-        'skin.arctic.horizon.2': 50,
-        'skin.arctic.fuse': 50,
-        'skin.arctic.zephyr.reloaded': 50,
-        'skin.titan': 50,
-        'skin.titan.bingie.mod': 50,
-        'skin.aura': 50,
-        'skin.auramod': 50,
-        'skin.embuary': 50,
-        'skin.phenomenal': 50,
-        'skin.ftv': 50,
-        'skin.mimic.lr': 50,
-        'skin.pellucid': 50
-    }
-    view_id = skin_view_map.get(skin_id, 50)
+    # 2. Base de datos ViewModes de Kodi (recuperar la última vista que usó el usuario)
+    try:
+        import sqlite3
+        db_dir = xbmcvfs.translatePath('special://userdata/Database/')
+        if os.path.exists(db_dir):
+            db_files = sorted([f for f in os.listdir(db_dir) if f.startswith('ViewModes') and f.endswith('.db')], reverse=True)
+            if db_files:
+                db_path = os.path.join(db_dir, db_files[0])
+                conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=1.0)
+                cur = conn.cursor()
+                cur.execute("SELECT viewMode FROM view WHERE path LIKE 'plugin://plugin.video.bridge.multi/?view=list_links%' ORDER BY idView DESC LIMIT 10")
+                rows = cur.fetchall()
+                conn.close()
+                for r in rows:
+                    if r and r[0]:
+                        vid = r[0] & 0xFFFF
+                        if 45 <= vid <= 650 and vid != 50:
+                            _save_view_mode(vid)
+                            return vid
+                if rows and rows[0] and rows[0][0]:
+                    vid = rows[0][0] & 0xFFFF
+                    if 45 <= vid <= 650:
+                        return vid
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: _get_saved_view_mode db error: {e}", xbmc.LOGDEBUG)
+
+    # 3. Default según el skin activo si nada se ha guardado
+    skin_id = ''
+    try: skin_id = str(xbmc.getSkinDir() or '').lower()
+    except: pass
+    return 50
+
+def _save_view_mode(view_id):
+    """Guarda la vista elegida por el usuario para todas las futuras búsquedas."""
+    try:
+        if not os.path.exists(BRIDGE_DATA_PATH):
+            os.makedirs(BRIDGE_DATA_PATH)
+        with open(VIEW_MODE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'view_id': int(view_id)}, f)
+        xbmc.log(f"Bridge Multi: Vista persistente guardada -> {view_id}", xbmc.LOGINFO)
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: _save_view_mode error: {e}", xbmc.LOGWARNING)
+
+def _apply_saved_view_mode():
+    """Aplica la vista guardada por el usuario en la lista de resultados."""
+    view_id = _get_saved_view_mode()
+    if not view_id:
+        return
 
     try:
         xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
@@ -3131,7 +3159,6 @@ def _force_list_view():
         pass
 
     def _apply_delayed():
-        # Re-aplicar tras breves momentos para asegurar que Kodi haya montado el contenedor
         for delay in (50, 150, 300, 600, 1000):
             xbmc.sleep(delay)
             try:
@@ -3141,6 +3168,60 @@ def _force_list_view():
 
     try:
         t = threading.Thread(target=_apply_delayed)
+        t.daemon = True
+        t.start()
+    except Exception:
+        pass
+
+def _start_view_mode_monitor():
+    """Hilo en segundo plano que detecta en tiempo real si el usuario cambia de vista para recordarla siempre."""
+    def _monitor():
+        # Esperar a que la ventana de enlaces cargue en pantalla
+        for _ in range(15):
+            xbmc.sleep(200)
+            if xbmc.getCondVisibility("Window.IsVisible(10025)"):
+                break
+
+        current_saved = _get_saved_view_mode()
+
+        # Monitorear activamente mientras el usuario navegue en la ventana de enlaces (hasta 3 minutos)
+        for _ in range(360):
+            xbmc.sleep(500)
+            try:
+                if not xbmc.getCondVisibility("Window.IsVisible(10025)"):
+                    break
+                folder = xbmc.getInfoLabel("Container.FolderPath")
+                if "plugin.video.bridge.multi" not in folder or "view=list_links" not in folder:
+                    break
+                focus_id = xbmcgui.Window(10025).getFocusId()
+                if 45 <= focus_id <= 650 and focus_id != current_saved:
+                    current_saved = focus_id
+                    _save_view_mode(focus_id)
+            except Exception:
+                pass
+
+        # Respaldo al salir: revisar si Kodi guardó un cambio en su base de datos ViewModes
+        try:
+            import sqlite3
+            db_dir = xbmcvfs.translatePath('special://userdata/Database/')
+            if os.path.exists(db_dir):
+                db_files = sorted([f for f in os.listdir(db_dir) if f.startswith('ViewModes') and f.endswith('.db')], reverse=True)
+                if db_files:
+                    db_path = os.path.join(db_dir, db_files[0])
+                    conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=1.0)
+                    cur = conn.cursor()
+                    cur.execute("SELECT viewMode FROM view WHERE path LIKE 'plugin://plugin.video.bridge.multi/?view=list_links%' ORDER BY idView DESC LIMIT 1")
+                    row = cur.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        vid = row[0] & 0xFFFF
+                        if 45 <= vid <= 650 and vid != current_saved:
+                            _save_view_mode(vid)
+        except Exception:
+            pass
+
+    try:
+        t = threading.Thread(target=_monitor)
         t.daemon = True
         t.start()
     except Exception:
@@ -3302,9 +3383,10 @@ def show_links_as_directory():
 
     xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
     xbmcplugin.setContent(handle, 'movies')
-    _force_list_view()
+    _apply_saved_view_mode()
     xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
-    _force_list_view()
+    _apply_saved_view_mode()
+    _start_view_mode_monitor()
 
 # ---------------------------------------------------------
 # Playback Handler (Native Delegates for Alfa & Balandro)
