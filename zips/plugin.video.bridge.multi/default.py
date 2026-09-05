@@ -2972,22 +2972,22 @@ def set_listitem_info(listitem, info=None, meta=None):
     if info is None: info = {}
     if meta is None: meta = {}
 
-    tmdb_id = str(meta.get('tmdb') or info.get('tmdb_id') or info.get('tmdb') or '')
-    imdb_id = str(meta.get('imdb') or info.get('imdb_id') or info.get('imdb') or '')
-    tvdb_id = str(meta.get('tvdb') or info.get('tvdb_id') or info.get('tvdb') or '')
-    trakt_id = str(meta.get('trakt') or info.get('trakt_id') or info.get('trakt') or '')
+    tmdb_id = str(info.get('tmdb_id') or info.get('tmdb') or meta.get('tmdb') or '')
+    imdb_id = str(info.get('imdb_id') or info.get('imdb') or meta.get('imdb') or '')
+    tvdb_id = str(info.get('tvdb_id') or info.get('tvdb') or meta.get('tvdb') or '')
+    trakt_id = str(info.get('trakt_id') or info.get('trakt') or meta.get('trakt') or '')
 
-    s_val = meta.get('season') or info.get('season')
-    e_val = meta.get('episode') or info.get('episode')
+    s_val = info.get('season') or meta.get('season')
+    e_val = info.get('episode') or meta.get('episode')
     is_series = bool(s_val and e_val)
 
-    title_val = str(meta.get('title') or info.get('title') or '')
-    showname_val = str(meta.get('showname') or info.get('tvshowtitle') or '')
-    year_val = meta.get('showyear' if is_series else 'year') or info.get('year')
-    plot_val = str(meta.get('plot') or info.get('plot') or '')
-    tagline_val = str(meta.get('tagline') or info.get('tagline') or '')
-    poster_val = str(meta.get('poster') or meta.get('thumbnail') or info.get('poster') or info.get('thumbnail') or '')
-    fanart_val = str(meta.get('fanart') or info.get('fanart') or '')
+    title_val = str(info.get('title') or meta.get('title') or '')
+    showname_val = str(info.get('tvshowtitle') or meta.get('showname') or '')
+    year_val = info.get('year') or meta.get('showyear' if is_series else 'year') or meta.get('year')
+    plot_val = str(info.get('plot') or meta.get('plot') or '')
+    tagline_val = str(info.get('tagline') or meta.get('tagline') or '')
+    poster_val = str(info.get('poster') or info.get('thumbnail') or meta.get('poster') or meta.get('thumbnail') or '')
+    fanart_val = str(info.get('fanart') or meta.get('fanart') or '')
 
     unique_dict = {}
     if tmdb_id:
@@ -3028,6 +3028,7 @@ def set_listitem_info(listitem, info=None, meta=None):
         try: listitem.setArt(art_dict)
         except: pass
 
+    media_type = info.get('mediatype') or ('episode' if is_series else 'movie')
     try:
         vt = listitem.getVideoInfoTag()
         if vt:
@@ -3037,8 +3038,8 @@ def set_listitem_info(listitem, info=None, meta=None):
             if imdb_id:
                 try: vt.setIMDbNumber(imdb_id)
                 except: pass
-            vt.setMediaType('episode' if is_series else 'movie')
-            if is_series:
+            vt.setMediaType(media_type)
+            if is_series and media_type == 'episode':
                 if showname_val: vt.setTvShowTitle(showname_val)
                 if title_val: vt.setTitle(title_val)
                 elif showname_val and s_val and e_val:
@@ -3067,10 +3068,10 @@ def set_listitem_info(listitem, info=None, meta=None):
         except: pass
     legacy_info = dict(info)
     if 'mediatype' not in legacy_info:
-        legacy_info['mediatype'] = 'episode' if is_series else 'movie'
+        legacy_info['mediatype'] = media_type
     if title_val and 'title' not in legacy_info:
         legacy_info['title'] = title_val
-    if is_series and showname_val and 'tvshowtitle' not in legacy_info:
+    if is_series and media_type == 'episode' and showname_val and 'tvshowtitle' not in legacy_info:
         legacy_info['tvshowtitle'] = showname_val
     if s_val and 'season' not in legacy_info:
         try: legacy_info['season'] = int(s_val)
@@ -3130,8 +3131,8 @@ def _force_list_view():
         pass
 
     def _apply_delayed():
-        # Re-aplicar tras un breve momento para asegurar que Kodi haya montado el contenedor
-        for delay in (150, 400):
+        # Re-aplicar tras breves momentos para asegurar que Kodi haya montado el contenedor
+        for delay in (50, 150, 300, 600, 1000):
             xbmc.sleep(delay)
             try:
                 xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
@@ -3139,7 +3140,9 @@ def _force_list_view():
                 pass
 
     try:
-        threading.Thread(target=_apply_delayed, daemon=True).start()
+        t = threading.Thread(target=_apply_delayed)
+        t.daemon = True
+        t.start()
     except Exception:
         pass
 
@@ -3196,6 +3199,14 @@ def show_links_as_directory():
         v_li = xbmcgui.ListItem(label=v_label)
         v_li.setArt({'thumb': 'OverlayUnwatched.png', 'icon': 'OverlayUnwatched.png'})
         set_listitem_info(v_li, {'title': v_label, 'plot': 'Lista filtrada con enlaces comprobados y funcionales.', 'mediatype': 'video'})
+        v_li.setLabel(v_label)
+        try:
+            vt = v_li.getVideoInfoTag()
+            if vt: vt.setTitle(v_label)
+        except Exception: pass
+        try: v_li.setInfo('video', {'title': v_label})
+        except Exception: pass
+        v_li.setProperty('title', v_label)
         v_li.setProperty('IsPlayable', 'false')
         xbmcplugin.addDirectoryItem(handle, '', v_li, False)
 
@@ -3246,15 +3257,25 @@ def show_links_as_directory():
             info = {'title': lbl, 'plot': _safe_str(plot_text)[:2000], 'mediatype': 'video'}
             if meta.get('tagline'):
                 info['tagline'] = meta['tagline']
-            if meta.get('season') and meta.get('episode'):
-                try: info['season'] = int(meta.get('season')); info['episode'] = int(meta.get('episode'))
-                except: pass
             try:
                 set_listitem_info(li, info, meta)
             except Exception as e:
                 xbmc.log(f"Bridge Multi: set_listitem_info error idx {idx}: {e}", xbmc.LOGINFO)
-                try: li.setInfo('video', {'title': lbl})
-                except: pass
+
+            # Reforzar de forma explícita e inequívoca el título y etiqueta del enlace
+            li.setLabel(lbl)
+            li.setLabel2(ch)
+            try:
+                vt = li.getVideoInfoTag()
+                if vt:
+                    vt.setTitle(lbl)
+            except Exception:
+                pass
+            try:
+                li.setInfo('video', {'title': lbl})
+            except Exception:
+                pass
+            li.setProperty('title', lbl)
 
             # Menu contextual (boton C o clic largo): acciones sin ocupar espacio en la lista
             _ctx_items = []
@@ -3280,7 +3301,8 @@ def show_links_as_directory():
 
 
     xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
-    xbmcplugin.setContent(handle, 'files')
+    xbmcplugin.setContent(handle, 'movies')
+    _force_list_view()
     xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
     _force_list_view()
 
