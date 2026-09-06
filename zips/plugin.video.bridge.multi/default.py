@@ -3789,26 +3789,10 @@ def show_links_as_directory():
     _rs_url  = 'plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s' % _other_engine
     _v_url   = 'plugin://plugin.video.bridge.multi/?action=verify_links'
 
-    # Etiqueta de estado de verificacion (solo informativa, no es boton clicable)
     verified_only = meta.get('verified_only', False)
     # Se acumula todo y se envia a Kodi en una sola llamada (mucho mas rapido
     # con muchos enlaces que un addDirectoryItem por enlace).
     _dir_listing = []
-    if verified_only:
-        v_label = '[B][COLOR lime]>> [OK] [ENLACES VERIFICADOS Y DISPONIBLES][/COLOR][/B]'
-        v_li = xbmcgui.ListItem(label=v_label)
-        v_li.setArt({'thumb': 'OverlayUnwatched.png', 'icon': 'OverlayUnwatched.png'})
-        set_listitem_info(v_li, {'title': v_label, 'plot': 'Lista filtrada con enlaces comprobados y funcionales.', 'mediatype': 'video'})
-        v_li.setLabel(v_label)
-        try:
-            vt = v_li.getVideoInfoTag()
-            if vt: vt.setTitle(v_label)
-        except Exception: pass
-        try: v_li.setInfo('video', {'title': v_label})
-        except Exception: pass
-        v_li.setProperty('title', v_label)
-        v_li.setProperty('IsPlayable', 'false')
-        _dir_listing = [('', v_li, False)]
 
     media_key_main = _get_media_key(meta, matched_item)
     is_s = bool(meta.get('season') and meta.get('episode'))
