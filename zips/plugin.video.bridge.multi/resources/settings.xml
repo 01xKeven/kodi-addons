@@ -7,6 +7,7 @@
         <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="false" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
+        <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="true" />
         
         <setting type="sep" />
         <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />

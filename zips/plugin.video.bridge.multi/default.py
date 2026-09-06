@@ -286,7 +286,9 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0):
 
         if seek_to_time > 10:
             if mon.waitForAbort(0.6): return
-            try: p.seekTime(float(seek_to_time))
+            try:
+                xbmc.log("Bridge Multi: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
+                p.seekTime(float(seek_to_time))
             except: pass
 
         last_saved_time = 0
@@ -644,6 +646,22 @@ def _restore_dialog_noblock():
     except Exception:
         pass
     return False
+
+def _ask_resume_dialog(title_text, time_str):
+    """Pregunta reanudar usando la clase Dialog REAL guardada, inmune al
+    silenciamiento global que dejan workers de verificacion aun en curso
+    (esos workers hacen que xbmcgui.Dialog siga siendo el falso silencioso,
+    que contesta Si sin mostrar nada). Mismo texto y botones que siempre."""
+    try:
+        dlg_cls = _orig_dialog_class or _KODI_ORIG_DIALOG
+        if dlg_cls is None or dlg_cls is _SilentDialog:
+            dlg_cls = xbmcgui.Dialog
+        return bool(dlg_cls().yesno(
+            'Reanudar reproducción',
+            '¿Reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR] o reproducir desde el principio?' % (title_text, time_str),
+            nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str))
+    except Exception:
+        return False
 
 @contextmanager
 def silenced_dialogs():
@@ -4075,8 +4093,9 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
 
 
 def _autoplay_with_fallback(links, handle, engine, matched_item=None,
-                            monitor_secs=60, max_attempts=999, tmdb_for_list=None,
-                            meta=None):
+                            monitor_secs=180, max_attempts=999, tmdb_for_list=None,
+                            meta=None, seek_to_time=0, resume_media_key='',
+                            resume_title=''):
     """Try non-torrent links in order until one verifiably plays.
 
     While autoplay runs, list_links is opened in the background (if tmdb_for_list
@@ -4134,6 +4153,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
     player    = xbmc.Player()
     total_att = min(len(normal_links), max_attempts)
     _cancelled_by_user = False
+    _monitor_started = False
+    _want_resume = (seek_to_time or 0) > 10
     # Tiempo por servidor leido del ajuste (antes fijo 12s ignorando ajustes)
     _resolve_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
     if _resolve_timeout < 5: _resolve_timeout = 5
@@ -4237,7 +4258,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         try: _prog.close()
         except: pass
 
-        # ── Step 3: Monitor 60 s reales de reloj ─────────────────────────────
+        # ── Step 3: Monitor 3 min reales de reloj ────────────────────────────
         # Esperar hasta 15 s a que el reproductor arranque.
         # Si el usuario para el reproductor durante este tiempo, se detecta
         # como parada manual y se muestra el diálogo de confirmación.
@@ -4289,8 +4310,36 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                     break
             continue
 
-        xbmc.log('Bridge Multi autoplay [%d/%d] %s arrancó, monitoreando 60s reales...' % (
+        xbmc.log('Bridge Multi autoplay [%d/%d] %s arrancó, monitoreando 3 min reales...' % (
             idx+1, total_att, server), xbmc.LOGINFO)
+
+        # Arrancar el monitor de bookmarks + reanudar AL INICIO de cada
+        # reproduccion (no al final): asi el salto a reanudar ocurre a los
+        # segundos y los bookmarks se guardan desde el principio.
+        # Cada intento usa el punto guardado MAS RECIENTE (releido aqui):
+        # el 1.º el que elegiste en el dialogo, los siguientes el que se
+        # guardo mientras veias el anterior. (El monitor anterior termina
+        # solo al detenerse su video.)
+        try:
+            _rk = resume_media_key or _get_media_key(meta, matched_item)
+            _rt = resume_title or str((meta or {}).get('title') or (meta or {}).get('showname') or '')
+            if _monitor_started and _want_resume:
+                _sk = 0
+                try:
+                    _is_s2 = bool((meta or {}).get('season') and (meta or {}).get('episode'))
+                    _bm2 = get_bookmark(_rk, tmdb_id=(meta or {}).get('tmdb'), is_series=_is_s2,
+                                        season=(meta or {}).get('season'), episode=(meta or {}).get('episode'))
+                    if _bm2 and float(_bm2.get('resume_time', 0)) > 10:
+                        _sk = float(_bm2.get('resume_time', 0))
+                except: pass
+            elif not _monitor_started:
+                _sk = seek_to_time
+            else:
+                _sk = 0
+            start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk)
+        except Exception as _se:
+            xbmc.log('Bridge Multi autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
+        _monitor_started = True
 
         mon_start       = time.time()
         user_declined   = False   # usuario dijo "no" en el diálogo
@@ -4382,7 +4431,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             continue   # → siguiente enlace
 
         # ── 60 s reales transcurridos con reproducción activa → ÉXITO ────────
-        xbmc.log('Bridge Multi autoplay [%d/%d] %s verificado OK tras 60s reales' % (
+        xbmc.log('Bridge Multi autoplay [%d/%d] %s verificado OK tras 3 min reales' % (
             idx+1, total_att, server), xbmc.LOGINFO)
         return True
 
@@ -4972,8 +5021,14 @@ def _channel_display_name(base, channel):
 
 def check_orphan_players():
     """Arranque de Kodi: muestra una ventana SOLO si algun player apunta a un
-    canal que no existe en Balandro/Alfa. Si todos existen, no muestra nada."""
+    canal que no existe en Balandro/Alfa. Si todos existen, no muestra nada.
+    Se puede desactivar con el ajuste startup_orphan_check."""
     try:
+        try:
+            if _bridge_addon.getSetting('startup_orphan_check') != 'true':
+                return
+        except Exception:
+            pass
         if not os.path.isdir(TMDB_PLAYERS_PATH):
             return
         missing = []
@@ -6300,20 +6355,16 @@ def main():
                         _m2 = int(_rt2 // 60); _s2 = int(_rt2 % 60); _h2 = _m2 // 60; _m2 = _m2 % 60
                         _ts2 = ('%d:%02d:%02d' % (_h2, _m2, _s2)) if _h2 else ('%d:%02d' % (_m2, _s2))
                         _tt2 = _cached_meta.get('title') or ''
-                        if xbmcgui.Dialog().yesno('Reanudar reproducción',
-                                '¿Reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR]?' % (_tt2, _ts2),
-                                nolabel='Desde el principio', yeslabel='Reanudar (%s)' % _ts2):
+                        if _ask_resume_dialog(_tt2, _ts2):
                             _seek = _rt2
                     _played = _autoplay_with_fallback(
                         _cached_links, handle,
                         engine=_cached_engine, matched_item=_cached_item,
-                        monitor_secs=60, max_attempts=999,
+                        monitor_secs=180, max_attempts=999,
                         tmdb_for_list=_cached_tmdb_v,
-                        meta=_cached_meta)
-
-                    if _played:
-                        start_playback_monitor(_mk, title_str=_cached_meta.get('title', ''),
-                                               seek_to_time=_seek)
+                        meta=_cached_meta, seek_to_time=_seek,
+                        resume_media_key=_mk,
+                        resume_title=_cached_meta.get('title', ''))
                     return
 
                 else:
@@ -6396,30 +6447,24 @@ def main():
                 hrs = mins // 60; mins = mins % 60
                 time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
                 t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                res = xbmcgui.Dialog().yesno(
-                    'Reanudar reproducción',
-                    '¿Reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR]?' % (t_title, time_str),
-                    nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str)
+                res = _ask_resume_dialog(t_title, time_str)
                 if res:
                     seek_to_time = r_time
 
             xbmc.log('Bridge Multi: autoplay con fallback, %d enlaces disponibles, motor=%s' % (
                 len(links), meta.get('engine', 'alfa')), xbmc.LOGINFO)
 
-            # Intenta TODOS los enlaces no-torrent con monitoreo de 60s cada uno
+            # Intenta TODOS los enlaces no-torrent con monitoreo de 3 min cada uno
             played = _autoplay_with_fallback(
                 links, handle,
                 engine       = meta.get('engine', 'alfa'),
                 matched_item = matched_item,
-                monitor_secs = 60,
+                monitor_secs = 180,
                 max_attempts = 999,
                 tmdb_for_list= str(tmdb_id or meta.get('tmdb') or ''),
-                meta         = meta)
-
-
-            if played:
-                start_playback_monitor(media_key, title_str=meta.get('title', ''),
-                                       seek_to_time=seek_to_time)
+                meta         = meta, seek_to_time=seek_to_time,
+                resume_media_key=media_key,
+                resume_title=meta.get('title', ''))
             return
 
         else:
@@ -6552,10 +6597,7 @@ def main():
                     hrs = mins // 60; mins = mins % 60
                     time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
                     t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                    res = xbmcgui.Dialog().yesno(
-                        'Reanudar reproducción',
-                        '¿Reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR]?' % (t_title, time_str),
-                        nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str)
+                    res = _ask_resume_dialog(t_title, time_str)
                     if res:
                         seek_to_time = r_time
 
@@ -6563,13 +6605,12 @@ def main():
                     links, handle,
                     engine       = meta.get('engine', 'alfa'),
                     matched_item = matched_item,
-                    monitor_secs = 60,
+                    monitor_secs = 180,
                     max_attempts = 999,
                     tmdb_for_list= str(tmdb_id or meta.get('tmdb') or ''),
-                    meta         = meta)
-                if played:
-                    start_playback_monitor(media_key, title_str=meta.get('title', ''),
-                                           seek_to_time=seek_to_time)
+                    meta         = meta, seek_to_time=seek_to_time,
+                    resume_media_key=media_key,
+                    resume_title=meta.get('title', ''))
             else:
                 _cur_tmdb = str(tmdb_id or get_param('tmdb') or meta.get('tmdb') or '')
                 _ts = int(time.time())
