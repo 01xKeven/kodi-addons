@@ -61,6 +61,9 @@ import xbmcvfs
 import xbmcplugin
 import xbmcgui
 
+# Guardar la clase Dialog original de Kodi de forma inmutable para diálogos interactivos seguros
+_KODI_ORIG_DIALOG = xbmcgui.Dialog
+
 if not hasattr(xbmc, 'translatePath'):
     xbmc.translatePath = xbmcvfs.translatePath
 
@@ -470,7 +473,7 @@ def _get_balandro_modules():
         return None
 
 _dialog_silence_depth = 0
-_dialog_silence_lock = threading.Lock()
+_dialog_silence_lock = threading.RLock()
 _dialog_orig_pt = {}
 _dialog_orig_tmdb = {}
 _dialog_orig_tmdb = {}
@@ -570,40 +573,77 @@ def _apply_silence_all():
 def _restore_silence_all():
     global _orig_dialog_class
     with _dialog_silence_lock:
-        if _orig_dialog_class is not None and hasattr(xbmcgui, 'Dialog'):
-            try:
-                xbmcgui.Dialog = _orig_dialog_class
-            except:
-                pass
-            _orig_dialog_class = None
+        try:
+            if hasattr(xbmcgui, 'Dialog'):
+                target_cls = _orig_dialog_class or _KODI_ORIG_DIALOG
+                if target_cls and target_cls is not _SilentDialog:
+                    xbmcgui.Dialog = target_cls
+        except Exception:
+            pass
+        _orig_dialog_class = None
 
-        for k, v in list(_dialog_orig_pt.items()):
+        try:
+            pt_items = list(_dialog_orig_pt.items())
+        except Exception:
+            pt_items = []
+        for k, v in pt_items:
             try:
                 if isinstance(k, str) and k in sys.modules:
-                    m = sys.modules[k]
-                    for fn, orig in v.items():
-                        if orig is not None: setattr(m, fn, orig)
+                    m = sys.modules.get(k)
+                    if m:
+                        for fn, orig in list(v.items()):
+                            if orig is not None:
+                                try: setattr(m, fn, orig)
+                                except Exception: pass
                 elif isinstance(k, int) and 'mod' in v:
-                    m = v['mod']
-                    for fn in ('dialog_ok', 'dialog_notification', 'dialog_yesno', 'dialog_select', 'dialog_multiselect'):
-                        orig = v.get(fn)
-                        if orig is not None: setattr(m, fn, orig)
-            except: pass
+                    m = v.get('mod')
+                    if m:
+                        for fn in ('dialog_ok', 'dialog_notification', 'dialog_yesno', 'dialog_select', 'dialog_multiselect'):
+                            orig = v.get(fn)
+                            if orig is not None:
+                                try: setattr(m, fn, orig)
+                                except Exception: pass
+            except Exception:
+                pass
         _dialog_orig_pt.clear()
 
-        for k, v in list(_dialog_orig_tmdb.items()):
+        try:
+            tmdb_items = list(_dialog_orig_tmdb.items())
+        except Exception:
+            tmdb_items = []
+        for k, v in tmdb_items:
             try:
                 m = v.get('obj')
                 if m is not None:
                     for fn in ('set_infoLabels', 'set_infoLabels_itemlist', 'set_infoLabels_item'):
                         orig = v.get(fn)
-                        if orig is not None: setattr(m, fn, orig)
-                elif k in sys.modules:
-                    m = sys.modules[k]
-                    for fn, orig in v.items():
-                        if orig is not None: setattr(m, fn, orig)
-            except: pass
+                        if orig is not None:
+                            try: setattr(m, fn, orig)
+                            except Exception: pass
+                elif isinstance(k, str) and k in sys.modules:
+                    m = sys.modules.get(k)
+                    if m:
+                        for fn, orig in list(v.items()):
+                            if orig is not None:
+                                try: setattr(m, fn, orig)
+                                except Exception: pass
+            except Exception:
+                pass
         _dialog_orig_tmdb.clear()
+
+def _restore_dialog_noblock():
+    """Restaura xbmcgui.Dialog real SIN usar cerrojos globales.
+    Seguro para llamar desde el hilo de autoplay al detectar parada: nunca
+    puede quedarse bloqueado por contienda con otros hilos. Si la referencia
+    guardada no es valida (sesion ya contaminada), no hace nada."""
+    try:
+        target_cls = _orig_dialog_class or _KODI_ORIG_DIALOG
+        if target_cls is not None and target_cls is not _SilentDialog and hasattr(xbmcgui, 'Dialog'):
+            xbmcgui.Dialog = target_cls
+            return True
+    except Exception:
+        pass
+    return False
 
 @contextmanager
 def silenced_dialogs():
@@ -615,12 +655,18 @@ def silenced_dialogs():
     try:
         yield
     finally:
+        # No llamar a _restore_silence_all() con el cerrojo cogido: aunque el
+        # cerrojo ya es reentrante, restaurar fuera evita cualquier contienda
+        # o bloqueo con otros hilos (fue la causa del congelamiento en autoplay).
+        _need_restore = False
         with _dialog_silence_lock:
             _dialog_silence_depth -= 1
             if _dialog_silence_depth <= 0:
                 _dialog_silence_depth = 0
                 if not _search_in_progress:
-                    _restore_silence_all()
+                    _need_restore = True
+        if _need_restore:
+            _restore_silence_all()
 
 def _prepare_playable_link(link, engine='alfa'):
     """Prepara un enlace decodificando URLs protegidas (ej. data_url base64 en Cinecalidad)
@@ -1508,6 +1554,12 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     encoded = uparse.quote_plus(torrent_url)
     play_url = _tor_tpl % encoded
 
+    if not meta and os.path.exists(SEARCH_CACHE_FILE):
+        try:
+            with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as _cf:
+                meta = json.load(_cf).get('meta', {})
+        except: pass
+
     # ── Enriquecimiento TMDb para Elementum / Quasar ───────────────────────
     _tor_name = _tor_id.rsplit('.', 1)[-1].lower()   # 'elementum', 'quasar', ...
     if _tor_name in ('elementum', 'quasar'):
@@ -1539,11 +1591,15 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
             _season = str(meta.get('season', '') or '')
         if meta and not _epnum:
             _epnum  = str(meta.get('episode', '') or '')
+        if meta and not _show:
+            _show   = str(meta.get('showname', '') or meta.get('title', '') or '')
 
         if _tmdb:
             if _ctype == 'episode' and _season and _epnum:
+                # Elementum navigation getInfoLabels() expects show=<tmdb_id> when resolving episode infolabels:
+                # url = "%s/show/%s/season/%s/episode/%s/infolabels" % (ELEMENTUMD_HOST, tmdb_id, query['season'][0], query['episode'][0])
                 play_url += ('&episode=%s&library=&season=%s&show=%s&tmdb=%s&type=episode'
-                             % (_epnum, _season, uparse.quote_plus(_show), _tmdb))
+                             % (_epnum, _season, _tmdb, _tmdb))
                 xbmc.log('Bridge Multi: torrent enriquecido [serie] tmdb=%s S%sE%s' % (
                     _tmdb, _season, _epnum), xbmc.LOGINFO)
             else:
@@ -1552,7 +1608,16 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
 
     xbmc.log('Bridge Multi: torrent → %s' % _tor_id, xbmc.LOGINFO)
     sync_tmdbhelper_playerstring(meta)
-    xbmc.executebuiltin('PlayMedia(%s)' % play_url)
+
+    # Crear y enriquecer ListItem completo para que Kodi OSD y Trakt tengan los metadatos completos
+    try:
+        _t_label = (meta.get('title') or getattr(matched_item, 'title', '') or _show or 'Torrent') if meta or matched_item else 'Torrent'
+        _li = xbmcgui.ListItem(label=_t_label)
+        set_listitem_info(_li, meta=meta)
+        xbmc.Player().play(play_url, _li)
+    except Exception as _pe:
+        xbmc.log('Bridge Multi: error reproduciendo torrent con ListItem: %s, usando fallback PlayMedia' % _pe, xbmc.LOGWARNING)
+        xbmc.executebuiltin('PlayMedia(%s)' % play_url)
     return True
 
 
@@ -3167,7 +3232,7 @@ def _run_parallel_search_impl(engine='alfa'):
     if is_series:
         timeout_secs = min(20, timeout_secs + 2)
         xbmc.log('Bridge Multi: modo serie, timeout ajustado a %ds' % timeout_secs, xbmc.LOGINFO)
-    max_search_workers = min(6, max(1, _get_int_setting('search_threads_max', 6)))
+    max_search_workers = min(35, max(1, _get_int_setting('search_threads_max', 6)))
 
     total_channels = len(enabled_players)
     engine_name = 'Alfa' if engine == 'alfa' else 'Balandro'
@@ -3922,37 +3987,86 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
     _result       = [False]
 
     import xbmcplugin as _xp
-    _orig = getattr(_xp, 'setResolvedUrl', None)
+    _orig_sru = getattr(_xp, 'setResolvedUrl', None)
 
     def _capture(h, succeeded, listitem):
         if succeeded and listitem:
             _resolved_li[0] = listitem
             _result[0]      = True
         else:
-            _result[0]      = False
+            if not _result[0]:
+                _result[0] = False
+
+    def _cap_ok(*args, **kwargs):
+        return True
+
+    def _cap_notif(*args, **kwargs):
+        return True
+
+    def _cap_sel(heading="", options=None, *args, **kwargs):
+        if options and isinstance(options, (list, tuple)):
+            return len(options) - 1
+        return 0
 
     try:    _xp.setResolvedUrl = _capture
     except: pass
 
     try:
-        with silenced_dialogs():
-            if engine == 'balandro':
-                mods = _get_balandro_modules()
-                if not mods: return False, None
-                pt     = mods['platformtools']
-                parent = matched_item or prep
-                pt.play_video(prep, parent, autoplay=True)
-            else:  # alfa
-                mods = _get_alfa_modules()
-                if not mods: return False, None
-                pt = mods['platformtools']
+        if engine == 'balandro':
+            mods = _get_balandro_modules()
+            if not mods: return False, None
+            pt = mods['platformtools']
+            parent = matched_item or prep
+            _orig_ok = getattr(pt, 'dialog_ok', None)
+            _orig_notif = getattr(pt, 'dialog_notification', None)
+            _orig_sel = getattr(pt, 'dialog_select', None)
+            try:
+                pt.dialog_ok = _cap_ok
+                pt.dialog_notification = _cap_notif
+                pt.dialog_select = _cap_sel
+                sys.argv[1] = '1'
+                res = pt.play_video(prep, parent, autoplay=False)
+                if res is True and _resolved_li[0] is not None:
+                    _result[0] = True
+            finally:
+                if _orig_ok is not None:
+                    try: pt.dialog_ok = _orig_ok
+                    except: pass
+                if _orig_notif is not None:
+                    try: pt.dialog_notification = _orig_notif
+                    except: pass
+                if _orig_sel is not None:
+                    try: pt.dialog_select = _orig_sel
+                    except: pass
+        else:  # alfa
+            mods = _get_alfa_modules()
+            if not mods: return False, None
+            pt = mods['platformtools']
+            _orig_ok = getattr(pt, 'dialog_ok', None)
+            _orig_notif = getattr(pt, 'dialog_notification', None)
+            _orig_sel = getattr(pt, 'dialog_select', None)
+            try:
+                pt.dialog_ok = _cap_ok
+                pt.dialog_notification = _cap_notif
+                pt.dialog_select = _cap_sel
+                sys.argv[1] = '1'
                 pt.play_video(prep, autoplay=True)
+            finally:
+                if _orig_ok is not None:
+                    try: pt.dialog_ok = _orig_ok
+                    except: pass
+                if _orig_notif is not None:
+                    try: pt.dialog_notification = _orig_notif
+                    except: pass
+                if _orig_sel is not None:
+                    try: pt.dialog_select = _orig_sel
+                    except: pass
     except Exception as _ex:
         xbmc.log('Bridge Multi _resolve_link error: ' + str(_ex), xbmc.LOGINFO)
         _result[0] = False
     finally:
-        if _orig is not None:
-            try:    _xp.setResolvedUrl = _orig
+        if _orig_sru is not None:
+            try:    _xp.setResolvedUrl = _orig_sru
             except: pass
 
     if _result[0] and _resolved_li[0] is not None:
@@ -4019,6 +4133,12 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
     player    = xbmc.Player()
     total_att = min(len(normal_links), max_attempts)
+    _cancelled_by_user = False
+    # Tiempo por servidor leido del ajuste (antes fijo 12s ignorando ajustes)
+    _resolve_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
+    if _resolve_timeout < 5: _resolve_timeout = 5
+    if _resolve_timeout > 120: _resolve_timeout = 120
+    _resolve_steps = int(_resolve_timeout * 10)
 
 
 
@@ -4050,7 +4170,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         # ── Step 1: Resolve ────────────────────────────────────────────────
         _prog = xbmcgui.DialogProgress()
         _prog.create('Bridge Multi',
-                     '[%d/%d] Conectando a [B]%s[/B]...' % (idx+1, total_att, _label))
+                     '[%d/%d] Conectando a [B]%s[/B]...\n[COLOR grey]Espere por favor (0.0s / %ds)[/COLOR]' % (idx+1, total_att, _label, _resolve_timeout))
         _prog.update(10)
 
         _res_done  = [None]
@@ -4064,14 +4184,15 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         _rt.start()
 
         cancelled = False
-        for _s in range(250):   # 25 s max resolution
+        for _s in range(_resolve_steps):
             if _prog.iscanceled():
                 cancelled = True
                 break
             if _res_done[0] is not None:
                 break
             xbmc.sleep(100)
-            _prog.update(min(10 + _s, 80))
+            _prog.update(min(10 + int(_s * 70.0 / _resolve_steps), 80),
+                         '[%d/%d] Conectando a [B]%s[/B]...\n[COLOR grey]Espere por favor (%.1fs / %ds)[/COLOR]' % (idx+1, total_att, _label, (_s + 1) * 0.1, _resolve_timeout))
 
         _rt.join(timeout=1)
 
@@ -4079,6 +4200,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             try: _prog.close()
             except: pass
             xbmc.log('Bridge Multi autoplay: usuario canceló resolución', xbmc.LOGINFO)
+            _cancelled_by_user = True
             break
 
         if not _res_done[0] or _res_li[0] is None:
@@ -4116,21 +4238,56 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         except: pass
 
         # ── Step 3: Monitor 60 s reales de reloj ─────────────────────────────
-        # Esperar hasta 15 s a que el reproductor arranque
+        # Esperar hasta 15 s a que el reproductor arranque.
+        # Si el usuario para el reproductor durante este tiempo, se detecta
+        # como parada manual y se muestra el diálogo de confirmación.
         started = False
+        user_stopped_early = False
+        was_playing_briefly = False  # el reproductor llegó a iniciar brevemente
         for _ in range(150):
+            if xbmc.Monitor().abortRequested():
+                user_stopped_early = True
+                break
             if player.isPlaying():
                 started = True
+                was_playing_briefly = True
                 break
+            # Detectar si el reproductor empezó y el usuario lo paró
+            # (isPlayingVideo puede estar en False aunque player.isPlaying() falló)
             xbmc.sleep(100)
 
+        if user_stopped_early:
+            _cancelled_by_user = True
+            break
+
         if not started:
-            xbmc.log('Bridge Multi autoplay [%d/%d] %s nunca arrancó (15s), intentando siguiente sin preguntar...' % (
+            xbmc.log('Bridge Multi autoplay [%d/%d] %s nunca arrancó / usuario paró en arranque (15s)' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             try: player.stop()
             except: pass
-            xbmc.sleep(500)
-            continue   # fallo técnico silencioso → siguiente automático
+            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+            except: pass
+            xbmc.sleep(400)
+
+            _restore_dialog_noblock()
+
+            remaining = total_att - (idx + 1)
+            _srv_lang = server + ((' [%s]' % lang_lbl) if lang_lbl else '')
+            if remaining > 0:
+                try:
+                    ans = _KODI_ORIG_DIALOG().yesno(
+                        'Bridge Multi — Autoplay',
+                        '[B]%s[/B] no pudo reproducirse o fue detenido.\n¿Intentar con el siguiente enlace?' % _srv_lang,
+                        nolabel='No, abrir lista',
+                        yeslabel='Sí, siguiente')
+                except Exception as _ye:
+                    xbmc.log('Bridge Multi autoplay not started yesno error: ' + str(_ye), xbmc.LOGINFO)
+                    ans = False
+                xbmc.log('Bridge Multi autoplay: respuesta de usuario en arranque = %s' % str(ans), xbmc.LOGINFO)
+                if not ans:
+                    _cancelled_by_user = True
+                    break
+            continue
 
         xbmc.log('Bridge Multi autoplay [%d/%d] %s arrancó, monitoreando 60s reales...' % (
             idx+1, total_att, server), xbmc.LOGINFO)
@@ -4140,6 +4297,10 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         link_failed     = False   # reproducción se detuvo → pedir confirmación
 
         while time.time() - mon_start < monitor_secs:
+            if xbmc.Monitor().abortRequested():
+                user_declined = True
+                break
+
             xbmc.sleep(1000)   # verificar cada segundo (tiempo real)
 
             if not player.isPlaying():
@@ -4147,27 +4308,53 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 xbmc.log('Bridge Multi autoplay [%d/%d] %s se detuvo a %.1fs reales' % (
                     idx+1, total_att, server, elapsed), xbmc.LOGINFO)
 
-                # ¿Hay otro enlace disponible?
+                # Asegurar dialogo real SIN cerrojos (nunca puede bloquearse aqui)
+                xbmc.log('Bridge Multi autoplay: restaurando dialogo real sin cerrojos...', xbmc.LOGINFO)
+                _restore_dialog_noblock()
+
+                # Esperar a que la ventana de vídeo de Kodi termine de cerrarse
+                xbmc.sleep(600)
+
                 remaining = total_att - (idx + 1)
-                # Etiqueta simplificada: solo servidor + idioma (sin calidad)
                 _srv_lang = server + ((' [%s]' % lang_lbl) if lang_lbl else '')
                 if remaining > 0:
-                    ans = xbmcgui.Dialog().yesno(
-                        'Bridge Multi — Autoplay',
-                        '[B]%s[/B] se detuvo. ¿Siguiente enlace?' % _srv_lang,
-                        nolabel='No',
-                        yeslabel='Sí')
+                    xbmc.log('Bridge Multi autoplay: mostrando diálogo yesno al usuario (%s)...' % _srv_lang, xbmc.LOGINFO)
+                    ans = False
+                    try:
+                        dlg = _KODI_ORIG_DIALOG()
+                        ans = dlg.yesno(
+                            'Bridge Multi — Autoplay',
+                            '[B]%s[/B] se detuvo.\n¿Reproducir siguiente enlace disponible?' % _srv_lang,
+                            nolabel='No',
+                            yeslabel='Sí')
+                    except Exception as _ye:
+                        xbmc.log('Bridge Multi autoplay yesno error: ' + str(_ye), xbmc.LOGINFO)
+                        try:
+                            ans = xbmcgui.Dialog().yesno(
+                                'Bridge Multi — Autoplay',
+                                '[B]%s[/B] se detuvo.\n¿Reproducir siguiente enlace disponible?' % _srv_lang,
+                                nolabel='No',
+                                yeslabel='Sí')
+                        except Exception:
+                            ans = False
+
+                    xbmc.log('Bridge Multi autoplay: respuesta de usuario sobre siguiente enlace = %s' % str(ans), xbmc.LOGINFO)
                     if ans:
                         link_failed = True   # continuar con siguiente
                     else:
                         user_declined = True  # el usuario decidió parar
                 else:
-                    # No quedan más enlaces
                     user_declined = True
-                break   # salir del while en ambos casos
+                break   # salir del while
 
         if user_declined:
-            # Abrir list_links ahora que el usuario lo puede ver
+            _cancelled_by_user = True
+            try: player.stop()
+            except: pass
+            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+            except: pass
+
+            # Abrir list_links para que el usuario elija enlace manualmente
             if tmdb_for_list:
                 _ts = int(time.time())
                 _lu = ('plugin://plugin.video.bridge.multi/?view=list_links'
@@ -4178,12 +4365,20 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 xbmc.executebuiltin('Dialog.Close(all,true)')
                 xbmc.sleep(200)
                 xbmc.executebuiltin('ActivateWindow(10025,"%s",return)' % _lu)
-            break   # salir del for
+            return False
 
         if link_failed:
             try: player.stop()
             except: pass
-            xbmc.sleep(500)
+            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+            except: pass
+            for _ in range(30):
+                try:
+                    if not player.isPlaying():
+                        break
+                except: break
+                xbmc.sleep(100)
+            xbmc.sleep(600)
             continue   # → siguiente enlace
 
         # ── 60 s reales transcurridos con reproducción activa → ÉXITO ────────
@@ -4193,6 +4388,11 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
 
     # ── Todos los intentos agotados ────────────────────────────────────────
+    try: player.stop()
+    except: pass
+    try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+    except: pass
+
     if not player.isPlaying():
         if tmdb_for_list:
             _ts = int(time.time())
@@ -4200,7 +4400,10 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                    '&tmdb=%s&t=%s' % (str(tmdb_for_list), _ts))
             if meta and meta.get('season') and meta.get('episode'):
                 _lu += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-            xbmc.log('Bridge Multi autoplay: enlaces agotados → abriendo list_links', xbmc.LOGINFO)
+            if _cancelled_by_user:
+                xbmc.log('Bridge Multi autoplay: cancelado por usuario → abriendo list_links', xbmc.LOGINFO)
+            else:
+                xbmc.log('Bridge Multi autoplay: enlaces agotados → abriendo list_links', xbmc.LOGINFO)
             xbmc.executebuiltin('Dialog.Close(all,true)')
             xbmc.sleep(200)
             xbmc.executebuiltin('ActivateWindow(10025,"%s",return)' % _lu)
@@ -4234,7 +4437,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             xbmcplugin.setResolvedUrl(handle, False, _absorb)
             return False
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
-        return _play_torrent_link(_tl, matched_item=matched_item)
+        return _play_torrent_link(_tl, matched_item=matched_item, meta=getattr(link, 'meta', None))
 
 
     server_name = (_safe_str(getattr(link, 'server', '') or '').strip().capitalize()
@@ -4392,7 +4595,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
         return False
 
     # 3. Reproductor según el motor
-    # ── Balandro: ventana de progreso de conexión, timeout (25s) y aviso de fallo ──
+    # ── Balandro: ventana de progreso de conexión, timeout (15s) y aviso de fallo ──
     if engine == 'balandro':
         mods = _get_balandro_modules()
         if not mods: return False
@@ -6217,7 +6420,7 @@ def main():
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''),
                                        seek_to_time=seek_to_time)
-
+            return
 
         else:
             # Autoplay desactivado → abrir directamente la lista de enlaces
@@ -6362,7 +6565,8 @@ def main():
                     matched_item = matched_item,
                     monitor_secs = 60,
                     max_attempts = 999,
-                    tmdb_for_list= str(tmdb_id or meta.get('tmdb') or ''))
+                    tmdb_for_list= str(tmdb_id or meta.get('tmdb') or ''),
+                    meta         = meta)
                 if played:
                     start_playback_monitor(media_key, title_str=meta.get('title', ''),
                                            seek_to_time=seek_to_time)
