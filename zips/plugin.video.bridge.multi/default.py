@@ -1390,11 +1390,17 @@ def _get_torrent_client():
         return None, None
 
 
+# Segundos maximos esperando al play() del canal al resolver un torrent.
+_TORRENT_PLAY_BUDGET = 25
+
 def _resolve_torrent_url(link, engine='balandro'):
     """Resuelve la URL real (magnet/.torrent) de un enlace torrent.
     1) Decodifica data_url (cinecalidad* guardan ahi el magnet con url vacia).
-    2) Si sigue sin ser magnet/.torrent, pide al play() del canal.
-    Devuelve (url, detalle_fallo). No lanza nada ni muestra ventanas."""
+    2) Si sigue sin ser magnet/.torrent, pide al play() del canal con un
+       presupuesto de _TORRENT_PLAY_BUDGET segundos y dialogo de progreso
+       (el play() del canal puede colgarse en red sin avisar; antes eso
+       dejaba a Kodi en silencio).
+    Devuelve (url, detalle_fallo). No lanza reproduccion."""
     fail_detail = ''
     try:
         prep = _prepare_playable_link(link, engine=engine)
@@ -1411,22 +1417,58 @@ def _resolve_torrent_url(link, engine='balandro'):
             if _ch_dbg:
                 _ch_mod = __import__('channels.' + _ch_dbg, fromlist=[''])
                 if hasattr(_ch_mod, 'play'):
-                    with silenced_dialogs():
-                        _p_res = _ch_mod.play(link.clone() if hasattr(link, 'clone') else link)
-                    if isinstance(_p_res, str) and _p_res.strip():
-                        # El canal devuelve texto (ej. 'Tiene Acortador del enlace')
-                        fail_detail = re.sub(r'\[/?COLOR[^\]]*\]|\[/?B\]|\[CR\]', '', _p_res).strip()
+                    _play_holder = [None]
+                    _play_err = [None]
+                    def _do_play():
+                        try:
+                            with silenced_dialogs():
+                                _play_holder[0] = _ch_mod.play(link.clone() if hasattr(link, 'clone') else link)
+                        except Exception as _ex:
+                            _play_err[0] = _ex
+                    _pt = threading.Thread(target=_do_play, daemon=True)
+                    _pt.start()
+                    try:
+                        _pdlg = xbmcgui.DialogProgressBG()
+                        _pdlg.create('Bridge Multi', 'Resolviendo torrent (%s)...' % _ch_dbg)
+                    except Exception:
+                        _pdlg = None
+                    _deadline = time.time() + _TORRENT_PLAY_BUDGET
+                    try:
+                        while _pt.is_alive() and time.time() < _deadline:
+                            if xbmc.Monitor().abortRequested():
+                                break
+                            time.sleep(0.2)
+                    except Exception:
+                        pass
+                    try:
+                        if _pdlg:
+                            _pdlg.close()
+                    except Exception:
+                        pass
+                    if _pt.is_alive():
+                        xbmc.log("Bridge Multi: torrent %s canal.play supero %ds, se abandona" % (_ch_dbg, _TORRENT_PLAY_BUDGET), xbmc.LOGWARNING)
+                        fail_detail = 'El canal tardó demasiado en responder'
+                        _p_res = None
+                    elif _play_err[0] is not None:
+                        xbmc.log("Bridge Multi: torrent canal.play error: %s" % _play_err[0], xbmc.LOGINFO)
+                        _p_res = None
                     else:
-                        _cand = None
-                        if isinstance(_p_res, list) and _p_res:
-                            _cand = _p_res[0]
-                            if isinstance(_cand, list):
-                                _cand = _cand[0] if _cand else None
-                        elif hasattr(_p_res, 'url'):
-                            _cand = _p_res
-                        if _cand is not None and _safe_str(getattr(_cand, 'url', '') or ''):
-                            torrent_url = _safe_str(getattr(_cand, 'url', '') or '')
-                            xbmc.log("Bridge Multi: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
+                        _p_res = _play_holder[0]
+                    if _p_res is not None:
+                        if isinstance(_p_res, str) and _p_res.strip():
+                            # El canal devuelve texto (ej. 'Tiene Acortador del enlace')
+                            fail_detail = re.sub(r'\[/?COLOR[^\]]*\]|\[/?B\]|\[CR\]', '', _p_res).strip()
+                        else:
+                            _cand = None
+                            if isinstance(_p_res, list) and _p_res:
+                                _cand = _p_res[0]
+                                if isinstance(_cand, list):
+                                    _cand = _cand[0] if _cand else None
+                            elif hasattr(_p_res, 'url'):
+                                _cand = _p_res
+                            if _cand is not None and _safe_str(getattr(_cand, 'url', '') or ''):
+                                torrent_url = _safe_str(getattr(_cand, 'url', '') or '')
+                                xbmc.log("Bridge Multi: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
         except Exception as _e:
             xbmc.log("Bridge Multi: torrent canal.play error: %s" % _e, xbmc.LOGINFO)
     return torrent_url, fail_detail
@@ -3597,26 +3639,43 @@ def _save_view_mode(view_id):
     except Exception as e:
         xbmc.log(f"Bridge Multi: _save_view_mode error: {e}", xbmc.LOGWARNING)
 
+def _in_own_list():
+    """True solo si la ventana activa es nuestra lista de enlaces.
+    Evita aplicar nuestra vista a otros contenedores (ej. TMDb Helper)."""
+    try:
+        if not xbmc.getCondVisibility("Window.IsVisible(10025)"):
+            return False
+        folder = xbmc.getInfoLabel("Container.FolderPath") or ''
+        return "plugin.video.bridge.multi" in folder and "view=list_links" in folder
+    except Exception:
+        return False
+
 def _apply_saved_view_mode():
     """Aplica la vista guardada por el usuario en la lista de resultados."""
     view_id = _get_saved_view_mode()
     if not view_id:
         return
 
-    try:
-        xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
-    except Exception:
-        pass
-
     def _apply_delayed():
         for delay in (50, 150, 300, 600, 1000):
             xbmc.sleep(delay)
             try:
+                # Si el usuario ya salio de nuestra lista (ej. volvio a
+                # TMDb Helper), no tocar la vista del otro contenedor.
+                if not _in_own_list():
+                    break
                 xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
             except Exception:
                 pass
 
     try:
+        # Solo aplicar de inmediato si ya estamos en nuestra lista (ej.
+        # refresco); si no, el hilo retardado lo hara al aparecer.
+        if _in_own_list():
+            try:
+                xbmc.executebuiltin("Container.SetViewMode(%d)" % view_id)
+            except Exception:
+                pass
         t = threading.Thread(target=_apply_delayed)
         t.daemon = True
         t.start()
@@ -3760,10 +3819,13 @@ def show_links_as_directory():
         m_mins = int(r_sec // 60); m_secs = int(r_sec % 60); m_hrs = m_mins // 60; m_mins = m_mins % 60
         bm_str = (' [COLOR orange][Reanudar: %d:%02d:%02d][/COLOR]' % (m_hrs, m_mins, m_secs)) if m_hrs else (' [COLOR orange][Reanudar: %d:%02d][/COLOR]' % (m_mins, m_secs))
 
-    # Limitar a 40 enlaces para evitar crash en equipos modestos (Celeron) y filtrar URLs anormalmente largas
-    if len(links) > 40:
-        xbmc.log(f"Bridge Multi: truncando de {len(links)} a 40 enlaces para estabilidad", xbmc.LOGINFO)
-        links = links[:40]
+    # Limitar enlaces según ajuste del usuario (Recomendado: 40) para evitar
+    # crash o lentitud en equipos modestos (Celeron) y filtrar URLs larguísimas
+    _max_list = _get_int_setting('max_links_list', 40)
+    if _max_list < 5: _max_list = 5
+    if len(links) > _max_list:
+        xbmc.log(f"Bridge Multi: truncando de {len(links)} a {_max_list} enlaces (ajuste max_links_list)", xbmc.LOGINFO)
+        links = links[:_max_list]
     for idx, lnk in enumerate(links):
         try:
             # Filtrar URLs absurdamente largas que pueden crashear Kodi (ej. mitorrent 1963 chars)
@@ -5897,6 +5959,13 @@ def main():
 
         if links and 0 <= idx < len(links):
             chosen = links[idx]
+            try:
+                xbmc.log("Bridge Multi: play click idx=%d/%d canal=%s server=%s url=%s data_url=%s" % (
+                    idx, len(links), _safe_str(getattr(chosen, 'channel', '')),
+                    _safe_str(getattr(chosen, 'server', '')),
+                    _safe_str(getattr(chosen, 'url', '') or '')[:60],
+                    'si' if _safe_str(getattr(chosen, 'data_url', '') or '') else 'no'), xbmc.LOGINFO)
+            except: pass
             _enrich_link_metadata(chosen, meta, matched_item)
             media_key = _get_media_key(meta, chosen)
             is_s = bool(meta.get('season') and meta.get('episode'))

@@ -13,6 +13,7 @@
         <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 20 - 30)" default="25" range="5,1,35" option="int" />
         <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 6 - 10)" default="8" range="1,1,25" option="int" />
         <setting id="verify_timeout" type="slider" label="Tiempo límite por servidor en verificación (segundos) (Recomendado: 8 - 12)" default="10" range="3,1,30" option="int" />
+        <setting id="max_links_list" type="slider" label="Enlaces máximos en la lista (Recomendado: 40 - Más puede ralentizar o colgar Kodi)" default="40" range="10,5,100" option="int" />
         <setting type="sep" />
         <setting type="lsep" label="[COLOR deepskyblue]Sincronización Nube (GitHub):[/COLOR]" />
         <setting id="cloud_repo_url" type="text" label="Repositorio de GitHub (Players)" default="https://github.com/01xKeven/Players-Multi" />
