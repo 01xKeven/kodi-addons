@@ -6084,6 +6084,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
     ACTION_PREVIOUS_MENU = 10
     ACTION_NAV_BACK    = 92
     ACTION_MOUSE_LEFT_CLICK = 100
+    ACTION_MOUSE_DOUBLE_CLICK = 103
 
     _LABELS = ('Sí', 'No', 'Ver enlaces')
 
@@ -6191,8 +6192,9 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
                         (bx+bw+m-t, btn_y-m, t, btn_h+m*2)):
                     _base = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=DIM)
                     self.addControl(_base)
-                m, t = 5, 3
+                m, t = 5, 5
                 hl = [
+                    xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, btn_h+m*2, white, colorDiffuse='0x44CFA82C'),
                     xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, t, white, colorDiffuse=GOLD),
                     xbmcgui.ControlImage(bx-m, btn_y+btn_h+m-t, bw+m*2, t, white, colorDiffuse=GOLD),
                     xbmcgui.ControlImage(bx-m, btn_y-m, t, btn_h+m*2, white, colorDiffuse=GOLD),
@@ -6225,6 +6227,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
 
     def onAction(self, action):
         aid = action.getId()
+        xbmc.log('BridgeMulti AutoplayStopDialog accion=%s' % aid, xbmc.LOGINFO)
         if aid in (self.ACTION_PREVIOUS_MENU, self.ACTION_NAV_BACK):
             self.selected = -1
             self.close()
@@ -6235,8 +6238,25 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         elif aid == self.ACTION_SELECT_ITEM:
             self.selected = self.current
             self.close()
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK):
+            # En Kodi el clic de raton/tactil llega como accion (onClick no se
+            # dispara en esta ventana): se elige el boton que tiene el foco,
+            # que Kodi pone bajo el cursor al hacer clic.
+            try:
+                xbmc.sleep(120)
+            except: pass
+            try:
+                fid = self.getFocusId()
+            except Exception:
+                fid = -1
+            for i, bid in enumerate(self._btn_ids):
+                if fid == bid:
+                    self.selected = i
+                    self.close()
+                    return
 
     def onClick(self, control_id):
+        xbmc.log('BridgeMulti AutoplayStopDialog click=%s' % control_id, xbmc.LOGINFO)
         # Acepta clics en botones Y en sus resaltados (las imagenes doradas
         # quedan encima y en tactil el toque cae sobre ellas, no el boton).
         for i, bid in enumerate(self._btn_ids):
