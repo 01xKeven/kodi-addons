@@ -6237,11 +6237,21 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
             self.close()
 
     def onClick(self, control_id):
+        # Acepta clics en botones Y en sus resaltados (las imagenes doradas
+        # quedan encima y en tactil el toque cae sobre ellas, no el boton).
         for i, bid in enumerate(self._btn_ids):
             if control_id == bid:
                 self.selected = i
                 self.close()
                 return
+        for i, hl in enumerate(self._highlights):
+            for c in hl:
+                try:
+                    if control_id == c.getId():
+                        self.selected = i
+                        self.close()
+                        return
+                except: pass
 
 
 def _show_autoplay_stop_dialog(server_label):
