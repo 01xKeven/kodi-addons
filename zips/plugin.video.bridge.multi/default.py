@@ -6419,9 +6419,15 @@ def main():
                 time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
                 dialog = xbmcgui.Dialog()
                 t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                res = dialog.yesno('Reanudar reproducción', '¿Deseas reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR] o reproducir desde el principio?' % (t_title, time_str), nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str)
-                if res:
+                # select() en vez de yesno: asi Atras (-1) se distingue de No
+                # y cancela sin reproducir.
+                _rsel = dialog.select(
+                    'Reanudar reproducción',
+                    ['Reanudar %s desde %s' % (t_title, time_str), 'Desde el principio'])
+                if _rsel == 0:
                     seek_to_time = r_time
+                elif _rsel is None or _rsel < 0:
+                    return
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
             if played:
