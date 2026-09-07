@@ -2099,7 +2099,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 if _n_torrents > 0:
                     _l2parts.append('[COLOR cyan]%d Torrents[/COLOR]' % _n_torrents)
                 _l2 = ' · '.join(_l2parts)
-                _l3 = '[COLOR grey]Cierra para verlos[/COLOR]' if (funcionales > 0 or _n_torrents > 0) else ''
+                _l3 = '[COLOR grey]Cerrar para reproducir los enlaces[/COLOR]' if funcionales > 0 else ''
                 p_dialog.update(pct, '%s\n%s\n%s' % (_l1, _l2, _l3))
 
             if not running and i >= len(threads): break
