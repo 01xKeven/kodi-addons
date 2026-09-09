@@ -7,11 +7,11 @@
         <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="false" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
-        <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="false" />
+        <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="true" />
         
         <setting type="sep" />
         <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />
-        <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="10" range="5,1,35" option="int" />
+        <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="25" range="5,1,35" option="int" />
         <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 6 - 8)" default="8" range="1,1,25" option="int" />
         <setting id="verify_timeout" type="slider" label="Tiempo límite por servidor en verificación (segundos) (Recomendado: 8 - 12)" default="10" range="3,1,30" option="int" />
         <setting id="autoplay_resolve_timeout" type="slider" label="Tiempo límite por servidor en autoplay (segundos) (Recomendado: 10 - 15)" default="12" range="5,5,60" option="int" />
@@ -38,8 +38,8 @@
     <!-- Categoría 4: Servidores -->
     <category label="Filtrar Servidores">
         <setting id="filter_servers_enabled" type="bool" label="Opciones" default="true" />
-        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="" visible="eq(-1,true)" />
-        <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="" visible="eq(-2,true)" />
-        <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="waaw" visible="eq(-3,true)" />
+        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="voe,doodstream,vidmoly" visible="eq(-1,true)" />
+        <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="uqload,torrent" visible="eq(-2,true)" />
+        <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
     </category>
 </settings>

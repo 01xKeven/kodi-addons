@@ -974,6 +974,40 @@ def clean_title(title_str):
     c = re.sub(r'[^a-z0-9]', ' ', c)
     return ' '.join(c.split())
 
+# Unificacion de conjunciones entre idiomas (y/and/e/&). Ej. 'Tom y Jerry'
+# casa con 'Tom & Jerry' porque clean_title ya mapea & -> and.
+# Mecanismo GENERAL sin diccionarios: no hay lista de palabras que mantener.
+# (Distinguir traducciones como Wolverine/Lobezno sin datos externos es
+# imposible localmente; para eso esta el titulo original de TMDb.)
+_TITLE_CONJUNCTIONS = frozenset(['y', 'and', 'e'])
+
+def _alias_variants(names):
+    """Genera variantes con conjunciones unificadas a 'and'.
+    Solo ANIADE candidatos: jamas quita ni rechaza nada, asi que no puede
+    romper matches que ya funcionaban."""
+    out = []
+    try:
+        seen = set()
+        for _n in (names or []):
+            _s = _safe_str(_n).lower().strip()
+            if _s:
+                seen.add(_s)
+        for name in (names or []):
+            base = _safe_str(name)
+            if not base:
+                continue
+            toks = clean_title(base).split()
+            if not toks:
+                continue
+            core = [('and' if t in _TITLE_CONJUNCTIONS else t) for t in toks]
+            c = ' '.join(core)
+            if c and c not in seen:
+                seen.add(c)
+                out.append(c)
+    except Exception:
+        pass
+    return out
+
 def _extract_year_from_val(val):
     if not val: return None
     s = str(val).strip()
@@ -2236,15 +2270,10 @@ def _resolve_localized_metadata(tmdb_id=None, is_series=False, season=None, epis
                                     if p and not tmdb_oth_plot: tmdb_oth_plot = p
                                     if tg and not tmdb_oth_tagline: tmdb_oth_tagline = tg
                                     if tt and not tmdb_oth_title: tmdb_oth_title = tt
-                        # Complementar títulos en _tmdb_titles_cache para búsquedas paralelas (solo para series completas o películas, NUNCA títulos de episodios)
-                        all_t = [x for x in [tmdb_mx_title, tmdb_es_title, tmdb_oth_title] if x]
-                        if all_t and not is_ep:
-                            ck = f"{tmdb_id_str}_{1 if is_series else 0}"
-                            if ck not in _tmdb_titles_cache:
-                                _tmdb_titles_cache[ck] = []
-                            for cand in all_t:
-                                if cand not in _tmdb_titles_cache[ck]:
-                                    _tmdb_titles_cache[ck].append(cand)
+                        # NOTA: no pre-poblar _tmdb_titles_cache aqui a proposito:
+                        # solo tenemos titulos ES y _fetch_tmdb_titles necesita
+                        # pedir el original en ingles; pre-poblarla la
+                        # envenenaria y el fetch creeria que ya esta completa.
                     if tmdb_mx_plot or tmdb_es_plot:
                         break
             except Exception as e:
@@ -2317,9 +2346,54 @@ def _resolve_localized_metadata(tmdb_id=None, is_series=False, season=None, epis
 
 
 _tmdb_titles_cache = {}
+_tmdb_verify_cache = {}
+
+def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False):
+    """Confirma contra la API de TMDb que un candidato debil (match solo por
+    titulo, sin IDs ni anio) es realmente el contenido buscado.
+    Devuelve True si el primer resultado de busqueda coincide con target_tmdb
+    (o con target_year si no hay tmdb objetivo). Cache de sesion, 1 llamada
+    como maximo por candidato, timeout 4s. Nunca lanza excepciones."""
+    try:
+        t = _safe_str(title_check).strip()
+        if not t or not target_tmdb:
+            return False
+        key = ('tv' if is_series else 'movie', t.lower(), str(target_year or ''), str(target_tmdb))
+        if key in _tmdb_verify_cache:
+            return _tmdb_verify_cache[key]
+        ok = False
+        try:
+            api_key = "a1ab8b8669da03637a4b98fa39c39228"
+            kind = "tv" if is_series else "movie"
+            import json as _json
+            import urllib.request as _ureq
+            q = uparse.quote(t)
+            url = f"https://api.themoviedb.org/3/search/{kind}?api_key={api_key}&query={q}&language=es-MX&page=1&include_adult=false"
+            if not is_series and target_year and str(target_year).isdigit():
+                url += f"&year={int(target_year)}"
+            with _ureq.urlopen(url, timeout=4) as resp:
+                data = _json.loads(resp.read().decode('utf-8', errors='ignore'))
+            results = data.get('results', []) if isinstance(data, dict) else []
+            if results and isinstance(results[0], dict):
+                top_id = str(results[0].get('id', ''))
+                if top_id and top_id == str(target_tmdb):
+                    ok = True
+        except Exception:
+            ok = False
+        try:
+            if len(_tmdb_verify_cache) > 500:
+                _tmdb_verify_cache.clear()
+            _tmdb_verify_cache[key] = ok
+        except Exception:
+            pass
+        return ok
+    except Exception:
+        return False
 
 def _fetch_tmdb_titles(tmdb_id, is_series=False):
-    # Cache + 2 idiomas + paralelo + timeout corto (3s) para no retrasar inicio
+    # Cache + 3 idiomas en paralelo (es-MX, es-ES y EN siempre: el titulo
+    # original ingles es el que casa con webs extranjeras) + 1 reintento por
+    # idioma + timeout holgado (5s) para Celeron con red lenta.
     titles = []
     if not tmdb_id:
         return titles
@@ -2328,29 +2402,35 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
         return titles
     cache_key = f"{tmdb_id_str}_{1 if is_series else 0}"
     if cache_key in _tmdb_titles_cache:
+        try:
+            xbmc.log(f"Bridge Multi: tmdb titles cache-hit {cache_key}: {_tmdb_titles_cache[cache_key]}", xbmc.LOGINFO)
+        except: pass
         return list(_tmdb_titles_cache[cache_key])
     try:
         api_key = "a1ab8b8669da03637a4b98fa39c39228"
         tmdb_type = "tv" if is_series else "movie"
         import json as _json
         import urllib.request as _ureq
-        langs = ["es-MX", "es-ES"]  # 2 requests paralelos son suficientes (en ya viene como original_title)
+        langs = ["es-MX", "es-ES", "en"]
         results = {}
         def _fetch_lang(lang):
             try:
                 url = f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id_str}?api_key={api_key}&language={lang}"
-                # Intento rapido con urllib (3s) sin pasar por httptools para no bloquear lock
-                try:
-                    with _ureq.urlopen(url, timeout=3) as resp2:
-                        raw = resp2.read().decode('utf-8', errors='ignore')
-                        data = _json.loads(raw)
-                        if data:
-                            t = data.get('title') or data.get('name') or ""
-                            o = data.get('original_title') or data.get('original_name') or ""
-                            results[lang] = [x for x in [t, o] if x]
-                except Exception as e:
-                    results[lang] = []
-            except Exception as e:
+                # Intento con urllib (5s) sin pasar por httptools para no bloquear lock; 1 reintento
+                for _att in range(2):
+                    try:
+                        with _ureq.urlopen(url, timeout=5) as resp2:
+                            raw = resp2.read().decode('utf-8', errors='ignore')
+                            data = _json.loads(raw)
+                            if data:
+                                t = data.get('title') or data.get('name') or ""
+                                o = data.get('original_title') or data.get('original_name') or ""
+                                results[lang] = [x for x in [t, o] if x]
+                                break
+                    except Exception:
+                        results[lang] = []
+                        continue
+            except Exception:
                 results[lang] = []
         # Paralelo
         import threading
@@ -2360,26 +2440,14 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
             th.start()
             threads.append(th)
         for th in threads:
-            th.join(timeout=3.5)
+            th.join(timeout=5.5)
         for lang in langs:
+            try:
+                xbmc.log(f"Bridge Multi: tmdb titles {lang}: {results.get(lang, [])}", xbmc.LOGINFO)
+            except: pass
             for cand in results.get(lang, []):
                 if cand and cand not in titles:
                     titles.append(cand)
-        # Fallback: si no hay nada, intentar en si el original_title ya esta en otro idioma via una sola peticion extra en
-        # pero con lo anterior es suficiente
-        if not titles:
-            # Intento unico con en por si es pelicula sin traduccion es
-            try:
-                url = f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id_str}?api_key={api_key}&language=en"
-                with _ureq.urlopen(url, timeout=3) as resp2:
-                    raw = resp2.read().decode('utf-8', errors='ignore')
-                    data = _json.loads(raw)
-                    if data:
-                        t = data.get('title') or data.get('name') or ""
-                        if t and t not in titles:
-                            titles.append(t)
-            except:
-                pass
         # Cache
         uniq = []
         seen = set()
@@ -2742,12 +2810,29 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                         if valid:
+                            # Inyeccion TMDb en vivo: si el match es debil, se
+                            # confirma contra la API y se inyecta el tmdb
+                            # correcto al item (solo memoria, sin tocar disco).
+                            _w_conf = False
+                            if _w_weak:
+                                try:
+                                    _w_conf = _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False)
+                                    if _w_conf:
+                                        try:
+                                            if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                                it.infoLabels = {}
+                                            it.infoLabels['tmdb_id'] = str(target_tmdb)
+                                            it.infoLabels['tmdb'] = str(target_tmdb)
+                                            it.tmdb_id = str(target_tmdb)
+                                        except: pass
+                                        xbmc.log("Bridge Multi: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
+                                except: pass
                             for l in valid:
                                 l.channel = channel_id
                                 l.bridge_engine = 'alfa'
                                 try:
                                     l.bridge_score = int(score)
-                                    l.bridge_weak = bool(_w_weak)
+                                    l.bridge_weak = bool(_w_weak and not _w_conf)
                                 except: pass
                             xbmc.log("Bridge Multi: %s OK peli %d enlaces para '%s'" % (channel_id, len(valid), title_check), xbmc.LOGINFO)
                             return it, valid
@@ -3150,12 +3235,29 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                         if valid:
+                            # Inyeccion TMDb en vivo: si el match es debil, se
+                            # confirma contra la API y se inyecta el tmdb
+                            # correcto al item (solo memoria, sin tocar disco).
+                            _w_conf = False
+                            if _w_weak:
+                                try:
+                                    _w_conf = _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False)
+                                    if _w_conf:
+                                        try:
+                                            if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                                it.infoLabels = {}
+                                            it.infoLabels['tmdb_id'] = str(target_tmdb)
+                                            it.infoLabels['tmdb'] = str(target_tmdb)
+                                            it.tmdb_id = str(target_tmdb)
+                                        except: pass
+                                        xbmc.log("Bridge Multi [Balandro]: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
+                                except: pass
                             for l in valid:
                                 l.channel = channel_id
                                 l.bridge_engine = 'balandro'
                                 try:
                                     l.bridge_score = int(score)
-                                    l.bridge_weak = bool(_w_weak)
+                                    l.bridge_weak = bool(_w_weak and not _w_conf)
                                 except: pass
                             return it, valid
                 except Exception as e:
@@ -3286,6 +3388,16 @@ def _run_parallel_search_impl(engine='alfa'):
             xbmc.log(f"Bridge Multi: run_parallel_search (sin fetch) target_title='{target_title}' all_names={all_names} alt_terms={alt_terms}", xbmc.LOGINFO)
     except Exception as e:
         xbmc.log(f"Bridge Multi: fetch titles error: {e}", xbmc.LOGINFO)
+    # Variantes con alias de traduccion (wolverine/lobezno...) para cazar
+    # matches entre idiomas que el puntuador no puede unir solo.
+    try:
+        for _av in _alias_variants(all_names):
+            if _av not in all_names:
+                all_names.append(_av)
+            if _av != target_title and _av not in alt_terms:
+                alt_terms.append(_av)
+    except Exception:
+        pass
     p_dialog.update(0, 'Buscando en tus %d canales de %s...' % (total_channels, engine_name))
 
     # Pre-importar canales secuencialmente para evitar contencion de lock al inicio (acelera arranque)
