@@ -6100,6 +6100,22 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         except Exception as e:
             xbmc.log('BridgeMulti AutoplayStopDialog build error: ' + str(e), xbmc.LOGWARNING)
 
+    def addControl(self, *args, **kwargs):
+        # Entrada estilo cartoon: pop rapido con rebote (pasa de 100 y se
+        # asienta = efecto "pum"). Animacion nativa de Kodi; DEBE ir DESPUES
+        # de addControl o Kodi la ignora. Si falla, el dialogo sale normal.
+        res = super().addControl(*args, **kwargs)
+        try:
+            ctrl = args[0] if args else None
+            if ctrl is not None:
+                try:
+                    ctrl.setAnimations([('WindowOpen', 'effect=zoom start=50,50 end=100,100 center=auto time=220 tween=back easing=out')])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return res
+
     @staticmethod
     def _bg_texture():
         # PNG blanco 1x1 generado en nuestra propia data (no depende del skin
