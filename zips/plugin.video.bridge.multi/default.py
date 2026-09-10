@@ -1186,7 +1186,7 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
       - All articles stripped match: +880
       - Article/Numeral normalized match: +800
       - Subtitle prefix match: +800
-      - Substring match: +300
+      - Substring match: +300 (plural-only diff without IDs: REJECT)
       - Media type compatibility (movie vs show): +500
     """
     result_title = _safe_str(result_title)
@@ -1357,6 +1357,15 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
                 _extra = (_rv[:_pos].strip() + ' ' + _rv[_pos + len(_tv):].strip()).strip()
                 if _extra and any(ch.isalpha() for ch in _extra):
                     break
+
+            # Endurecido: si la UNICA diferencia es una 's'/'es' final de
+            # plural con igual nº de palabras (elegido/elegidos), no basta
+            # con el año: exige TMDb/IMDb. Evita homonimos como El Elegido
+            # colandose por Los Elegidos.
+            if _same_wc and not tmdb_score and not imdb_score:
+                _short, _long = (_rv, _tv) if len(_rv) <= len(_tv) else (_tv, _rv)
+                if _long == _short + 's' or _long == _short + 'es':
+                    continue
 
             if year_score > 0 or tmdb_score > 0 or _same_wc:
                 best_title_score = max(best_title_score, 300)
