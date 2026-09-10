@@ -1789,22 +1789,72 @@ def _get_link_language_group(link):
     if 'VOSE' in f_lang or 'SUB' in f_lang: return 'VOSE'
     return 'OTHER'
 
+def _has_4k_token(combined):
+    """Detecta 4K real (4K/2160/UHD como palabra) sin picar con IDs
+    aleatorios de embeds/magnets que contienen esas letras
+    (ej. '...f4klam...' no es 4K)."""
+    try:
+        if re.search(r'\b4\s?K\b', combined): return True
+        if re.search(r'\b2160P?\b', combined): return True
+        if re.search(r'\bUHD\b', combined): return True
+    except Exception:
+        pass
+    return False
+
 def _format_quality(link):
     qual = _safe_str(getattr(link, 'quality', '')).strip()
     title_str = _safe_str(getattr(link, 'title', '')).strip()
     url_str = _safe_str(getattr(link, 'url', '')).strip()
     combined = (qual + ' ' + title_str + ' ' + url_str).upper()
-    if '4K' in combined or '2160P' in combined or 'UHD' in combined: return '4K'
+    if _is_torrent_link(link):
+        # Torrents: conservar fuente (WEB-DL vs WEBRip importa) + resolucion.
+        # Ej. 'WEB-DL 1080p', 'Dual 1080p', 'WEBRip', 'Dual 720p'.
+        parts = []
+        _has_src = False
+        if 'WEB-DL' in combined or 'WEBDL' in combined or 'WEB DL' in combined:
+            parts.append('WEB-DL'); _has_src = True
+        elif 'WEBRIP' in combined or 'WEB-RIP' in combined or 'WEB RIP' in combined:
+            parts.append('WEBRip'); _has_src = True
+        elif 'BLURAY' in combined or 'BLU-RAY' in combined or 'BRRIP' in combined or 'BDRIP' in combined:
+            parts.append('BluRay'); _has_src = True
+        elif 'DVDRIP' in combined or ('DVD' in combined and 'RIP' in combined):
+            parts.append('DVDRip'); _has_src = True
+        elif 'DVD' in combined:
+            parts.append('DVD'); _has_src = True
+        elif 'HDTV' in combined:
+            parts.append('HDTV'); _has_src = True
+        elif 'CAM' in combined or re.search(r'\bTS\b', combined) or 'TELESYNC' in combined:
+            parts.append('CAM'); _has_src = True
+        if 'DUAL' in combined:
+            parts.append('Dual')
+        if _has_4k_token(combined):
+            parts.append('4K')
+        elif '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined:
+            parts.append('1080p')
+        elif '720P' in combined or 'HD' in combined:
+            parts.append('720p')
+        elif '480P' in combined or '480' in combined:
+            parts.append('480p')
+        elif not _has_src and ('RIP' in combined or 'DVD' in combined):
+            parts.append('SD')
+        if parts:
+            return ' '.join(parts)
+        return 'N/A'
+    if _has_4k_token(combined): return '4K'
     if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined: return '1080p'
     if '720P' in combined or 'HD' in combined: return '720p'
     if 'RIP' in combined or 'DVD' in combined or 'WEBRIP' in combined or 'DVDRIP' in combined: return 'SD'
     if 'CAM' in combined or 'TS' in combined or 'TELESYNC' in combined: return 'CAM'
-    return 'N/D'
+    return 'N/A'
 
 def _get_link_quality_score(link):
     q = _format_quality(link)
-    scores = {'4K': 500, '1080p': 400, '720p': 300, 'SD': 200, 'CAM': 100, 'N/D': 50}
-    return scores.get(q, 50)
+    if '4K' in q or '2160' in q: return 500
+    if '1080' in q: return 400
+    if '720' in q: return 300
+    if 'CAM' in q: return 100
+    if q in ('SD', 'DVD', 'DVDRip') or 'RIP' in q or 'WEBRIP' in q.upper(): return 200
+    return 50
 
 def _format_channel(link):
     ch = _safe_str(getattr(link, 'channel', ''))
