@@ -173,7 +173,7 @@
 		<description lang="zh_TW">本佈景主題專為平板及手機等具有觸控螢幕的裝置而設計</description>
 	</extension>
 </addon>
-<addon id="plugin.video.bridge.multi" name="Bridge Multi para TMDb Helper (Alfa / Balandro)" version="1.0.21" provider-name="01xKeven">
+<addon id="plugin.video.bridge.multi" name="Bridge Multi para TMDb Helper (Alfa / Balandro)" version="1.0.22" provider-name="01xKeven">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="plugin.video.alfa" version="3.0.0" optional="true"/>
