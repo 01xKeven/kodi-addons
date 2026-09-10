@@ -658,7 +658,7 @@ def _ask_resume_dialog(title_text, time_str):
             dlg_cls = xbmcgui.Dialog
         return bool(dlg_cls().yesno(
             'Reanudar reproducción',
-            '¿Reanudar [B][COLOR cyan]%s[/COLOR][/B] desde [COLOR gold]%s[/COLOR] o reproducir desde el principio?' % (title_text, time_str),
+            '¿Reanudar desde [COLOR gold]%s[/COLOR]?' % time_str,
             nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str))
     except Exception:
         return False
@@ -6631,7 +6631,7 @@ def main():
                 # y cancela sin reproducir.
                 _rsel = dialog.select(
                     'Reanudar reproducción',
-                    ['Reanudar %s desde %s' % (t_title, time_str), 'Desde el principio'])
+                    ['Reanudar desde %s' % time_str, 'Desde el principio'])
                 if _rsel == 0:
                     seek_to_time = r_time
                 elif _rsel is None or _rsel < 0:
