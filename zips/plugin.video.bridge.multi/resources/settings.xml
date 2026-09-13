@@ -5,6 +5,9 @@
         <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="0" />
         <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="false" />
         <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="false" />
+        <setting id="links_display_mode" type="enum" label="Mostrar enlaces encontrados en" values="Ventana personalizada|Lista nativa de Kodi (Recomendado)" default="1" />
+        <setting id="live_switch_on_pause" type="enum" label="Al pausar la reproducción" values="Preguntar si desea cambiar de enlace (Recomendado)|Abrir ventana de enlaces directamente|Desactivado" default="0" />
+        <setting id="on_link_fail" type="enum" label="Al fallar la conexión con un enlace" values="Reabrir ventana con enlace marcado (Recomendado)|Desactivado (Cerrar)" default="0" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
         <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="true" />

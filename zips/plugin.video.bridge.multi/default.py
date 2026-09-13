@@ -99,6 +99,38 @@ SEARCH_CACHE_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_search_cache.js
 BOOKMARKS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_bookmarks.json')
 CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
 
+_RAM_SEARCH_CACHE = {}
+
+def _store_ram_search_cache(links, matched_item, meta, engine):
+    global _RAM_SEARCH_CACHE
+    try:
+        _RAM_SEARCH_CACHE = {
+            'links': list(links or []),
+            'matched_item': matched_item,
+            'meta': dict(meta or {}),
+            'engine': engine or 'alfa',
+            'time': time.time(),
+            'tmdb': str((meta or {}).get('tmdb') or ''),
+            'season': str((meta or {}).get('season') or ''),
+            'episode': str((meta or {}).get('episode') or '')
+        }
+    except Exception:
+        pass
+
+def _get_ram_search_cache(target_tmdb='', target_season='', target_episode='', max_age=300):
+    global _RAM_SEARCH_CACHE
+    if not _RAM_SEARCH_CACHE:
+        return None
+    if (time.time() - _RAM_SEARCH_CACHE.get('time', 0)) > max_age:
+        return None
+    if target_tmdb and _RAM_SEARCH_CACHE.get('tmdb') and str(_RAM_SEARCH_CACHE.get('tmdb')) != str(target_tmdb):
+        return None
+    if target_season and str(_RAM_SEARCH_CACHE.get('season')) != str(target_season):
+        return None
+    if target_episode and str(_RAM_SEARCH_CACHE.get('episode')) != str(target_episode):
+        return None
+    return _RAM_SEARCH_CACHE
+
 def _get_media_key(meta, item=None):
     if not meta: meta = {}
     s_val = meta.get('season') if meta.get('season') is not None else _safe_get_item_attr(item, 'season')
@@ -268,32 +300,79 @@ def save_bookmark(media_key, resume_time, total_time, title=""):
         elif resume_time <= 30 and media_key in data:
             del data[media_key]
 
-        with open(BOOKMARKS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        # Escritura atomica (temp + replace): si Kodi mata el script a mitad
+        # (cierre con hilos vivos), el archivo jamas queda corrupto a medias.
+        try:
+            _tmp = BOOKMARKS_FILE + '.tmp'
+            with open(_tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(_tmp, BOOKMARKS_FILE)
+        except Exception:
+            try:
+                with open(BOOKMARKS_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+            except: pass
     except: pass
+_floating_dialog_active = False
+_floating_dialog_lock = threading.Lock()
+_playback_monitor_token = 0
+_playback_monitor_lock = threading.Lock()
+_current_playing_link_index = -1
 
-def start_playback_monitor(media_key, title_str="", seek_to_time=0):
+def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0):
     if not media_key: return
+    global _playback_monitor_token, _current_playing_link_index
+    with _playback_monitor_lock:
+        _playback_monitor_token += 1
+        my_token = _playback_monitor_token
+        _current_playing_link_index = current_link_index
+
     def _monitor_loop():
+        global _floating_dialog_active
         p = xbmc.Player()
         mon = xbmc.Monitor()
-        for _ in range(120):
-            if mon.abortRequested(): return
-            if p.isPlayingVideo(): break
+        xbmc.log("Bridge Multi: monitor de reproducción iniciado para %s (esperando inicio de vídeo)..." % (title_str or media_key), xbmc.LOGINFO)
+
+        # Esperar hasta 180 segundos (3 minutos) a que inicie la reproducción
+        # Esto es vital para torrents (Elementum, Quasar) que tardan en conectar con peers y descargar el pre-buffer
+        video_started = False
+        for _w in range(720):
+            if mon.abortRequested() or my_token != _playback_monitor_token: return
+            if p.isPlayingVideo():
+                video_started = True
+                break
             if mon.waitForAbort(0.25): return
 
-        if not p.isPlayingVideo(): return
+        if not video_started or not p.isPlayingVideo() or my_token != _playback_monitor_token:
+            xbmc.log("Bridge Multi: monitor de reproducción cancelado (tiempo agotado o superado)", xbmc.LOGINFO)
+            return
 
-        if seek_to_time > 10:
-            if mon.waitForAbort(0.6): return
+        xbmc.log("Bridge Multi: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
+
+        if seek_to_time > 2:
+            for _s in range(20):
+                if mon.abortRequested() or my_token != _playback_monitor_token: return
+                if not p.isPlayingVideo(): break
+                try:
+                    if p.getTime() > 0 or p.getTotalTime() > 0:
+                        break
+                except: pass
+                if mon.waitForAbort(0.2): return
             try:
                 xbmc.log("Bridge Multi: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
                 p.seekTime(float(seek_to_time))
-            except: pass
+            except Exception as _ske:
+                xbmc.log("Bridge Multi: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
 
         last_saved_time = 0
         tot_time = 0
+        last_pause_state = False
+        pause_cooldown = time.time() + 2.5
+        active_idx = current_link_index
+
         while p.isPlayingVideo() and not mon.abortRequested():
+            if my_token != _playback_monitor_token:
+                break
             try:
                 cur_time = p.getTime()
                 tot = p.getTotalTime()
@@ -301,13 +380,73 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0):
                 if abs(cur_time - last_saved_time) >= 5:
                     save_bookmark(media_key, cur_time, tot_time, title=title_str)
                     last_saved_time = cur_time
-            except: pass
-            if mon.waitForAbort(3.0): break
+
+                # Detección de pausa en vivo
+                is_paused = bool(xbmc.getCondVisibility("Player.Paused"))
+                pause_setting = str(_bridge_addon.getSetting('live_switch_on_pause') or '').strip().lower()
+
+                if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
+                    now = time.time()
+                    if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active:
+                        xbmc.log("Bridge Multi: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
+                        with _floating_dialog_lock:
+                            _floating_dialog_active = True
+                        try:
+                            c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
+                            if c_links:
+                                open_links = False
+                                if pause_setting == '1':
+                                    open_links = True
+                                else:
+                                    curr_srv = _get_link_server_name(c_links[active_idx]) if active_idx < len(c_links) else ""
+                                    prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, meta=c_meta)
+                                    prompt_dlg.doModal()
+                                    ans = prompt_dlg.selected
+                                    del prompt_dlg
+                                    if ans == 1:
+                                        open_links = True
+                                    else:
+                                        if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
+                                            try: p.pause()
+                                            except: pass
+                                        pause_cooldown = time.time() + 2.0
+
+                                if open_links:
+                                    dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True)
+                                    dlg.doModal()
+                                    chosen_idx = dlg.selected
+                                    del dlg
+                                    if chosen_idx == 'other_engine':
+                                        _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
+                                        xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
+                                        return
+                                    elif isinstance(chosen_idx, int) and chosen_idx >= 0:
+                                        _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng)
+                                        return
+                                    else:
+                                        if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
+                                            try: p.pause()
+                                            except: pass
+                                        pause_cooldown = time.time() + 2.0
+                        except Exception as _de:
+                            xbmc.log(f"Bridge Multi: floating dialog error: {_de}", xbmc.LOGINFO)
+                        finally:
+                            with _floating_dialog_lock:
+                                _floating_dialog_active = False
+
+                last_pause_state = is_paused
+
+            except Exception:
+                pass
+
+            if mon.waitForAbort(0.25): break
 
         if last_saved_time > 0 or tot_time > 0:
             save_bookmark(media_key, last_saved_time, tot_time, title=title_str)
 
-    threading.Thread(target=_monitor_loop, daemon=True).start()
+    _th = threading.Thread(target=_monitor_loop, daemon=False)
+    _th.name = "BridgeMultiPlaybackMonitor"
+    _th.start()
 
 alfa_icon = 'DefaultVideo.png'
 
@@ -1993,6 +2132,13 @@ def _filter_and_sort_links(links):
 
     safe_links = sorted(safe_links, key=_lang_sort_key)
 
+    # PASO 4: Priorizar enlaces confirmados sobre enlaces debiles
+    # Evita que un enlace debil/no confirmado (posible homonimo de otro anio)
+    # se cuele al inicio de la lista o sea reproducido por autoplay por mejor calidad/servidor.
+    try:
+        safe_links = sorted(safe_links, key=lambda it: 1 if getattr(it, 'bridge_weak', False) else 0)
+    except: pass
+
     return safe_links
 
 # ---------------------------------------------------------
@@ -2398,12 +2544,196 @@ def _resolve_localized_metadata(tmdb_id=None, is_series=False, season=None, epis
 _tmdb_titles_cache = {}
 _tmdb_verify_cache = {}
 
+def _notify_scan(channel_id):
+    # Aviso desactivado por peticion del usuario: el chequeo sigue corriendo
+    # en silencio (solo deja rastro en el log, sin ventanas emergentes).
+    try:
+        xbmc.log('Bridge Multi: comprobando año en web real (%s)...' % channel_id, xbmc.LOGINFO)
+    except Exception:
+        pass
+
+def extract_year_from_url(url):
+    """Extrae el año (1900-2039) del slug o ruta de una URL si viene embebido.
+    0ms de latencia, evita peticiones de red innecesarias.
+    Ejemplos: /pelicula/horas-desesperadas-2013 -> 2013
+              /pelicula/37-horas-desesperadas-1990.html -> 1990
+              /serie/the-boys-2019/ -> 2019
+    """
+    if not url:
+        return None
+    try:
+        import re as _re_url
+        m = _re_url.search(r'[-_/](19\d\d|20[0-3]\d)(?:[-_/]|\.html?|$)', str(url))
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+def _detail_year_consistent(url, target_year, channel_id='', item=None):
+    # Comprueba si el candidato coincide con el año objetivo.
+    # True = mantener (coherente o no concluyente). False = descartar.
+    # Ante cualquier duda o fallo devuelve True: nunca quita por error.
+    # Si la web confirma positivamente el año objetivo, marca item._web_year_confirmed = True.
+    try:
+        year_t = int(str(target_year).strip())
+    except Exception:
+        return True
+    if year_t < 1900 or year_t > 2100:
+        return True
+    _u = _safe_str(url or '').strip()
+    if not _u.startswith('http'):
+        return True
+
+    def _mark_confirmed():
+        if item is not None:
+            try:
+                setattr(item, '_web_year_confirmed', True)
+                if hasattr(item, 'infoLabels') and isinstance(getattr(item, 'infoLabels', None), dict):
+                    item.infoLabels['year'] = year_t
+                item.year = year_t
+            except Exception:
+                pass
+
+    # 0. Verificación ultrarrápida (0ms) en la propia URL si incluye el año en el slug
+    try:
+        _url_year = extract_year_from_url(_u)
+        if _url_year:
+            if abs(_url_year - year_t) > 1:
+                try:
+                    xbmc.log("Bridge Multi: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
+                except: pass
+                return False
+            # Coincide con el año objetivo (tolerancia +/- 1)
+            _mark_confirmed()
+            return True
+    except Exception:
+        pass
+
+    _notify_scan(channel_id or 'web')
+    try:
+        import urllib.request as _ureq
+        req = _ureq.Request(_u, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Referer': '/'.join(_u.split('/')[:3]) + '/'})
+        with _ureq.urlopen(req, timeout=6) as resp:
+            # 80KB es suficiente para capturar head, h1, metadatos y JSON-LD sin descargar megabytes
+            html = resp.read(80000).decode('utf-8', errors='ignore')
+    except Exception as _e:
+        try:
+            xbmc.log('Bridge Multi: page-check sin red (%s): %s' % (channel_id, _e), xbmc.LOGINFO)
+        except: pass
+        return True
+    if not html or len(html) < 200:
+        return True
+    try:
+        import re as _re2
+        years_re = r'\b(19\d\d|20[0-3]\d)\b'
+
+        # 1. Encabezados h1 (lo más fiable: título principal de la ficha)
+        h1s = _re2.findall(r'<h1[^>]*>(.*?)</h1>', html, flags=_re2.IGNORECASE | _re2.DOTALL)
+        for _h in h1s:
+            _t = _re2.sub(r'<[^>]+>', ' ', _h)
+            hy = [int(y) for y in _re2.findall(years_re, _t)]
+            if hy:
+                if any(abs(y - year_t) <= 1 for y in hy):
+                    _mark_confirmed()
+                    return True
+                return False
+
+        # 2. Meta tags og:title / twitter:title
+        meta_titles = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:title|twitter:title)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
+        meta_titles += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:title|twitter:title)["\']', html, _re2.I)
+        all_my = []
+        for mt in meta_titles:
+            all_my.extend([int(y) for y in _re2.findall(years_re, mt)])
+        if all_my:
+            if any(abs(y - year_t) <= 1 for y in all_my):
+                _mark_confirmed()
+                return True
+            return False
+
+        # 3. Meta release_date estricto (ignora fechas de subida como uploadDate)
+        meta_dates = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:(?:video:)?release_date|datepublished)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
+        meta_dates += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:(?:video:)?release_date|datepublished)["\']', html, _re2.I)
+        all_md = []
+        for md in meta_dates:
+            all_md.extend([int(y) for y in _re2.findall(years_re, md)])
+        if all_md:
+            if any(abs(y - year_t) <= 1 for y in all_md):
+                _mark_confirmed()
+                return True
+            return False
+
+        # 4. Título de la pestaña (<title>)
+        _mt = _re2.search(r'<title[^>]*>(.*?)</title>', html, flags=_re2.IGNORECASE | _re2.DOTALL)
+        if _mt:
+            _t = _re2.sub(r'<[^>]+>', ' ', _mt.group(1))
+            ty = [int(y) for y in _re2.findall(years_re, _t)]
+            if ty:
+                if any(abs(y - year_t) <= 1 for y in ty):
+                    _mark_confirmed()
+                    return True
+                return False
+
+        # 5. JSON-LD datePublished / releaseDate
+        j_dates = _re2.findall(r'["\'](?:datePublished|releaseDate)["\']\s*:\s*["\']?(19\d\d|20[0-3]\d)', html, _re2.IGNORECASE)
+        if j_dates:
+            jy = [int(y) for y in j_dates]
+            if any(abs(y - year_t) <= 1 for y in jy):
+                _mark_confirmed()
+                return True
+            return False
+
+        # 6. Campos etiquetados explícitos (ej. >Año:</span> 2013 o <span>Estreno</span>: 2013)
+        # Exige '>' antes y ':' para no confundir menús/URLs (como /release-year/2026) con la ficha
+        lbl_m = _re2.search(r'>\s*(?:Año|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b|>\s*(?:Año|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b', html, _re2.IGNORECASE)
+        if lbl_m:
+            ly = int(lbl_m.group(1) or lbl_m.group(2))
+            if abs(ly - year_t) <= 1:
+                _mark_confirmed()
+                return True
+            return False
+
+        # 7. Clase CSS meta estricta (<span class="year">2013</span>)
+        cls_m = _re2.search(r'<[^>]+class=["\'][^"\']*\b(?:year|release)\b[^"\']*["\'][^>]*>\s*\b(19\d\d|20[0-3]\d)\b\s*<', html, _re2.IGNORECASE)
+        if cls_m:
+            cy = int(cls_m.group(1))
+            if abs(cy - year_t) <= 1:
+                _mark_confirmed()
+                return True
+            return False
+
+        # 8. Formato de ficha AresHD y similares: >2026</span>...Año
+        areshd_lbl = _re2.search(r'>\s*\b(19\d\d|20[0-3]\d)\b\s*</span[^>]*>\s*(?:<[^>]+>\s*)*A[ñn]o\b', html, _re2.IGNORECASE)
+        if areshd_lbl:
+            ay = int(areshd_lbl.group(1))
+            if abs(ay - year_t) <= 1:
+                _mark_confirmed()
+                return True
+            return False
+
+        # 9. Resto de la página: si sale el objetivo (o +/- 1), bien;
+        # si sale un único año distinto repetido (>=3 veces), es otra obra.
+        # si hay varios o ninguno, ambiguo (mantener).
+        _all = [int(y) for y in _re2.findall(years_re, html)]
+        if not _all:
+            return True
+        if any(abs(y - year_t) <= 1 for y in _all):
+            return True
+        _uniq = set(_all)
+        if len(_uniq) == 1 and len(_all) >= 3:
+            return False
+        return True
+    except Exception:
+        return True
+
 def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False):
     """Confirma contra la API de TMDb que un candidato debil (match solo por
     titulo, sin IDs ni anio) es realmente el contenido buscado.
     Devuelve True si el primer resultado de busqueda coincide con target_tmdb
-    (o con target_year si no hay tmdb objetivo). Cache de sesion, 1 llamada
-    como maximo por candidato, timeout 4s. Nunca lanza excepciones."""
+    SIN forzar &year= (evita sesgo circular) y sin homonimos con distinto anio.
+    Cache de sesion, 1 llamada como maximo por candidato, timeout 4s. Nunca lanza excepciones."""
     try:
         t = _safe_str(title_check).strip()
         if not t or not target_tmdb:
@@ -2418,16 +2748,30 @@ def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=Fals
             import json as _json
             import urllib.request as _ureq
             q = uparse.quote(t)
+            # Busqueda abierta sin forzar anio para no enmascarar homonimos de otros anios
             url = f"https://api.themoviedb.org/3/search/{kind}?api_key={api_key}&query={q}&language=es-MX&page=1&include_adult=false"
-            if not is_series and target_year and str(target_year).isdigit():
-                url += f"&year={int(target_year)}"
             with _ureq.urlopen(url, timeout=4) as resp:
                 data = _json.loads(resp.read().decode('utf-8', errors='ignore'))
             results = data.get('results', []) if isinstance(data, dict) else []
             if results and isinstance(results[0], dict):
                 top_id = str(results[0].get('id', ''))
                 if top_id and top_id == str(target_tmdb):
-                    ok = True
+                    # Comprobar si existen homonimos con el mismo titulo pero distinto año
+                    homonyms = False
+                    t_clean = t.lower()
+                    target_y = int(str(target_year).strip()) if target_year and str(target_year).isdigit() else 0
+                    for r in results[1:6]:
+                        if not isinstance(r, dict): continue
+                        rt = (r.get('title') or r.get('name') or '').strip().lower()
+                        rot = (r.get('original_title') or r.get('original_name') or '').strip().lower()
+                        ry_str = (r.get('release_date') or r.get('first_air_date') or '')[:4]
+                        if (rt == t_clean or rot == t_clean) and ry_str.isdigit():
+                            ry = int(ry_str)
+                            if target_y and abs(ry - target_y) > 1:
+                                homonyms = True
+                                break
+                    if not homonyms:
+                        ok = True
         except Exception:
             ok = False
         try:
@@ -2804,15 +3148,35 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
         candidates.sort(key=lambda c: c[0], reverse=True)
 
         for score, it, title_check in candidates:
-            # Confianza del match (solo pelis): sin TMDb/IMDb ni año no se puede
-            # distinguir homonimos (ej. Buddy 1997 vs Buddy 2026). No rechaza,
-            # solo marca para ordenar/avisar.
+            # Confianza del match (pelis y series): sin TMDb/IMDb ni año no se puede
+            # distinguir homonimos (ej. Horas desesperadas 1990 vs 2013, o series homónimas).
             try:
-                _w_weak = (not is_series and not _get_item_tmdb(it) and not _get_item_imdb(it)
+                _w_weak = (not _get_item_tmdb(it) and not _get_item_imdb(it)
                            and not _get_item_year(it, title_check))
             except Exception:
                 _w_weak = False
             xbmc.log("Bridge Multi: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)%s" % (channel_id, score, title_check, cur_term, target_year, target_tmdb, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
+            # Chequeo de pagina real: si el match es debil y conocemos el año,
+            # se verifica el año que muestra la web (con aviso). Si la web
+            # muestra otro año, se salta este candidato (sin tocar el canal).
+            if _w_weak and target_year:
+                try:
+                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it):
+                        xbmc.log("Bridge Multi: %s '%s' descartado: la web muestra otro año" % (channel_id, title_check), xbmc.LOGINFO)
+                        continue
+                    if getattr(it, '_web_year_confirmed', False):
+                        _w_weak = False
+                        if target_tmdb:
+                            try:
+                                if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                    it.infoLabels = {}
+                                it.infoLabels['tmdb_id'] = str(target_tmdb)
+                                it.infoLabels['tmdb'] = str(target_tmdb)
+                                it.tmdb_id = str(target_tmdb)
+                            except: pass
+                        xbmc.log("Bridge Multi [Alfa]: %s año confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year), xbmc.LOGINFO)
+                except Exception:
+                    pass
             if is_series and hasattr(canal, 'episodios'):
                 try:
                     if target_tmdb:
@@ -2843,6 +3207,10 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                     for l in valid:
                                         l.channel = channel_id
                                         l.bridge_engine = 'alfa'
+                                        try:
+                                            l.bridge_score = int(score)
+                                            l.bridge_weak = bool(_w_weak)
+                                        except: pass
                                     xbmc.log("Bridge Multi: %s OK serie %dx%d %d enlaces" % (channel_id, ep_season, ep_episode, len(valid)), xbmc.LOGINFO)
                                     return ep, valid
                                 else:
@@ -2863,8 +3231,8 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                             # Inyeccion TMDb en vivo: si el match es debil, se
                             # confirma contra la API y se inyecta el tmdb
                             # correcto al item (solo memoria, sin tocar disco).
-                            _w_conf = False
-                            if _w_weak:
+                            _w_conf = bool(getattr(it, '_web_year_confirmed', False))
+                            if _w_weak and not _w_conf:
                                 try:
                                     _w_conf = _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False)
                                     if _w_conf:
@@ -3154,11 +3522,32 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
 
         for score, it, title_check in candidates:
             try:
-                _w_weak = (not is_series and not _get_item_tmdb(it) and not _get_item_imdb(it)
+                _w_weak = (not _get_item_tmdb(it) and not _get_item_imdb(it)
                            and not _get_item_year(it, title_check))
             except Exception:
                 _w_weak = False
             xbmc.log("Bridge Multi [Balandro]: %s MATCH (score=%d) '%s' para term '%s'%s" % (channel_id, score, title_check, cur_term, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
+            # Chequeo de pagina real: si el match es debil y conocemos el año,
+            # se verifica el año que muestra la web (con aviso). Si la web
+            # muestra otro año, se salta este candidato (sin tocar el canal).
+            if _w_weak and target_year:
+                try:
+                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it):
+                        xbmc.log("Bridge Multi [Balandro]: %s '%s' descartado: la web muestra otro año" % (channel_id, title_check), xbmc.LOGINFO)
+                        continue
+                    if getattr(it, '_web_year_confirmed', False):
+                        _w_weak = False
+                        if target_tmdb:
+                            try:
+                                if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                    it.infoLabels = {}
+                                it.infoLabels['tmdb_id'] = str(target_tmdb)
+                                it.infoLabels['tmdb'] = str(target_tmdb)
+                                it.tmdb_id = str(target_tmdb)
+                            except: pass
+                        xbmc.log("Bridge Multi [Balandro]: %s año confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year), xbmc.LOGINFO)
+                except Exception:
+                    pass
             if is_series:
                 _target_s = int(s_num or 1)
                 _target_e = int(e_num or 1)
@@ -3188,7 +3577,13 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                             if _lk and isinstance(_lk, list):
                                 valid = [l for l in _lk if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                                 if valid:
-                                    for l in valid: l.channel = channel_id; l.bridge_engine = 'balandro'
+                                    for l in valid:
+                                        l.channel = channel_id
+                                        l.bridge_engine = 'balandro'
+                                        try:
+                                            l.bridge_score = int(score)
+                                            l.bridge_weak = bool(_w_weak)
+                                        except: pass
                                     _all_valid.extend(valid)
                                     if _any_ep is None:
                                         _any_ep = ep
@@ -3288,8 +3683,8 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                             # Inyeccion TMDb en vivo: si el match es debil, se
                             # confirma contra la API y se inyecta el tmdb
                             # correcto al item (solo memoria, sin tocar disco).
-                            _w_conf = False
-                            if _w_weak:
+                            _w_conf = bool(getattr(it, '_web_year_confirmed', False))
+                            if _w_weak and not _w_conf:
                                 try:
                                     _w_conf = _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False)
                                     if _w_conf:
@@ -3697,14 +4092,18 @@ def sync_tmdbhelper_playerstring(meta=None):
         return
 
     try:
+        try: _int_tmdb = int(t_id)
+        except: _int_tmdb = t_id
+
         p_dict = {
             'tmdb_type': 'episode' if is_series else 'movie',
-            'tmdb_id': t_id,
+            'tmdb_id': _int_tmdb if _int_tmdb else t_id,
         }
         if i_id:
             p_dict['imdb_id'] = i_id
         if tv_id:
-            p_dict['tvdb_id'] = tv_id
+            try: p_dict['tvdb_id'] = int(tv_id)
+            except: p_dict['tvdb_id'] = tv_id
         if is_series:
             try: p_dict['season'] = int(s_val)
             except: p_dict['season'] = str(s_val)
@@ -3817,6 +4216,8 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
         try: listitem.setUniqueIDs(unique_dict, 'tmdb' if tmdb_id else 'imdb')
         except: pass
     legacy_info = dict(info)
+    for bad_key in ('trakt', 'trakt_id', 'poster', 'tmdb', 'tvshow.tmdb', 'tvshow.imdb', 'tvshow.tvdb'):
+        legacy_info.pop(bad_key, None)
     if 'mediatype' not in legacy_info:
         legacy_info['mediatype'] = media_type
     if title_val and 'title' not in legacy_info:
@@ -3915,8 +4316,11 @@ def _apply_saved_view_mode():
         return
 
     def _apply_delayed():
+        _mon2 = xbmc.Monitor()
         for delay in (50, 150, 300, 600, 1000):
             xbmc.sleep(delay)
+            if _mon2.abortRequested():
+                return
             try:
                 # Si el usuario ya salio de nuestra lista (ej. volvio a
                 # TMDb Helper), no tocar la vista del otro contenedor.
@@ -3943,8 +4347,11 @@ def _apply_saved_view_mode():
 def _start_view_mode_monitor():
     """Hilo en segundo plano que detecta en tiempo real si el usuario cambia de vista para recordarla siempre."""
     def _monitor():
+        mon = xbmc.Monitor()
         # Esperar a que la ventana de enlaces cargue en pantalla
         for _ in range(15):
+            if mon.abortRequested():
+                return
             xbmc.sleep(200)
             if xbmc.getCondVisibility("Window.IsVisible(10025)"):
                 break
@@ -3953,6 +4360,8 @@ def _start_view_mode_monitor():
 
         # Monitorear activamente mientras el usuario navegue en la ventana de enlaces (hasta 3 minutos)
         for _ in range(360):
+            if mon.abortRequested():
+                return
             xbmc.sleep(500)
             try:
                 if not xbmc.getCondVisibility("Window.IsVisible(10025)"):
@@ -4000,60 +4409,90 @@ def show_links_as_directory():
     matched_item = None
     meta = {}
     engine = 'alfa'
-    try:
-        _req_tmdb = get_param('tmdb') or tmdb_id or ''
-        _req_s = get_param('season') or season
-        _req_e = get_param('episode') or episode
+
+    _req_tmdb = get_param('tmdb') or tmdb_id or ''
+    _req_s = get_param('season') or season
+    _req_e = get_param('episode') or episode
+
+    # 1. Acceso instantáneo a caché en RAM (0ms disk lag)
+    ram_hit = _get_ram_search_cache(_req_tmdb, _req_s, _req_e)
+    if ram_hit:
+        links = list(ram_hit.get('links', []))
+        matched_item = ram_hit.get('matched_item')
+        meta = dict(ram_hit.get('meta', {}))
+        engine = ram_hit.get('engine', 'alfa') or 'alfa'
+        xbmc.log("Bridge Multi: show_links_as_directory usando RAM cache directa (0ms disk)", xbmc.LOGINFO)
+    else:
+        # Fallback a disco si la RAM fue purgada (1 sola lectura)
         if os.path.exists(SEARCH_CACHE_FILE):
-            with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as _f:
-                _c2 = json.load(_f)
-                _c2_meta = _c2.get('meta', {}) or {}
-                _c2_s = _c2_meta.get('season')
-                _c2_e = _c2_meta.get('episode')
-                _cached_tmdb2 = str(_c2_meta.get('tmdb') or '')
-                if _cached_tmdb2 and _req_tmdb and _cached_tmdb2 != str(_req_tmdb):
-                    xbmc.log(f"Bridge Multi: cache tmdb {_cached_tmdb2} != pedido {_req_tmdb}", xbmc.LOGWARNING)
-                if _req_s and _req_e and (_c2_s is not None) and (_c2_e is not None):
-                    try:
-                        if int(_c2_s) != int(_req_s) or int(_c2_e) != int(_req_e):
-                            xbmc.log(f"Bridge Multi: cache episode S{_c2_s}E{_c2_e} != pedido S{_req_s}E{_req_e}", xbmc.LOGWARNING)
-                    except: pass
-    except Exception as e:
-        xbmc.log(f"Bridge Multi: check cache tmdb error: {e}", xbmc.LOGINFO)
-    if os.path.exists(SEARCH_CACHE_FILE):
-        try:
-            with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f: cache = json.load(f)
-            engine = cache.get('engine', 'alfa')
-            # Clases resueltas una sola vez (no una por enlace)
-            _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
-            if _d_mods:
-                _d_Item, _d_Info = _d_mods['Item'], _d_mods['InfoLabels']
-                links = [_deserialize_item_fast(_d_Item, _d_Info, lnk) for lnk in cache.get('links', [])]
-                matched_item = _deserialize_item_fast(_d_Item, _d_Info, cache.get('item'))
-            else:
-                links = [_deserialize_item(lnk, engine) for lnk in cache.get('links', [])]
-                matched_item = _deserialize_item(cache.get('item'), engine)
-            meta = cache.get('meta', {})
-        except: pass
+            try:
+                with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                engine = cache.get('engine', 'alfa') or 'alfa'
+                _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+                if _d_mods:
+                    _d_Item, _d_Info = _d_mods['Item'], _d_mods['InfoLabels']
+                    links = [_deserialize_item_fast(_d_Item, _d_Info, lnk) for lnk in cache.get('links', [])]
+                    matched_item = _deserialize_item_fast(_d_Item, _d_Info, cache.get('item'))
+                else:
+                    links = [_deserialize_item(lnk, engine) for lnk in cache.get('links', [])]
+                    matched_item = _deserialize_item(cache.get('item'), engine)
+                meta = cache.get('meta', {}) or {}
+                _store_ram_search_cache(links, matched_item, meta, engine)
+            except Exception as e:
+                xbmc.log(f"Bridge Multi: disk cache read error: {e}", xbmc.LOGINFO)
 
     if not links:
-        xbmcgui.Dialog().notification('Bridge Multi', 'No hay enlaces en cache', '', 3000)
+        xbmcgui.Dialog().notification('Bridge Multi', 'No hay enlaces en caché', '', 3000)
         xbmcplugin.endOfDirectory(handle, succeeded=False)
         return
 
-    # Datos para menu contextual de cada enlace
-    _other_engine = 'balandro' if engine == 'alfa' else 'alfa'
-    _other_name   = 'Balandro' if engine == 'alfa' else 'Alfa'
-    _rs_url  = 'plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s' % _other_engine
-    _v_url   = 'plugin://plugin.video.bridge.multi/?action=verify_links'
+    # Limitar enlaces según ajuste del usuario (Recomendado: 40)
+    _max_list = _get_int_setting('max_links_list', 40)
+    if _max_list < 5: _max_list = 5
+    if len(links) > _max_list:
+        xbmc.log(f"Bridge Multi: truncando de {len(links)} a {_max_list} enlaces (ajuste max_links_list)", xbmc.LOGINFO)
+        links = links[:_max_list]
 
-    verified_only = meta.get('verified_only', False)
-    # Se acumula todo y se envia a Kodi en una sola llamada (mucho mas rapido
-    # con muchos enlaces que un addDirectoryItem por enlace).
-    _dir_listing = []
+    # 2. Plantilla compartida de metadatos y arte (calculada 1 sola vez fuera del bucle)
+    poster_val = meta.get('poster') or meta.get('thumbnail') or getattr(matched_item, 'thumbnail', '') or alfa_icon
+    fanart_val = meta.get('fanart') or getattr(matched_item, 'fanart', '') or ''
+    thumb_val = meta.get('thumbnail') or meta.get('poster') or getattr(matched_item, 'thumbnail', '') or alfa_icon
+    if len(_safe_str(thumb_val)) > 1000: thumb_val = alfa_icon
+    if len(_safe_str(poster_val)) > 1000: poster_val = alfa_icon
+    if len(_safe_str(fanart_val)) > 1000: fanart_val = ''
 
+    base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
+
+    plot_text = _safe_str(meta.get('plot') or getattr(matched_item, 'plot', '') or '')[:2000]
+    tagline_text = _safe_str(meta.get('tagline') or '')
+
+    tmdb_val = meta.get('tmdb') or getattr(matched_item, 'tmdb', '') or ''
+    imdb_val = meta.get('imdb') or getattr(matched_item, 'imdb', '') or ''
+    tvdb_val = meta.get('tvdb') or getattr(matched_item, 'tvdb', '') or ''
+    showname_val = _safe_str(meta.get('showname') or getattr(matched_item, 'showname', '') or '')
+    year_val = meta.get('year') or meta.get('showyear') or getattr(matched_item, 'year', None)
+    try: year_int = int(year_val) if year_val else None
+    except: year_int = None
+
+    s_int = int(meta.get('season')) if meta.get('season') and str(meta.get('season')).isdigit() else None
+    e_int = int(meta.get('episode')) if meta.get('episode') and str(meta.get('episode')).isdigit() else None
+    is_s = bool(s_int is not None and e_int is not None)
+    media_type = 'episode' if is_s else 'movie'
+
+    base_unique = {}
+    if tmdb_val:
+        base_unique['tmdb'] = str(tmdb_val)
+        if is_s: base_unique['tvshow.tmdb'] = str(tmdb_val)
+    if imdb_val:
+        base_unique['imdb'] = str(imdb_val)
+        if is_s: base_unique['tvshow.imdb'] = str(imdb_val)
+    if tvdb_val:
+        base_unique['tvdb'] = str(tvdb_val)
+        if is_s: base_unique['tvshow.tvdb'] = str(tvdb_val)
+
+    # Marcador de reanudación
     media_key_main = _get_media_key(meta, matched_item)
-    is_s = bool(meta.get('season') and meta.get('episode'))
     saved_bm = get_bookmark(media_key_main, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
     bm_str = ''
     if saved_bm:
@@ -4061,94 +4500,80 @@ def show_links_as_directory():
         m_mins = int(r_sec // 60); m_secs = int(r_sec % 60); m_hrs = m_mins // 60; m_mins = m_mins % 60
         bm_str = (' [COLOR orange][Reanudar: %d:%02d:%02d][/COLOR]' % (m_hrs, m_mins, m_secs)) if m_hrs else (' [COLOR orange][Reanudar: %d:%02d][/COLOR]' % (m_mins, m_secs))
 
-    # Limitar enlaces según ajuste del usuario (Recomendado: 40) para evitar
-    # crash o lentitud en equipos modestos (Celeron) y filtrar URLs larguísimas
-    _max_list = _get_int_setting('max_links_list', 40)
-    if _max_list < 5: _max_list = 5
-    if len(links) > _max_list:
-        xbmc.log(f"Bridge Multi: truncando de {len(links)} a {_max_list} enlaces (ajuste max_links_list)", xbmc.LOGINFO)
-        links = links[:_max_list]
+    # Menú contextual pre-armado
+    _other_engine = 'balandro' if engine == 'alfa' else 'alfa'
+    _other_name   = 'Balandro' if engine == 'alfa' else 'Alfa'
+    _rs_url  = 'plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s' % _other_engine
+    _v_url   = 'plugin://plugin.video.bridge.multi/?action=verify_links'
+    verified_only = meta.get('verified_only', False)
+
+    base_ctx_items = []
+    if not (is_s and _other_engine == 'alfa'):
+        base_ctx_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % _other_name, 'RunPlugin(%s)' % _rs_url))
+    if not verified_only:
+        base_ctx_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'RunPlugin(%s)' % _v_url))
+
+    # 3. Construcción ultra-rápida de ListItems
+    _dir_listing = []
     for idx, lnk in enumerate(links):
         try:
-            # Filtrar URLs absurdamente largas que pueden crashear Kodi (ej. mitorrent 1963 chars)
             _url = _safe_str(getattr(lnk, 'url', ''))
             if len(_url) > 1500:
-                xbmc.log(f"Bridge Multi: skip link idx {idx} url muy larga {len(_url)} {getattr(lnk, 'channel','')}", xbmc.LOGINFO)
                 continue
             srv = _get_link_server_name(lnk)
             lang = _format_language(lnk)
             qual = _format_quality(lnk)
             ch = _format_channel(lnk)
-            # Marca de confianza: match solo por titulo, sin anio ni IDs, puede
-            # ser un homonimo de otro anio (ej. Buddy 1997 vs Buddy 2026).
-            _weak_str = ' [COLOR orange][sin confirmar][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
+            _weak_str = ' [COLOR orange][?][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
 
-            lbl = '[B][COLOR deepskyblue]%s[/COLOR][/B] | [COLOR lime]%s[/COLOR] | [COLOR gold]%s[/COLOR] | [COLOR grey](%s)[/COLOR]%s%s' % (srv, lang, qual, ch, _weak_str, bm_str)
+            is_tor = (srv.strip().lower() == 'torrent' or _is_torrent_link(lnk))
+            if is_tor:
+                srv_tag = '[B][COLOR cyan]TORRENT[/COLOR][/B]'
+                if srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', ''):
+                    srv_tag += '  [B][COLOR deepskyblue]%s[/COLOR][/B]' % srv
+            else:
+                srv_tag = '[B][COLOR deepskyblue]%s[/COLOR][/B]' % (srv or 'Directo')
+
+            mid_parts = []
+            if lang: mid_parts.append('[COLOR lime]%s[/COLOR]' % lang)
+            if qual and qual != 'N/A': mid_parts.append('[COLOR gold]%s[/COLOR]' % qual)
+            mid = ' | '.join(mid_parts)
+            if mid:
+                lbl = '%s | %s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, mid, ch, _weak_str, bm_str)
+            else:
+                lbl = '%s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, ch, _weak_str, bm_str)
+
             play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s' % (idx, engine)
             li = xbmcgui.ListItem(label=lbl)
             li.setPath(play_url)
-            poster = meta.get('poster') or meta.get('thumbnail') or getattr(matched_item, 'thumbnail', '') or alfa_icon
-            fanart = meta.get('fanart') or getattr(matched_item, 'fanart', '') or ''
-            thumb = meta.get('thumbnail') or meta.get('poster') or getattr(lnk, 'thumbnail', '') or getattr(matched_item, 'thumbnail', '') or alfa_icon
-            if thumb and len(_safe_str(thumb)) > 1000:
-                thumb = alfa_icon
-            if poster and len(_safe_str(poster)) > 1000:
-                poster = alfa_icon
-            if fanart and len(_safe_str(fanart)) > 1000:
-                fanart = ''
-            try:
-                li.setArt({'thumb': thumb, 'icon': thumb, 'poster': poster, 'fanart': fanart})
-            except:
-                try: li.setArt({'thumb': alfa_icon, 'icon': alfa_icon})
-                except: pass
-            plot_text = meta.get('plot') or _safe_str(getattr(matched_item, 'plot', '') or '')
-            info = {'title': lbl, 'plot': _safe_str(plot_text)[:2000], 'mediatype': 'video'}
-            if meta.get('tagline'):
-                info['tagline'] = meta['tagline']
-            try:
-                # skip_art=True: el arte ya se fijo arriba con setArt (evita
-                # fijarlo dos veces por enlace). El titulo ya lo fija
-                # set_listitem_info via VideoInfoTag, no se repite abajo.
-                set_listitem_info(li, info, meta, skip_art=True)
-            except Exception as e:
-                xbmc.log(f"Bridge Multi: set_listitem_info error idx {idx}: {e}", xbmc.LOGINFO)
-
-            # Reforzar de forma explícita e inequívoca el título y etiqueta del enlace
+            li.setArt(base_art)
             li.setLabel(lbl)
             li.setLabel2(ch)
             li.setProperty('title', lbl)
-
-            # Menu contextual (boton C o clic largo): acciones sin ocupar espacio en la lista
-            _ctx_items = []
-            # Alfa es solo peliculas: jamas ofrecerlo en contenido de series.
-            # Se detecta por meta Y por los propios enlaces, por si la meta
-            # viene sin temporada/episodio.
-            try:
-                _is_series_list = is_s or any(
-                    _safe_str(getattr(_lnk, 'contentType', '')).lower() == 'episode'
-                    for _lnk in links)
-            except Exception:
-                _is_series_list = is_s
-            if not (_is_series_list and _other_engine == 'alfa'):
-                _ctx_items.append(
-                    ('[COLOR orange]Buscar con %s[/COLOR]' % _other_name,
-                     'RunPlugin(%s)' % _rs_url)
-                )
-            if not verified_only:
-                _ctx_items.append(
-                    ('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]',
-                     'RunPlugin(%s)' % _v_url)
-                )
-            li.addContextMenuItems(_ctx_items)
-
             li.setProperty('IsPlayable', 'false')
-            _dir_listing.append((play_url, li, False))
-        except Exception as e:
-            xbmc.log(f"Bridge Multi: show_links skip idx {idx} error: {e}", xbmc.LOGINFO)
-            import traceback
-            xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
-            continue
+            if base_ctx_items:
+                li.addContextMenuItems(base_ctx_items)
 
+            try:
+                vt = li.getVideoInfoTag()
+                if vt:
+                    vt.setTitle(lbl)
+                    vt.setMediaType(media_type)
+                    if plot_text: vt.setPlot(plot_text)
+                    if year_int: vt.setYear(year_int)
+                    if tagline_text: vt.setTagLine(tagline_text)
+                    if is_s:
+                        if showname_val: vt.setTvShowTitle(showname_val)
+                        if s_int is not None: vt.setSeason(s_int)
+                        if e_int is not None: vt.setEpisode(e_int)
+                    if base_unique:
+                        vt.setUniqueIDs(base_unique, 'tmdb' if tmdb_val else 'imdb')
+            except Exception:
+                pass
+
+            _dir_listing.append((play_url, li, False))
+        except Exception:
+            continue
 
     if _dir_listing:
         try:
@@ -4157,8 +4582,9 @@ def show_links_as_directory():
             for _u, _li, _f in _dir_listing:
                 try: xbmcplugin.addDirectoryItem(handle, _u, _li, _f)
                 except: pass
+
     xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
-    xbmcplugin.setContent(handle, 'movies')
+    xbmcplugin.setContent(handle, 'episodes' if is_s else 'movies')
     _apply_saved_view_mode()
     xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
     _apply_saved_view_mode()
@@ -4520,7 +4946,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _sk = seek_to_time
             else:
                 _sk = 0
-            start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk)
+            start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk, current_link_index=idx)
         except Exception as _se:
             xbmc.log('Bridge Multi autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
         _monitor_started = True
@@ -4592,7 +5018,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 xbmc.log('Bridge Multi autoplay: ver enlaces → abriendo list_links', xbmc.LOGINFO)
                 xbmc.executebuiltin('Dialog.Close(all,true)')
                 xbmc.sleep(200)
-                xbmc.executebuiltin('ActivateWindow(10025,"%s",return)' % _lu)
+                _open_links_view(_lu)
             return False
 
         if link_failed:
@@ -4634,7 +5060,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 xbmc.log('Bridge Multi autoplay: enlaces agotados → abriendo list_links', xbmc.LOGINFO)
             xbmc.executebuiltin('Dialog.Close(all,true)')
             xbmc.sleep(200)
-            xbmc.executebuiltin('ActivateWindow(10025,"%s",return)' % _lu)
+            _open_links_view(_lu)
         else:
             xbmcgui.Dialog().notification(
                 'Bridge Multi',
@@ -5066,6 +5492,7 @@ def verify_and_filter_links():
     verified_links = _filter_and_sort_links(verified_links)
     meta['verified_only'] = True
     try:
+        _store_ram_search_cache(verified_links, matched_item, meta, engine)
         with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump({'item': _serialize_item(matched_item), 'links': [_serialize_item(l) for l in verified_links], 'meta': meta, 'engine': engine}, f)
     except: pass
@@ -6482,6 +6909,1167 @@ def _show_autoplay_stop_dialog(server_label):
 
 
 # ---------------------------------------------------------
+# Custom Pause Prompt Dialog & Floating Links Dialog
+# ---------------------------------------------------------
+
+class _PausePromptDialog(xbmcgui.WindowDialog):
+    ACTION_MOVE_LEFT   = 1
+    ACTION_MOVE_RIGHT  = 2
+    ACTION_SELECT_ITEM = 7
+    ACTION_PREVIOUS_MENU = 10
+    ACTION_PAUSE       = 12
+    ACTION_PLAY        = 68
+    ACTION_PLAYER_PLAY = 79
+    ACTION_NAV_BACK    = 92
+    ACTION_MOUSE_LEFT_CLICK = 100
+    ACTION_MOUSE_MOVE       = 107
+
+    def __init__(self, current_server_name="", meta=None):
+        super().__init__()
+        self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, -1=Cerrar/Atrás
+        self.current = 0    # 0=No (continuar) por defecto a la izquierda
+        self.server_name = current_server_name or "Actual"
+        self.meta = meta or {}
+        self._btn_ids = []
+        self._highlights = []
+        try:
+            self._build()
+        except Exception as e:
+            xbmc.log('BridgeMulti PausePromptDialog build error: ' + str(e), xbmc.LOGWARNING)
+
+    def _white(self):
+        return _AutoplayStopDialog._bg_texture() or _EnginePickerDialog._white()
+
+    def _build(self):
+        W = self.getWidth() or 1920
+        H = self.getHeight() or 1080
+        dw, dh = 580, 240
+        dx = (W - dw) // 2
+        dy = (H - dh) // 2
+        border = 3
+        GOLD = '0xFFCFA82C'
+        white = self._white()
+
+        # Borde dorado exterior
+        self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
+        # Fondo oscuro interior
+        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='0xF20A0A0A'))
+
+        # Título
+        self.addControl(xbmcgui.ControlLabel(
+            dx+24, dy+16, dw-48, 30,
+            '[B][COLOR #CFA82C]BRIDGE MULTI[/COLOR][/B]  [COLOR #E0E0E0]—  Reproducción Pausada[/COLOR]',
+            font='font13'))
+
+        # Separador dorado
+        self.addControl(xbmcgui.ControlImage(dx+20, dy+50, dw-40, 2, white, colorDiffuse='0x55CFA82C'))
+
+        # Pregunta principal
+        self.addControl(xbmcgui.ControlLabel(
+            dx+24, dy+66, dw-48, 28,
+            '[B][COLOR #FFFFFF]¿Deseas cambiar de enlace o servidor?[/COLOR][/B]',
+            font='font13', alignment=6))
+
+        # Detalle de servidor en reproducción
+        srv_name_clean = self.server_name.strip()
+        if srv_name_clean.lower() in ('torrent', 'magnet'):
+            srv_str = '[COLOR #888888]En reproducción:[/COLOR] [B][COLOR cyan]TORRENT[/COLOR][/B]'
+        else:
+            srv_str = '[COLOR #888888]En reproducción:[/COLOR] [B][COLOR #CFA82C]%s[/COLOR][/B]' % srv_name_clean
+        self.addControl(xbmcgui.ControlLabel(
+            dx+24, dy+100, dw-48, 24, srv_str, font='font12', alignment=6))
+
+        # Dos botones: [ No, continuar ]  [ Abrir enlaces ]
+        bw, bh = 220, 42
+        gap = 24
+        total_w = bw * 2 + gap
+        bx = dx + (dw - total_w) // 2
+        by = dy + dh - 64
+
+        labels = ('No, continuar', 'Abrir enlaces')
+        for i, lbl in enumerate(labels):
+            btn_x = bx + i * (bw + gap)
+            btn = xbmcgui.ControlButton(
+                btn_x, by, bw, bh, lbl, '', '',
+                font='font13', textColor='0xFFFFFFFF', focusedColor=GOLD, alignment=6)
+            self.addControl(btn)
+            self._btn_ids.append(btn.getId())
+
+            m, t = 4, 2
+            # Marco dorado tenue permanente
+            for _bx, _by, _bw, _bh in (
+                    (btn_x-m, by-m, bw+m*2, t),
+                    (btn_x-m, by+bh+m-t, bw+m*2, t),
+                    (btn_x-m, by-m, t, bh+m*2),
+                    (btn_x+bw+m-t, by-m, t, bh+m*2)):
+                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='0xFF66551A'))
+
+            # Resaltado brillante cuando tiene foco
+            hl = [
+                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='0x33CFA82C'),
+                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, t+1, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(btn_x-m, by+bh+m-t-1, bw+m*2, t+1, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(btn_x-m, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(btn_x+bw+m-t-1, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
+            ]
+            for c in hl: self.addControl(c)
+            self._highlights.append(hl)
+
+        # Ayuda en pie de página
+        self.addControl(xbmcgui.ControlLabel(
+            dx, dy+dh-22, dw, 18,
+            '[COLOR=666666][← →] Elegir    [OK] Confirmar    [Atrás] Continuar[/COLOR]',
+            font='font11', alignment=6))
+
+        self._update_highlight()
+        try:
+            self.setFocus(self.getControl(self._btn_ids[0]))
+        except Exception:
+            pass
+
+    def _update_highlight(self):
+        for i, hl in enumerate(self._highlights):
+            for c in hl:
+                try: c.setVisible(i == self.current)
+                except: pass
+
+    def onAction(self, action):
+        aid = action.getId()
+
+        # Detección de movimiento de cursor (Hover)
+        try:
+            fid = self.getFocusId()
+            if fid in self._btn_ids:
+                idx = self._btn_ids.index(fid)
+                if idx != self.current:
+                    self.current = idx
+                    self._update_highlight()
+        except Exception:
+            pass
+
+        if aid in (self.ACTION_PREVIOUS_MENU, self.ACTION_NAV_BACK, self.ACTION_PAUSE, self.ACTION_PLAYER_PLAY, self.ACTION_PLAY):
+            self.selected = -1
+            self.close()
+        elif aid == self.ACTION_MOVE_LEFT:
+            self.current = 0
+            self._update_highlight()
+            try: self.setFocus(self.getControl(self._btn_ids[0]))
+            except: pass
+        elif aid == self.ACTION_MOVE_RIGHT:
+            self.current = 1
+            self._update_highlight()
+            try: self.setFocus(self.getControl(self._btn_ids[1]))
+            except: pass
+        elif aid == self.ACTION_SELECT_ITEM:
+            self.selected = self.current
+            self.close()
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, 100, 103):
+            try: fid = self.getFocusId()
+            except: fid = -1
+            if fid in self._btn_ids:
+                self.selected = self._btn_ids.index(fid)
+            else:
+                self.selected = self.current
+            self.close()
+
+    def onClick(self, control_id):
+        if control_id in self._btn_ids:
+            self.selected = self._btn_ids.index(control_id)
+        else:
+            self.selected = self.current
+        self.close()
+
+
+class _FloatingLinksDialog(xbmcgui.WindowDialog):
+    ACTION_MOVE_LEFT          = 1
+    ACTION_MOVE_RIGHT         = 2
+    ACTION_MOVE_UP            = 3
+    ACTION_MOVE_DOWN          = 4
+    ACTION_PAGE_UP            = 5
+    ACTION_PAGE_DOWN          = 6
+    ACTION_SELECT_ITEM        = 7
+    ACTION_PREVIOUS_MENU      = 10
+    ACTION_SHOW_INFO          = 11
+    ACTION_PAUSE              = 12
+    ACTION_STOP               = 13
+    ACTION_PLAY               = 68
+    ACTION_PLAYER_PLAY        = 79
+    ACTION_NAV_BACK           = 92
+    ACTION_MOUSE_LEFT_CLICK   = 100
+    ACTION_MOUSE_DOUBLE_CLICK = 103
+    ACTION_MOUSE_WHEEL_UP     = 104
+    ACTION_MOUSE_WHEEL_DOWN   = 105
+    ACTION_MOUSE_MOVE         = 107
+    ACTION_BACKSPACE          = 110
+    ACTION_CONTEXT_MENU       = 117
+
+    def __init__(self, links, current_index=0, meta=None, engine='alfa', is_playback=False, failed_links=None, initial_tab=None):
+        super().__init__()
+        self.all_links = list(links or [])
+        self.meta = meta or {}
+        self.engine = engine or 'alfa'
+        self.is_playback = is_playback
+        self.selected = -1
+        self.failed_links = set(failed_links or [])
+
+        # Separar en dos pestañas: 0 = Servidores Directos, 1 = Torrents
+        self.direct_links = []
+        self.torrent_links = []
+        for l in self.all_links:
+            srv = _get_link_server_name(l).strip().lower()
+            if srv == 'torrent' or _is_torrent_link(l):
+                self.torrent_links.append(l)
+            else:
+                self.direct_links.append(l)
+
+        # Enlace en reproducción (si aplica)
+        self.playing_item = None
+        if self.is_playback and 0 <= current_index < len(self.all_links):
+            self.playing_item = self.all_links[current_index]
+
+        # Determinar pestaña activa inicial
+        if initial_tab is not None and initial_tab in (0, 1):
+            self.active_tab = initial_tab
+        elif self.is_playback and self.playing_item is not None:
+            if self.playing_item in self.torrent_links:
+                self.active_tab = 1
+            else:
+                self.active_tab = 0
+        elif len(self.direct_links) == 0 and len(self.torrent_links) > 0:
+            self.active_tab = 1
+        else:
+            self.active_tab = 0
+
+        # Posición del cursor y desplazamiento independientes por pestaña
+        self.tab_current = {0: 0, 1: 0}
+        self.tab_offset = {0: 0, 1: 0}
+
+        # Enfocar enlace inicial en la pestaña activa
+        if isinstance(current_index, int) and 0 <= current_index < len(self.all_links):
+            target_link = self.all_links[current_index]
+            if target_link in self.direct_links:
+                d_idx = self.direct_links.index(target_link)
+                self.tab_current[0] = d_idx
+                if d_idx >= 7:
+                    self.tab_offset[0] = min(d_idx - 7 + 1, max(0, len(self.direct_links) - 7))
+            if target_link in self.torrent_links:
+                t_idx = self.torrent_links.index(target_link)
+                self.tab_current[1] = t_idx
+                if t_idx >= 7:
+                    self.tab_offset[1] = min(t_idx - 7 + 1, max(0, len(self.torrent_links) - 7))
+        elif self.is_playback and self.playing_item is not None:
+            if self.playing_item in self.direct_links:
+                d_idx = self.direct_links.index(self.playing_item)
+                self.tab_current[0] = d_idx
+                if d_idx >= 7:
+                    self.tab_offset[0] = min(d_idx - 7 + 1, max(0, len(self.direct_links) - 7))
+            if self.playing_item in self.torrent_links:
+                t_idx = self.torrent_links.index(self.playing_item)
+                self.tab_current[1] = t_idx
+                if t_idx >= 7:
+                    self.tab_offset[1] = min(t_idx - 7 + 1, max(0, len(self.torrent_links) - 7))
+
+        self.visible_rows = 7
+        self._row_bgs = []
+        self._row_btns = []
+        self._row_btn_ids = []
+        self._row_badges = []
+        self._row_details = []
+        self._row_channels = []
+        self._hl_images = []
+        self._counter_label = None
+        self._empty_label = None
+        self._scroll_controls = []
+        self._up_btn = None
+        self._down_btn = None
+        self._scroll_btn_bgs = {}
+        self._row_start_y = 0
+        self._row_h = 48
+        self._row_gap = 6
+        self._rx = 0
+        self._rw = 0
+        try:
+            self._build()
+        except Exception as e:
+            xbmc.log('BridgeMulti FloatingLinksDialog build error: ' + str(e), xbmc.LOGWARNING)
+
+    @property
+    def active_links(self):
+        return self.direct_links if self.active_tab == 0 else self.torrent_links
+
+    @property
+    def current(self):
+        return self.tab_current.get(self.active_tab, 0)
+
+    @current.setter
+    def current(self, val):
+        self.tab_current[self.active_tab] = val
+
+    @property
+    def offset(self):
+        return self.tab_offset.get(self.active_tab, 0)
+
+    @offset.setter
+    def offset(self, val):
+        self.tab_offset[self.active_tab] = val
+
+    def addControl(self, *args, **kwargs):
+        res = super().addControl(*args, **kwargs)
+        try:
+            ctrl = args[0] if args else None
+            if ctrl is not None:
+                try:
+                    ctrl.setAnimations([
+                        ('WindowOpen', 'effect=zoom start=85,85 end=100,100 center=auto time=180 tween=back easing=out'),
+                        ('WindowClose', 'effect=fade start=100 end=0 time=100')
+                    ])
+                except Exception: pass
+        except Exception: pass
+        return res
+
+    def _white(self):
+        return _AutoplayStopDialog._bg_texture() or _EnginePickerDialog._white()
+
+    def _format_link(self, lnk, is_playing=False, is_failed=False):
+        srv = _get_link_server_name(lnk)
+        lang = _format_language(lnk)
+        qual = _format_quality(lnk)
+        ch = _format_channel(lnk)
+        weak = getattr(lnk, 'bridge_weak', False)
+        is_tor = (srv.lower() == 'torrent' or _is_torrent_link(lnk))
+
+        if is_failed:
+            if is_tor:
+                srv_clean = srv if srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', '') else ''
+                badge = ('[COLOR #888888]TORRENT[/COLOR]  [COLOR #777777]%s[/COLOR]' % srv_clean) if srv_clean else '[COLOR #888888]TORRENT[/COLOR]'
+            else:
+                badge = '[COLOR #777777]%s[/COLOR]' % (srv or 'Directo')
+
+            mid_parts = []
+            if lang: mid_parts.append('[COLOR #666666]%s[/COLOR]' % lang)
+            if qual and qual != 'N/A': mid_parts.append('[COLOR #666666]%s[/COLOR]' % qual)
+            mid = ' | '.join(mid_parts)
+
+            right_parts = ['[B][COLOR red][FALLIDO][/COLOR][/B]']
+            if ch: right_parts.append('[COLOR #555555](%s)[/COLOR]' % ch)
+            right = '  '.join(right_parts)
+            return badge, mid, right
+
+        if is_tor:
+            # Eliminar duplicado "TORRENT Torrent": si el servidor es "torrent" o vacío, sólo mostrar "TORRENT"
+            if srv and srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', ''):
+                badge = '[B][COLOR cyan]TORRENT[/COLOR][/B]  [B][COLOR deepskyblue]%s[/COLOR][/B]' % srv
+            else:
+                badge = '[B][COLOR cyan]TORRENT[/COLOR][/B]'
+        else:
+            badge = '[B][COLOR deepskyblue]%s[/COLOR][/B]' % (srv or 'Directo')
+
+        mid_parts = []
+        if lang: mid_parts.append('[COLOR lime]%s[/COLOR]' % lang)
+        if qual and qual != 'N/A': mid_parts.append('[COLOR gold]%s[/COLOR]' % qual)
+        if weak: mid_parts.append('[COLOR orange][?][/COLOR]')
+        mid = ' | '.join(mid_parts)
+
+        right_parts = []
+        if is_playing:
+            # Texto verde sin icono con glifo roto
+            right_parts.append('[B][COLOR lime]EN REPRODUCCIÓN[/COLOR][/B]')
+        if ch:
+            right_parts.append('[COLOR #888888](%s)[/COLOR]' % ch)
+        right = '  '.join(right_parts)
+
+        return badge, mid, right
+
+    def _build(self):
+        W = self.getWidth() or 1920
+        H = self.getHeight() or 1080
+        dw, dh = 980, 580
+        dx = (W - dw) // 2
+        dy = (H - dh) // 2
+        white = self._white()
+        GOLD = '0xFFCFA82C'
+        BORDER = 3
+
+        # Borde dorado exterior
+        self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
+        # Fondo oscuro interior translúcido
+        self.addControl(xbmcgui.ControlImage(dx+BORDER, dy+BORDER, dw-BORDER*2, dh-BORDER*2, white, colorDiffuse='0xF20A0A0A'))
+
+        # Título cabecera
+        sub_head = '¿Deseas cambiar de servidor?' if self.is_playback else 'Servidores Disponibles'
+        self.addControl(xbmcgui.ControlLabel(
+            dx+28, dy+16, 620, 28,
+            '[B][COLOR #CFA82C]BRIDGE MULTI[/COLOR][/B]  [COLOR #E0E0E0]—  %s[/COLOR]' % sub_head,
+            font='font13'))
+
+        # Línea separadora dorada superior
+        self.addControl(xbmcgui.ControlImage(dx+20, dy+48, dw-40, 2, white, colorDiffuse='0x55CFA82C'))
+
+        # Barra de Pestañas (Tabs)
+        tab_y = dy + 58
+        tab_h = 34
+        tab0_w = 260
+        tab0_x = dx + 28
+        tab1_w = 200
+        tab1_x = tab0_x + tab0_w + 12
+        t = 2
+
+        # Pestaña 0: Enlaces Directos
+        self._tab0_bg = xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, tab_h, white, colorDiffuse='0x44CFA82C')
+        self.addControl(self._tab0_bg)
+        self._tab0_borders = [
+            xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, t, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(tab0_x, tab_y + tab_h - t, tab0_w, t, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(tab0_x, tab_y, t, tab_h, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(tab0_x + tab0_w - t, tab_y, t, tab_h, white, colorDiffuse=GOLD),
+        ]
+        for b in self._tab0_borders: self.addControl(b)
+        self._tab0_btn = xbmcgui.ControlButton(tab0_x, tab_y, tab0_w, tab_h, '', '', '', font='font12', alignment=6)
+        self.addControl(self._tab0_btn)
+        self._tab0_lbl = xbmcgui.ControlLabel(tab0_x, tab_y + 4, tab0_w, 24, '', font='font12', alignment=6)
+        self.addControl(self._tab0_lbl)
+
+        # Pestaña 1: Torrents
+        self._tab1_bg = xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, tab_h, white, colorDiffuse='0x15FFFFFF')
+        self.addControl(self._tab1_bg)
+        self._tab1_borders = [
+            xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, t, white, colorDiffuse='0x33CFA82C'),
+            xbmcgui.ControlImage(tab1_x, tab_y + tab_h - t, tab1_w, t, white, colorDiffuse='0x33CFA82C'),
+            xbmcgui.ControlImage(tab1_x, tab_y, t, tab_h, white, colorDiffuse='0x33CFA82C'),
+            xbmcgui.ControlImage(tab1_x + tab1_w - t, tab_y, t, tab_h, white, colorDiffuse='0x33CFA82C'),
+        ]
+        for b in self._tab1_borders: self.addControl(b)
+        self._tab1_btn = xbmcgui.ControlButton(tab1_x, tab_y, tab1_w, tab_h, '', '', '', font='font12', alignment=6)
+        self.addControl(self._tab1_btn)
+        self._tab1_lbl = xbmcgui.ControlLabel(tab1_x, tab_y + 4, tab1_w, 24, '', font='font12', alignment=6)
+        self.addControl(self._tab1_lbl)
+
+        # Botón de scroll arriba (único botón de navegación en la parte superior)
+        btn_w, btn_h = 88, 34
+        up_top_x = dx + dw - btn_w - 24
+        up_top_y = tab_y
+
+        # Botón superior ▲ con marco dorado y fondo táctil destacado
+        up_top_bg = xbmcgui.ControlImage(up_top_x, up_top_y, btn_w, btn_h, white, colorDiffuse='0x33CFA82C')
+        self.addControl(up_top_bg)
+        self._scroll_controls.append(up_top_bg)
+        for _bx, _by, _bw, _bh in (
+                (up_top_x, up_top_y, btn_w, t),
+                (up_top_x, up_top_y + btn_h - t, btn_w, t),
+                (up_top_x, up_top_y, t, btn_h),
+                (up_top_x + btn_w - t, up_top_y, t, btn_h)):
+            _b = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=GOLD)
+            self.addControl(_b)
+            self._scroll_controls.append(_b)
+
+        self._up_btn = xbmcgui.ControlButton(
+            up_top_x, up_top_y, btn_w, btn_h, '[B]▲[/B]', '', '',
+            font='font20_title', textColor=GOLD, focusedColor='0xFFFFFFFF', alignment=6)
+        self.addControl(self._up_btn)
+        self._scroll_controls.append(self._up_btn)
+        self._scroll_btn_bgs[self._up_btn.getId()] = up_top_bg
+
+        # Contador a la izquierda del botón superior
+        self._counter_label = xbmcgui.ControlLabel(
+            dx + dw - btn_w - 24 - 12 - 200, tab_y + 4, 200, 26, '', font='font13', alignment=1)
+        self.addControl(self._counter_label)
+
+        # Filas de la lista (espaciado de 14px idéntico arriba y abajo)
+        self._rx = dx + 20
+        self._rw = dw - 40
+        self._row_start_y = dy + 106
+
+        for i in range(self.visible_rows):
+            ry = self._row_start_y + i * (self._row_h + self._row_gap)
+            bg = xbmcgui.ControlImage(self._rx, ry, self._rw, self._row_h, white, colorDiffuse='0x18FFFFFF')
+            self.addControl(bg)
+            self._row_bgs.append(bg)
+
+            badge_lbl = xbmcgui.ControlLabel(self._rx + 16, ry + 9, 220, 30, '', font='font13')
+            self.addControl(badge_lbl)
+            self._row_badges.append(badge_lbl)
+
+            details_lbl = xbmcgui.ControlLabel(self._rx + 240, ry + 9, 360, 30, '', font='font13')
+            self.addControl(details_lbl)
+            self._row_details.append(details_lbl)
+
+            ch_lbl = xbmcgui.ControlLabel(self._rx + 610, ry + 9, self._rw - 626, 30, '', font='font13', alignment=1)
+            self.addControl(ch_lbl)
+            self._row_channels.append(ch_lbl)
+
+            # Botón interactivo transparente sobre toda la fila para soporte táctil, clic y hover con cursor
+            btn = xbmcgui.ControlButton(
+                self._rx, ry, self._rw, self._row_h, '', '', '',
+                textColor='0x00000000', focusedColor='0x00000000')
+            self.addControl(btn)
+            self._row_btns.append(btn)
+            self._row_btn_ids.append(btn.getId())
+
+        # Mensaje si la pestaña está vacía
+        self._empty_label = xbmcgui.ControlLabel(
+            self._rx, self._row_start_y + 130, self._rw, 36,
+            '[COLOR #888888]No se encontraron enlaces en esta categoría[/COLOR]',
+            font='font13', alignment=6)
+        self.addControl(self._empty_label)
+
+        # Marco dorado de resaltado activo (4 bordes)
+        th = 2
+        self._hl_images = [
+            xbmcgui.ControlImage(self._rx, self._row_start_y, self._rw, th, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(self._rx, self._row_start_y + self._row_h - th, self._rw, th, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(self._rx, self._row_start_y, th, self._row_h, white, colorDiffuse=GOLD),
+            xbmcgui.ControlImage(self._rx + self._rw - th, self._row_start_y, th, self._row_h, white, colorDiffuse=GOLD),
+        ]
+        for hl in self._hl_images:
+            self.addControl(hl)
+
+        # Botón inferior ▼ con el mismo espaciado de 14px respecto a la última fila
+        nav_y = dy + 492
+        down_x = dx + dw - btn_w - 24
+
+        down_bg = xbmcgui.ControlImage(down_x, nav_y, btn_w, btn_h, white, colorDiffuse='0x33CFA82C')
+        self.addControl(down_bg)
+        self._scroll_controls.append(down_bg)
+        for _bx, _by, _bw, _bh in (
+                (down_x, nav_y, btn_w, t),
+                (down_x, nav_y + btn_h - t, btn_w, t),
+                (down_x, nav_y, t, btn_h),
+                (down_x + btn_w - t, nav_y, t, btn_h)):
+            _b = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=GOLD)
+            self.addControl(_b)
+            self._scroll_controls.append(_b)
+
+        self._down_btn = xbmcgui.ControlButton(
+            down_x, nav_y, btn_w, btn_h, '[B]▼[/B]', '', '',
+            font='font20_title', textColor=GOLD, focusedColor='0xFFFFFFFF', alignment=6)
+        self.addControl(self._down_btn)
+        self._scroll_controls.append(self._down_btn)
+        self._scroll_btn_bgs[self._down_btn.getId()] = down_bg
+
+        # Título de la película o serie/episodio en la barra inferior izquierda (idéntico en gris)
+        s_val = self.meta.get('season')
+        e_val = self.meta.get('episode')
+        year_val = self.meta.get('year') or self.meta.get('showyear')
+        show_name = _safe_str(self.meta.get('showname') or self.meta.get('tvshowtitle') or '')
+        ep_title = _safe_str(self.meta.get('title') or 'Vídeo')
+        if s_val and e_val:
+            bottom_media_title = (show_name or ep_title)
+            if year_val: bottom_media_title += ' (%s)' % year_val
+            bottom_media_title += ' [COLOR gold]T%sxE%s[/COLOR]' % (s_val, e_val)
+        else:
+            bottom_media_title = ep_title
+            if year_val: bottom_media_title += ' (%s)' % year_val
+
+        self._bottom_media_label = xbmcgui.ControlLabel(
+            dx + 28, nav_y + 6, dw - btn_w - 76, 22,
+            bottom_media_title, font='font12', textColor='0xFFAAAAAA')
+        self.addControl(self._bottom_media_label)
+
+        # Separador inferior
+        self.addControl(xbmcgui.ControlImage(dx+20, dy+538, dw-40, 1, white, colorDiffuse='0x44CFA82C'))
+
+        # Ayuda en pie de página
+        other_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
+        if self.is_playback:
+            hint_txt = '[COLOR=888888][← →] Pestaña    [↑ ↓] Navegar    [OK / Clic] Servidor    [I] %s    [Atrás] Continuar[/COLOR]' % other_name
+        else:
+            hint_txt = '[COLOR=888888][← →] Pestaña    [↑ ↓] Navegar    [OK / Clic] Reproducir    [I] %s    [Atrás] Salir[/COLOR]' % other_name
+        self.addControl(xbmcgui.ControlLabel(
+            dx+20, dy+546, dw-40, 22, hint_txt, font='font12', alignment=6))
+
+        self._update_tab_headers()
+        self._update_view()
+
+    def _switch_tab(self, new_tab):
+        if new_tab == self.active_tab:
+            return
+        self.active_tab = new_tab
+        self._update_tab_headers()
+        self._update_view()
+
+    def _update_tab_headers(self):
+        GOLD = '0xFFCFA82C'
+        DIM_BORDER = '0x33CFA82C'
+        BG_ACTIVE = '0x44CFA82C'
+        BG_INACTIVE = '0x15FFFFFF'
+
+        d_count = len(self.direct_links)
+        t_count = len(self.torrent_links)
+
+        if self.active_tab == 0:
+            self._tab0_bg.setColorDiffuse(BG_ACTIVE)
+            for b in self._tab0_borders: b.setColorDiffuse(GOLD)
+            self._tab0_lbl.setLabel('[B][COLOR #CFA82C]SERVIDORES DIRECTOS (%d)[/COLOR][/B]' % d_count)
+
+            self._tab1_bg.setColorDiffuse(BG_INACTIVE)
+            for b in self._tab1_borders: b.setColorDiffuse(DIM_BORDER)
+            self._tab1_lbl.setLabel('[COLOR #888888]TORRENTS (%d)[/COLOR]' % t_count)
+        else:
+            self._tab0_bg.setColorDiffuse(BG_INACTIVE)
+            for b in self._tab0_borders: b.setColorDiffuse(DIM_BORDER)
+            self._tab0_lbl.setLabel('[COLOR #888888]SERVIDORES DIRECTOS (%d)[/COLOR]' % d_count)
+
+            self._tab1_bg.setColorDiffuse(BG_ACTIVE)
+            for b in self._tab1_borders: b.setColorDiffuse(GOLD)
+            self._tab1_lbl.setLabel('[B][COLOR #CFA82C]TORRENTS (%d)[/COLOR][/B]' % t_count)
+
+    def _move(self, delta):
+        links = self.active_links
+        if not links: return
+        n = len(links)
+        new_idx = self.current + delta
+        if new_idx >= n:
+            if delta == 1:
+                new_idx = 0
+            else:
+                new_idx = min(new_idx, n - 1) if self.current < n - 1 else 0
+        elif new_idx < 0:
+            if delta == -1:
+                new_idx = n - 1
+            else:
+                new_idx = 0 if self.current > 0 else n - 1
+        self.current = new_idx
+        self._update_view()
+
+    def _update_highlight_and_bgs(self):
+        links = self.active_links
+        n = len(links)
+        if n == 0:
+            for hl in self._hl_images: hl.setVisible(False)
+            return
+
+        slot = self.current - self.offset
+        if 0 <= slot < self.visible_rows:
+            active_y = self._row_start_y + slot * (self._row_h + self._row_gap)
+            th = 2
+            self._hl_images[0].setPosition(self._rx, active_y)
+            self._hl_images[1].setPosition(self._rx, active_y + self._row_h - th)
+            self._hl_images[2].setPosition(self._rx, active_y)
+            self._hl_images[3].setPosition(self._rx + self._rw - th, active_y)
+            for hl in self._hl_images: hl.setVisible(True)
+
+            for i in range(self.visible_rows):
+                item_idx = self.offset + i
+                if item_idx < n:
+                    lnk = links[item_idx]
+                    is_failed = (lnk in self.failed_links)
+                    if i == slot:
+                        bg_c = '0x44AA3333' if is_failed else '0x33CFA82C'
+                    else:
+                        bg_c = '0x20551111' if is_failed else '0x18FFFFFF'
+                    self._row_bgs[i].setColorDiffuse(bg_c)
+
+            self._counter_label.setLabel('[B][COLOR #CFA82C]%d[/COLOR] [COLOR #888888]/ %d[/COLOR][/B]' % (self.current + 1, n))
+
+    def _update_view(self):
+        links = self.active_links
+        n = len(links)
+        if n == 0:
+            self._counter_label.setLabel('[COLOR #888888]0 / 0[/COLOR]')
+            self._empty_label.setVisible(True)
+            for c in self._scroll_controls:
+                try: c.setVisible(False)
+                except: pass
+            for hl in self._hl_images: hl.setVisible(False)
+            for i in range(self.visible_rows):
+                self._row_badges[i].setVisible(False)
+                self._row_details[i].setVisible(False)
+                self._row_channels[i].setVisible(False)
+                self._row_bgs[i].setVisible(False)
+                if i < len(self._row_btns): self._row_btns[i].setVisible(False)
+            return
+
+        self._empty_label.setVisible(False)
+
+        if self.current < self.offset:
+            self.offset = self.current
+        elif self.current >= self.offset + self.visible_rows:
+            self.offset = self.current - self.visible_rows + 1
+
+        self._counter_label.setLabel('[B][COLOR #CFA82C]%d[/COLOR] [COLOR #888888]/ %d[/COLOR][/B]' % (self.current + 1, n))
+
+        # Visibilidad de controles de desplazamiento táctil: visibles si hay más enlaces que filas en pantalla
+        has_scroll = (n > self.visible_rows)
+        for c in self._scroll_controls:
+            try: c.setVisible(has_scroll)
+            except: pass
+
+        slot = self.current - self.offset
+        for i in range(self.visible_rows):
+            item_idx = self.offset + i
+            if item_idx < n:
+                lnk = links[item_idx]
+                is_curr_playing = bool(self.is_playback and self.playing_item is not None and lnk is self.playing_item)
+                is_failed = (lnk in self.failed_links)
+                badge, mid, right = self._format_link(lnk, is_playing=is_curr_playing, is_failed=is_failed)
+                self._row_badges[i].setLabel(badge)
+                self._row_details[i].setLabel(mid)
+                self._row_channels[i].setLabel(right)
+                self._row_badges[i].setVisible(True)
+                self._row_details[i].setVisible(True)
+                self._row_channels[i].setVisible(True)
+                self._row_bgs[i].setVisible(True)
+                if i == slot:
+                    bg_c = '0x44AA3333' if is_failed else '0x33CFA82C'
+                else:
+                    bg_c = '0x20551111' if is_failed else '0x18FFFFFF'
+                self._row_bgs[i].setColorDiffuse(bg_c)
+                if i < len(self._row_btns): self._row_btns[i].setVisible(True)
+            else:
+                self._row_badges[i].setVisible(False)
+                self._row_details[i].setVisible(False)
+                self._row_channels[i].setVisible(False)
+                self._row_bgs[i].setVisible(False)
+                if i < len(self._row_btns): self._row_btns[i].setVisible(False)
+
+        active_y = self._row_start_y + slot * (self._row_h + self._row_gap)
+        th = 2
+        self._hl_images[0].setPosition(self._rx, active_y)
+        self._hl_images[1].setPosition(self._rx, active_y + self._row_h - th)
+        self._hl_images[2].setPosition(self._rx, active_y)
+        self._hl_images[3].setPosition(self._rx + self._rw - th, active_y)
+        for hl in self._hl_images: hl.setVisible(True)
+
+        # Sincronizar foco nativo en el botón interactivo de la fila activa
+        if hasattr(self, '_row_btns') and 0 <= slot < len(self._row_btns) and slot < n - self.offset:
+            try:
+                self.setFocus(self._row_btns[slot])
+            except Exception:
+                pass
+
+    def onAction(self, action):
+        aid = action.getId()
+
+        # Detección instantánea de cursor sobre un enlace o botón (Hover / Focus)
+        try:
+            fid = self.getFocusId()
+            if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
+                row_idx = self._row_btn_ids.index(fid)
+                hovered_idx = self.offset + row_idx
+                if hovered_idx < len(self.active_links) and hovered_idx != self.current:
+                    self.current = hovered_idx
+                    self._update_highlight_and_bgs()
+
+            if hasattr(self, '_scroll_btn_bgs'):
+                for bid, bg_c in self._scroll_btn_bgs.items():
+                    try:
+                        bg_c.setColorDiffuse('0x77CFA82C' if bid == fid else '0x33CFA82C')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if aid in (self.ACTION_PREVIOUS_MENU, self.ACTION_NAV_BACK, self.ACTION_BACKSPACE, self.ACTION_PAUSE, self.ACTION_PLAYER_PLAY, self.ACTION_PLAY):
+            self.selected = -1
+            self.close()
+        elif aid == self.ACTION_MOVE_LEFT:
+            self._switch_tab(0)
+        elif aid == self.ACTION_MOVE_RIGHT:
+            self._switch_tab(1)
+        elif aid == self.ACTION_MOVE_UP:
+            self._move(-1)
+        elif aid == self.ACTION_MOVE_DOWN:
+            self._move(1)
+        elif aid == self.ACTION_PAGE_UP:
+            self._move(-self.visible_rows)
+        elif aid == self.ACTION_PAGE_DOWN:
+            self._move(self.visible_rows)
+        elif aid == self.ACTION_SELECT_ITEM:
+            if self.active_links and 0 <= self.current < len(self.active_links):
+                chosen = self.active_links[self.current]
+                try:
+                    self.selected = self.all_links.index(chosen)
+                except ValueError:
+                    self.selected = 0
+            else:
+                self.selected = -1
+            self.close()
+        elif aid in (self.ACTION_SHOW_INFO, 11, self.ACTION_CONTEXT_MENU, 117):
+            other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
+            try:
+                ans = _KODI_ORIG_DIALOG().yesno(
+                    'Bridge Multi',
+                    '¿Deseas buscar enlaces en [B]%s[/B]?' % other_eng_name,
+                    nolabel='Cancelar',
+                    yeslabel='Buscar en %s' % other_eng_name
+                )
+                if ans:
+                    self.selected = 'other_engine'
+                    self.close()
+            except Exception:
+                pass
+        elif aid in (self.ACTION_MOUSE_WHEEL_UP, 104):
+            self._move(-1)
+        elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105):
+            self._move(1)
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103):
+            try: fid = self.getFocusId()
+            except: fid = -1
+            if hasattr(self, '_tab0_btn') and fid == self._tab0_btn.getId():
+                self._switch_tab(0); return
+            if hasattr(self, '_tab1_btn') and fid == self._tab1_btn.getId():
+                self._switch_tab(1); return
+            if hasattr(self, '_up_btn') and fid == self._up_btn.getId():
+                self._move(-1); return
+            if hasattr(self, '_down_btn') and fid == self._down_btn.getId():
+                self._move(1); return
+            if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
+                row_idx = self._row_btn_ids.index(fid)
+                item_idx = self.offset + row_idx
+                if item_idx < len(self.active_links):
+                    chosen = self.active_links[item_idx]
+                    try: self.selected = self.all_links.index(chosen)
+                    except ValueError: self.selected = 0
+                    self.close()
+                    return
+            if self.active_links and 0 <= self.current < len(self.active_links):
+                chosen = self.active_links[self.current]
+                try: self.selected = self.all_links.index(chosen)
+                except ValueError: self.selected = 0
+            else:
+                self.selected = -1
+            self.close()
+
+    def onClick(self, control_id):
+        if hasattr(self, '_tab0_btn') and control_id == self._tab0_btn.getId():
+            self._switch_tab(0)
+            return
+        if hasattr(self, '_tab1_btn') and control_id == self._tab1_btn.getId():
+            self._switch_tab(1)
+            return
+        if hasattr(self, '_up_btn') and control_id == self._up_btn.getId():
+            self._move(-1)
+            return
+        if hasattr(self, '_down_btn') and control_id == self._down_btn.getId():
+            self._move(1)
+            return
+        if hasattr(self, '_row_btn_ids') and control_id in self._row_btn_ids:
+            row_idx = self._row_btn_ids.index(control_id)
+            item_idx = self.offset + row_idx
+            if item_idx < len(self.active_links):
+                chosen = self.active_links[item_idx]
+                try:
+                    self.selected = self.all_links.index(chosen)
+                except ValueError:
+                    self.selected = 0
+                self.close()
+                return
+        if self.active_links and 0 <= self.current < len(self.active_links):
+            chosen = self.active_links[self.current]
+            try:
+                self.selected = self.all_links.index(chosen)
+            except ValueError:
+                self.selected = 0
+        else:
+            self.selected = -1
+        self.close()
+
+
+def _load_cached_links_for_dialog():
+    if not os.path.exists(SEARCH_CACHE_FILE):
+        return [], None, {}, 'alfa'
+    try:
+        with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+        c_engine = cache.get('engine', 'alfa') or 'alfa'
+        _d_mods = _get_alfa_modules() if c_engine == 'alfa' else _get_balandro_modules()
+        if _d_mods:
+            _Item, _Info = _d_mods['Item'], _d_mods['InfoLabels']
+            c_links = [_deserialize_item_fast(_Item, _Info, l) for l in cache.get('links', [])]
+            c_matched = _deserialize_item_fast(_Item, _Info, cache.get('item'))
+        else:
+            c_links = [_deserialize_item(l, c_engine) for l in cache.get('links', [])]
+            c_matched = _deserialize_item(cache.get('item'), c_engine)
+        c_meta = cache.get('meta', {}) or {}
+
+        # Restricción estricta según ajuste de max_links_list
+        _max_list = _get_int_setting('max_links_list', 40)
+        if _max_list < 5: _max_list = 5
+
+        valid_links = []
+        for l in c_links:
+            _url = _safe_str(getattr(l, 'url', ''))
+            if len(_url) > 1500:
+                continue
+            valid_links.append(l)
+            if len(valid_links) >= _max_list:
+                break
+        c_links = valid_links
+
+        return c_links, c_matched, c_meta, c_engine
+    except Exception as e:
+        xbmc.log('Bridge Multi: _load_cached_links_for_dialog error: ' + str(e), xbmc.LOGINFO)
+        return [], None, {}, 'alfa'
+
+
+def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0):
+    if not links or chosen_idx < 0 or chosen_idx >= len(links):
+        return False
+    chosen = links[chosen_idx]
+
+    p = xbmc.Player()
+    cur_time = 0.0
+    total_time = 0.0
+    try:
+        if p.isPlayingVideo():
+            cur_time = float(p.getTime())
+            total_time = float(p.getTotalTime())
+    except Exception:
+        pass
+    if cur_time <= 0.0 and force_cur_time > 0.0:
+        cur_time = float(force_cur_time)
+
+    srv_name = _get_link_server_name(chosen)
+    xbmc.log("Bridge Multi: cambio en caliente a enlace %d/%d (%s) en %.1fs" % (
+        chosen_idx + 1, len(links), srv_name, cur_time), xbmc.LOGINFO)
+
+    media_key = _get_media_key(meta, chosen)
+    if cur_time > 2:
+        try:
+            save_bookmark(media_key, cur_time, total_time, title=meta.get('title', ''))
+        except Exception:
+            pass
+
+    try:
+        if p.isPlaying():
+            p.stop()
+    except Exception:
+        pass
+
+    xbmc.sleep(300)
+
+    # Preservar metadatos completos para TMDb Helper, Trakt y Kodi OSD
+    _enrich_link_metadata(chosen, meta, matched_item)
+    sync_tmdbhelper_playerstring(meta)
+
+    try:
+        xbmcgui.Dialog().notification('Bridge Multi', 'Cambiando a [B]%s[/B]...' % srv_name, '', 2500)
+    except Exception:
+        pass
+
+    eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
+    if played:
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx)
+        return True
+    return False
+
+
+def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa'):
+    if not links or chosen_idx < 0 or chosen_idx >= len(links):
+        return False
+    chosen = links[chosen_idx]
+    _enrich_link_metadata(chosen, meta, matched_item)
+    sync_tmdbhelper_playerstring(meta)
+
+    media_key = _get_media_key(meta, chosen)
+    is_s = bool(meta.get('season') and meta.get('episode'))
+    bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
+    seek_to_time = 0
+    if bm:
+        r_time = float(bm.get('resume_time', 0))
+        if r_time > 10:
+            mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
+            time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+            dialog = xbmcgui.Dialog()
+            _rsel = dialog.select(
+                'Reanudar reproducción',
+                ['Reanudar desde %s' % time_str, 'Desde el principio'])
+            if _rsel == 0:
+                seek_to_time = r_time
+            elif _rsel is None or _rsel < 0:
+                return 'cancel'
+
+    eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
+    if played:
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=chosen_idx)
+        return True
+    return False
+
+
+def _verify_playback_started(is_torrent=False, timeout=None):
+    p = xbmc.Player()
+    mon = xbmc.Monitor()
+    if timeout is None:
+        timeout = 35.0 if is_torrent else 22.0
+    start_t = time.time()
+
+    while (time.time() - start_t) < timeout:
+        if mon.abortRequested():
+            return False
+
+        # Vídeo ya en reproducción real activa: éxito inmediato
+        if p.isPlayingVideo():
+            return True
+
+        # Rastrear indicadores de que Kodi está activamente ocupado o cargando el stream
+        is_buffering = bool(xbmc.getCondVisibility("Player.Buffering"))
+        is_busy = bool(xbmc.getCondVisibility(
+            "Window.IsVisible(busydialog) | Window.IsVisible(busydialognocancel) | Window.IsVisible(progressdialog)"
+        ))
+        has_media = bool(xbmc.getCondVisibility("Player.HasMedia") or xbmc.getCondVisibility("Player.HasAudio") or xbmc.getCondVisibility("Player.HasVideo"))
+        is_playing = bool(p.isPlaying())
+        try:
+            has_playlist = (xbmc.PlayList(xbmc.PLAYLIST_VIDEO).size() > 0)
+        except Exception:
+            has_playlist = False
+
+        # Si Kodi está en búfer o mostrando la rueda de carga/progreso, continuar esperando
+        if is_buffering or is_busy:
+            if mon.waitForAbort(0.25):
+                return False
+            continue
+
+        # Solo abortar anticipadamente si ya pasó un tiempo mínimo prudencial (10s en directo, 15s en torrent)
+        # y Kodi ya no tiene nada en cola, ni en reproducción, ni ocupado
+        elapsed = time.time() - start_t
+        min_wait = 15.0 if is_torrent else 10.0
+        if elapsed > min_wait:
+            if not is_buffering and not is_busy and not has_media and not is_playing and not has_playlist:
+                xbmc.log("Bridge Multi: _verify_playback_started detecta fin de intento tras %.1fs (sin actividad ni medio)" % elapsed, xbmc.LOGINFO)
+                return False
+
+        if mon.waitForAbort(0.25):
+            return False
+
+    return bool(p.isPlayingVideo())
+
+
+def show_floating_links_dialog():
+    p = xbmc.Player()
+    is_playing = False
+    cur_playback_time = 0.0
+    try:
+        is_playing = p.isPlayingVideo()
+        if is_playing:
+            cur_playback_time = float(p.getTime())
+    except Exception:
+        pass
+
+    if is_playing and not xbmc.getCondVisibility("Player.Paused"):
+        try: p.pause()
+        except: pass
+
+    c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
+    if not c_links:
+        xbmcgui.Dialog().notification('Bridge Multi', 'No hay enlaces disponibles', '', 3000)
+        return False
+
+    failed_links = set()
+    failed_indices = set()
+    last_tab = None
+    next_suggested_idx = _current_playing_link_index if (is_playing and 0 <= _current_playing_link_index < len(c_links)) else 0
+    was_playback = is_playing
+
+    # Ajuste on_link_fail: 0 = Reabrir ventana con enlace marcado (Recomendado), 1 = Desactivado
+    on_fail_setting = str(_bridge_addon.getSetting('on_link_fail') or '0').strip()
+
+    while True:
+        # Si todos los enlaces disponibles han fallado, notificar y salir
+        if len(failed_indices) >= len(c_links) and len(c_links) > 0:
+            xbmcgui.Dialog().notification('Bridge Multi', 'Todos los enlaces probados han fallado', '', 3500)
+            if was_playback and xbmc.getCondVisibility("Player.Paused") and p.isPlayingVideo():
+                try: p.pause()
+                except: pass
+            return False
+
+        dlg = _FloatingLinksDialog(
+            c_links,
+            current_index=next_suggested_idx,
+            meta=c_meta,
+            engine=c_eng,
+            is_playback=was_playback,
+            failed_links=failed_links,
+            initial_tab=last_tab
+        )
+        dlg.doModal()
+        chosen_idx = dlg.selected
+        last_tab = dlg.active_tab
+        del dlg
+
+        if chosen_idx == 'other_engine':
+            _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
+            xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
+            return True
+
+        if not (isinstance(chosen_idx, int) and chosen_idx >= 0):
+            # El usuario canceló o presionó Atrás
+            if was_playback and xbmc.getCondVisibility("Player.Paused") and p.isPlayingVideo():
+                try: p.pause()
+                except: pass
+            return False
+
+        # Intentar reproducir el enlace seleccionado
+        chosen_link = c_links[chosen_idx]
+        srv_name = _get_link_server_name(chosen_link) or 'Servidor'
+        is_tor = (srv_name.lower() == 'torrent' or _is_torrent_link(chosen_link))
+
+        if was_playback:
+            played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time)
+        else:
+            played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng)
+
+        if played == 'cancel':
+            continue
+
+        playback_ok = False
+        if played:
+            playback_ok = _verify_playback_started(is_torrent=is_tor)
+
+        if playback_ok:
+            return True
+
+        if on_fail_setting == '1':
+            return False
+
+        # Enlace fallido: registrar y reabrir
+        failed_links.add(chosen_link)
+        failed_indices.add(chosen_idx)
+
+        xbmc.log("Bridge Multi: enlace %d (%s) falló al reproducir. Reabriendo ventana..." % (chosen_idx + 1, srv_name), xbmc.LOGWARNING)
+        xbmcgui.Dialog().notification('Bridge Multi', 'Fallo en [B]%s[/B]. Reabriendo lista...' % srv_name, '', 3000)
+
+        # Buscar el siguiente enlace no fallido en la pestaña activa
+        active_list = []
+        for l in c_links:
+            _s = _get_link_server_name(l).strip().lower()
+            _t = (_s == 'torrent' or _is_torrent_link(l))
+            if (last_tab == 1 and _t) or (last_tab != 1 and not _t):
+                active_list.append(l)
+
+        next_suggested_idx = chosen_idx + 1
+        if chosen_link in active_list:
+            cur_tab_pos = active_list.index(chosen_link)
+            found_next = None
+            for off in range(1, len(active_list)):
+                cand = active_list[(cur_tab_pos + off) % len(active_list)]
+                if cand not in failed_links:
+                    found_next = c_links.index(cand)
+                    break
+            if found_next is not None:
+                next_suggested_idx = found_next
+            elif next_suggested_idx >= len(c_links):
+                next_suggested_idx = 0
+        elif next_suggested_idx >= len(c_links):
+            next_suggested_idx = 0
+
+        xbmc.sleep(300)
+
+
+def _open_links_view(win_url=""):
+    disp_mode = str(_bridge_addon.getSetting('links_display_mode') or '').strip().lower()
+    if disp_mode in ('1', 'native'):
+        if not win_url:
+            _ts = int(time.time())
+            win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&t=%s' % _ts
+        xbmc.log("Bridge Multi: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
+        xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % win_url)
+    else:
+        show_floating_links_dialog()
+
+
+# ---------------------------------------------------------
 # Main Execution Entry Point
 # ---------------------------------------------------------
 def main():
@@ -6493,6 +8081,10 @@ def main():
 
     check_and_run_migration()
 
+    if action in ('switch_source', 'floating_links'):
+        show_floating_links_dialog()
+        return
+
     if not action and not url:
         if not view or view == 'home': show_player_manager_home()
         elif view == 'list_players': show_players_list(engine_param or 'alfa')
@@ -6500,7 +8092,15 @@ def main():
         elif view == 'create_player': create_player_wizard()
         elif view == 'update_cloud': update_players_from_cloud()
         elif view == 'settings': _bridge_addon.openSettings(); (show_player_manager_home() if handle >= 0 else None)
-        elif view == 'list_links': show_links_as_directory()
+        elif view == 'list_links':
+            disp_mode = str(_bridge_addon.getSetting('links_display_mode') or '').strip().lower()
+            if disp_mode in ('1', 'native'):
+                show_links_as_directory()
+            else:
+                show_floating_links_dialog()
+                if handle >= 0:
+                    try: xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+                    except: pass
         else: show_player_manager_home()
         return
 
@@ -6565,6 +8165,7 @@ def main():
         if _se_matched:
             _enrich_link_metadata(None, _se_meta2, _se_matched)
         try:
+            _store_ram_search_cache(_se_links or [], _se_matched, _se_meta2, _se_engine)
             with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as _fw:
                 json.dump({
                     'item': _serialize_item(_se_matched) if _se_matched else None,
@@ -6584,7 +8185,7 @@ def main():
         _win_url2 = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (str(tmdb_id or _g('tmdb') or ''), _ts2)
         if _se_meta2.get('season') and _se_meta2.get('episode'):
             _win_url2 += '&season=%s&episode=%s' % (_se_meta2['season'], _se_meta2['episode'])
-        xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % _win_url2)
+        _open_links_view(_win_url2)
         xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
         return
 
@@ -6648,7 +8249,7 @@ def main():
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
             if played:
-                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time)
+                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx)
         else:
             xbmcgui.Dialog().notification('Bridge Multi', 'Enlace no disponible', '', 3000)
         return
@@ -6797,7 +8398,7 @@ def main():
                     _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cached_tmdb_v, _ts3)
                     if _cached_meta.get('season') and _cached_meta.get('episode'):
                         _win_url += '&season=%s&episode=%s' % (_cached_meta['season'], _cached_meta['episode'])
-                    xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % _win_url)
+                    _open_links_view(_win_url)
                     return
             except Exception as _ce:
                 xbmc.log('Bridge Multi: cache reciente error: ' + str(_ce), xbmc.LOGINFO)
@@ -6847,6 +8448,7 @@ def main():
                 _enrich_link_metadata(None, meta, matched_item)
             # Siempre guardar cache aunque no haya enlaces, para no mostrar cache vieja de otra peli
             try:
+                _store_ram_search_cache(links or [], matched_item, meta, eng)
                 with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump({'item': _serialize_item(matched_item) if matched_item else None, 'links': [_serialize_item(l) for l in (links or [])], 'meta': meta, 'engine': eng}, f)
             except: pass
@@ -6897,8 +8499,7 @@ def main():
             _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
             if meta.get('season') and meta.get('episode'):
                 _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-            xbmc.log("Bridge Multi: abriendo list_links via ActivateWindow -> " + _win_url, xbmc.LOGINFO)
-            xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % _win_url)
+            _open_links_view(_win_url)
             return
 
     if url:
@@ -7002,6 +8603,7 @@ def main():
             if matched_item:
                 _enrich_link_metadata(None, meta, matched_item)
             try:
+                _store_ram_search_cache(links or [], matched_item, meta, eng)
                 with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump({'item': _serialize_item(matched_item), 'links': [_serialize_item(l) for l in links], 'meta': meta, 'engine': eng}, f)
             except Exception: pass
@@ -7040,8 +8642,7 @@ def main():
                 _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
                 if meta.get('season') and meta.get('episode'):
                     _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-                xbmc.log("Bridge Multi: abriendo list_links via ActivateWindow -> " + _win_url, xbmc.LOGINFO)
-                xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % _win_url)
+                _open_links_view(_win_url)
             return
         else:
             _meta_fallback = {
