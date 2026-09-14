@@ -2570,17 +2570,137 @@ def extract_year_from_url(url):
         pass
     return None
 
-def _detail_year_consistent(url, target_year, channel_id='', item=None):
-    # Comprueba si el candidato coincide con el año objetivo.
+_channel_cookie_jar = None
+_channel_cookie_jar_time = 0
+
+def _get_channel_cookie_opener():
+    global _channel_cookie_jar, _channel_cookie_jar_time
+    import time, http.cookiejar, urllib.request, ssl
+    now = time.time()
+    if _channel_cookie_jar is None or (now - _channel_cookie_jar_time) > 60:
+        cj = http.cookiejar.MozillaCookieJar()
+        for addon_id in ('plugin.video.balandro', 'plugin.video.alfa'):
+            try:
+                c_path = xbmcvfs.translatePath('special://userdata/addon_data/%s/cookies.dat' % addon_id)
+                if os.path.exists(c_path):
+                    cj.load(c_path, ignore_discard=True, ignore_expires=True)
+            except Exception:
+                pass
+        _channel_cookie_jar = cj
+        _channel_cookie_jar_time = now
+
+    ctx = ssl._create_unverified_context() if hasattr(ssl, '_create_unverified_context') else None
+    handlers = [urllib.request.HTTPCookieProcessor(_channel_cookie_jar)]
+    if ctx:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    return urllib.request.build_opener(*handlers)
+
+def _norm_person_name(s):
+    if not s: return ''
+    import unicodedata, re as _re
+    s = unicodedata.normalize('NFKD', str(s)).encode('ASCII', 'ignore').decode('utf-8')
+    s = _re.sub(r'[^a-zA-Z0-9\s]', '', s).lower()
+    return ' '.join(s.split())
+
+def _match_actors(web_set, tmdb_set):
+    if not web_set or not tmdb_set:
+        return False
+    if web_set.intersection(tmdb_set):
+        return True
+    for w in web_set:
+        w_parts = set(w.split())
+        if len(w_parts) >= 2:
+            for t in tmdb_set:
+                t_parts = set(t.split())
+                if len(t_parts) >= 2 and len(w_parts.intersection(t_parts)) >= 2:
+                    return True
+    return False
+
+def _extract_web_actors(html):
+    import re as _re
+    actors = []
+    # 1. Links de actores (ej: /stars/..., /actor/..., /actores/...)
+    for a in _re.findall(r'<a[^>]+href=[\'"][^\'"]*(?:/stars?/|/actors?/)[^\'"]*[\'"][^>]*>([^<]+)</a>', html, _re.I):
+        c = a.strip()
+        if len(c) > 2 and c not in actors:
+            actors.append(c)
+    # 2. Bloque etiquetado de reparto (Actors, Actores, Reparto, Elenco, Cast)
+    if not actors:
+        lbl_block = _re.search(r'(?:<strong>|<span>|<p>|<div[^>]*>)\s*(?:Actors|Actores|Reparto|Cast|Elenco)\s*[:<](.*?)</(?:p|div|ul|li|section)>', html, _re.I | _re.DOTALL)
+        if lbl_block:
+            content = lbl_block.group(1)
+            sub_as = _re.findall(r'<a[^>]*>([^<]+)</a>', content)
+            if sub_as:
+                for a in sub_as:
+                    c = a.strip()
+                    if len(c) > 2 and c not in actors:
+                        actors.append(c)
+            else:
+                clean = _re.sub(r'<[^>]+>', ' ', content)
+                for part in _re.split(r'[,;/•|]', clean):
+                    p = part.strip()
+                    if len(p) > 2 and len(p) < 40 and p not in actors:
+                        actors.append(p)
+    # 3. Microdata / schema.org itemprop="actor"
+    if not actors:
+        for a in _re.findall(r'itemprop=[\'"]actor[\'"].*?<span[^>]+itemprop=[\'"]name[\'"]>([^<]+)</span>', html, _re.I | _re.DOTALL):
+            c = a.strip()
+            if len(c) > 2 and c not in actors:
+                actors.append(c)
+    return actors
+
+_tmdb_cast_cache = {}
+
+def _fetch_tmdb_cast(tmdb_id, is_series=False):
+    global _tmdb_cast_cache
+    if not tmdb_id:
+        return []
+    tmdb_id_str = str(tmdb_id).strip()
+    if not tmdb_id_str.isdigit():
+        return []
+    cache_key = f"{tmdb_id_str}_{1 if is_series else 0}"
+    if cache_key in _tmdb_cast_cache:
+        return _tmdb_cast_cache[cache_key]
+    cast = []
+    try:
+        api_key = "a1ab8b8669da03637a4b98fa39c39228"
+        tmdb_type = "tv" if is_series else "movie"
+        import json as _json
+        import urllib.request as _ureq
+        import ssl
+        ctx = ssl._create_unverified_context() if hasattr(ssl, '_create_unverified_context') else None
+        url = f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id_str}/credits?api_key={api_key}"
+        req = _ureq.Request(url)
+        with _ureq.urlopen(req, timeout=4, context=ctx) as resp:
+            data = _json.loads(resp.read().decode('utf-8', errors='ignore'))
+            for c in data.get('cast', [])[:12]:
+                name = (c.get('name') or c.get('original_name') or '').strip()
+                if name and name not in cast:
+                    cast.append(name)
+    except Exception:
+        pass
+    if len(_tmdb_cast_cache) > 200:
+        _tmdb_cast_cache.clear()
+    _tmdb_cast_cache[cache_key] = cast
+    return cast
+
+def _detail_year_consistent(url, target_year, channel_id='', item=None, target_imdb=None, target_tmdb=None, is_series=False):
+    # Comprueba si el candidato coincide con el año objetivo, IMDb ID o reparto.
     # True = mantener (coherente o no concluyente). False = descartar.
     # Ante cualquier duda o fallo devuelve True: nunca quita por error.
-    # Si la web confirma positivamente el año objetivo, marca item._web_year_confirmed = True.
+    # Si la web confirma positivamente el año objetivo, IMDb o actores, marca item._web_year_confirmed = True.
+    year_t = None
     try:
-        year_t = int(str(target_year).strip())
+        if target_year:
+            year_t = int(str(target_year).strip())
+            if year_t < 1900 or year_t > 2100:
+                year_t = None
     except Exception:
+        year_t = None
+
+    if not year_t and not target_imdb and not target_tmdb:
         return True
-    if year_t < 1900 or year_t > 2100:
-        return True
+
     _u = _safe_str(url or '').strip()
     if not _u.startswith('http'):
         return True
@@ -2590,33 +2710,49 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None):
             try:
                 setattr(item, '_web_year_confirmed', True)
                 if hasattr(item, 'infoLabels') and isinstance(getattr(item, 'infoLabels', None), dict):
-                    item.infoLabels['year'] = year_t
-                item.year = year_t
+                    if year_t:
+                        item.infoLabels['year'] = year_t
+                    if target_imdb:
+                        item.infoLabels['imdb_id'] = str(target_imdb)
+                    if target_tmdb:
+                        item.infoLabels['tmdb_id'] = str(target_tmdb)
+                        item.infoLabels['tmdb'] = str(target_tmdb)
+                if year_t:
+                    item.year = year_t
+                if target_tmdb:
+                    item.tmdb_id = str(target_tmdb)
             except Exception:
                 pass
 
     # 0. Verificación ultrarrápida (0ms) en la propia URL si incluye el año en el slug
-    try:
-        _url_year = extract_year_from_url(_u)
-        if _url_year:
-            if abs(_url_year - year_t) > 1:
-                try:
-                    xbmc.log("Bridge Multi: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
-                except: pass
-                return False
-            # Coincide con el año objetivo (tolerancia +/- 1)
-            _mark_confirmed()
-            return True
-    except Exception:
-        pass
+    if year_t:
+        try:
+            _url_year = extract_year_from_url(_u)
+            if _url_year:
+                if abs(_url_year - year_t) > 1:
+                    try:
+                        xbmc.log("Bridge Multi: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
+                    except: pass
+                    return False
+                # Coincide con el año objetivo (tolerancia +/- 1)
+                _mark_confirmed()
+                return True
+        except Exception:
+            pass
 
     _notify_scan(channel_id or 'web')
+    html = ''
     try:
         import urllib.request as _ureq
+        opener = _get_channel_cookie_opener()
         req = _ureq.Request(_u, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Safari/537.36',
             'Referer': '/'.join(_u.split('/')[:3]) + '/'})
-        with _ureq.urlopen(req, timeout=6) as resp:
+        with opener.open(req, timeout=6) as resp:
+            # Si el servidor redirige a una URL genérica de login (/login), no es la ficha del contenido
+            final_url = resp.geturl() or ''
+            if final_url.rstrip('/').endswith('/login'):
+                return True
             # 80KB es suficiente para capturar head, h1, metadatos y JSON-LD sin descargar megabytes
             html = resp.read(80000).decode('utf-8', errors='ignore')
     except Exception as _e:
@@ -2629,6 +2765,58 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None):
     try:
         import re as _re2
         years_re = r'\b(19\d\d|20[0-3]\d)\b'
+
+        # 0.5. Verificación por IMDb ID (100% inequívoca)
+        if target_imdb:
+            t_imdb = str(target_imdb).strip().lower()
+            if t_imdb.startswith('tt'):
+                page_imdbs = [m.lower() for m in _re2.findall(r'imdb\.com/title/(tt\d+)', html, _re2.I)]
+                if page_imdbs:
+                    if t_imdb in page_imdbs:
+                        _mark_confirmed()
+                        return True
+                    else:
+                        # Si la web muestra un IMDb explícito y no coincide con el buscado, descartar
+                        try:
+                            xbmc.log("Bridge Multi: %s '%s' descartado por IMDb diferente en web (%s != %s)" % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
+                        except: pass
+                        return False
+
+        if not year_t:
+            # Si no hay año objetivo pero sí target_tmdb, verificar actores antes de salir
+            if target_tmdb:
+                try:
+                    web_actors = _extract_web_actors(html)
+                    if web_actors and len(web_actors) >= 2:
+                        tmdb_cast = _fetch_tmdb_cast(target_tmdb, is_series=is_series)
+                        if tmdb_cast and len(tmdb_cast) >= 2:
+                            norm_web = {_norm_person_name(a) for a in web_actors if _norm_person_name(a)}
+                            norm_tmdb = {_norm_person_name(a) for a in tmdb_cast if _norm_person_name(a)}
+                            if _match_actors(norm_web, norm_tmdb):
+                                _mark_confirmed()
+                                try:
+                                    xbmc.log("Bridge Multi: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
+                                except: pass
+                                return True
+                            elif len(web_actors) >= 3:
+                                try:
+                                    xbmc.log("Bridge Multi: %s '%s' descartado por reparto no coincidente" % (channel_id, _u), xbmc.LOGINFO)
+                                except: pass
+                                return False
+                except Exception: pass
+            return True
+
+        # 0.8. Check específico de HDFull y similares (ej: /buscar/year/2013 o /year/2013)
+        hdfull_years = [int(y) for y in _re2.findall(r'/(?:buscar/)?year/(\d{4})', html, _re2.I)]
+        if hdfull_years:
+            if any(abs(y - year_t) <= 1 for y in hdfull_years):
+                _mark_confirmed()
+                return True
+            else:
+                try:
+                    xbmc.log("Bridge Multi: %s '%s' descartado por año en ficha HDFull (%d != %d)" % (channel_id, _u, hdfull_years[0], year_t), xbmc.LOGINFO)
+                except: pass
+                return False
 
         # 1. Encabezados h1 (lo más fiable: título principal de la ficha)
         h1s = _re2.findall(r'<h1[^>]*>(.*?)</h1>', html, flags=_re2.IGNORECASE | _re2.DOTALL)
@@ -2685,9 +2873,8 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None):
                 return True
             return False
 
-        # 6. Campos etiquetados explícitos (ej. >Año:</span> 2013 o <span>Estreno</span>: 2013)
-        # Exige '>' antes y ':' para no confundir menús/URLs (como /release-year/2026) con la ficha
-        lbl_m = _re2.search(r'>\s*(?:Año|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b|>\s*(?:Año|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b', html, _re2.IGNORECASE)
+        # 6. Campos etiquetados explícitos (ej. >Año:</span> 2013 o <span>Estreno</span>: 2013 o <span>A&ntilde;o: </span>)
+        lbl_m = _re2.search(r'>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*[:<](?:<[^>]+>|\s)*\b(19\d\d|20[0-3]\d)\b|>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b', html, _re2.IGNORECASE)
         if lbl_m:
             ly = int(lbl_m.group(1) or lbl_m.group(2))
             if abs(ly - year_t) <= 1:
@@ -2713,17 +2900,43 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None):
                 return True
             return False
 
-        # 9. Resto de la página: si sale el objetivo (o +/- 1), bien;
-        # si sale un único año distinto repetido (>=3 veces), es otra obra.
-        # si hay varios o ninguno, ambiguo (mantener).
+        # 9. Verificación por Reparto / Actores (Nivel 4 de máxima precisión):
+        # Si la web no tiene año en título/metadatos o no fue concluyente (ej. Homecine),
+        # se extraen los actores y se comparan contra el reparto de TMDb.
+        # Debe ejecutarse ANTES de escanear texto general para no dejarse engañar por
+        # menús o pies de página (ej. 'Estrenos 2026' en el menú de navegación).
+        if target_tmdb:
+            try:
+                web_actors = _extract_web_actors(html)
+                if web_actors and len(web_actors) >= 2:
+                    tmdb_cast = _fetch_tmdb_cast(target_tmdb, is_series=is_series)
+                    if tmdb_cast and len(tmdb_cast) >= 2:
+                        norm_web = {_norm_person_name(a) for a in web_actors if _norm_person_name(a)}
+                        norm_tmdb = {_norm_person_name(a) for a in tmdb_cast if _norm_person_name(a)}
+                        if _match_actors(norm_web, norm_tmdb):
+                            _mark_confirmed()
+                            try:
+                                xbmc.log("Bridge Multi: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
+                            except: pass
+                            return True
+                        elif len(web_actors) >= 3:
+                            try:
+                                xbmc.log("Bridge Multi: %s '%s' descartado por reparto no coincidente (%s != %s)" % (channel_id, _u, web_actors[:3], tmdb_cast[:3]), xbmc.LOGINFO)
+                            except: pass
+                            return False
+            except Exception as _ce:
+                try:
+                    xbmc.log("Bridge Multi: cast verify error (%s): %s" % (channel_id, _ce), xbmc.LOGINFO)
+                except: pass
+
+        # 10. Resto de la página (fallback de último recurso si no hubo actores):
+        # Si sale un único año distinto repetido (>=3 veces), es otra obra.
         _all = [int(y) for y in _re2.findall(years_re, html)]
-        if not _all:
-            return True
-        if any(abs(y - year_t) <= 1 for y in _all):
-            return True
-        _uniq = set(_all)
-        if len(_uniq) == 1 and len(_all) >= 3:
-            return False
+        if _all:
+            _uniq = set(_all)
+            if len(_uniq) == 1 and len(_all) >= 3 and abs(list(_uniq)[0] - year_t) > 1:
+                return False
+
         return True
     except Exception:
         return True
@@ -3159,10 +3372,10 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
             # Chequeo de pagina real: si el match es debil y conocemos el año,
             # se verifica el año que muestra la web (con aviso). Si la web
             # muestra otro año, se salta este candidato (sin tocar el canal).
-            if _w_weak and target_year:
+            if _w_weak and (target_year or target_imdb or target_tmdb):
                 try:
-                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it):
-                        xbmc.log("Bridge Multi: %s '%s' descartado: la web muestra otro año" % (channel_id, title_check), xbmc.LOGINFO)
+                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
+                        xbmc.log("Bridge Multi: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
                         continue
                     if getattr(it, '_web_year_confirmed', False):
                         _w_weak = False
@@ -3174,7 +3387,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                 it.infoLabels['tmdb'] = str(target_tmdb)
                                 it.tmdb_id = str(target_tmdb)
                             except: pass
-                        xbmc.log("Bridge Multi [Alfa]: %s año confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year), xbmc.LOGINFO)
+                        xbmc.log("Bridge Multi [Alfa]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
                 except Exception:
                     pass
             if is_series and hasattr(canal, 'episodios'):
@@ -3530,10 +3743,10 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
             # Chequeo de pagina real: si el match es debil y conocemos el año,
             # se verifica el año que muestra la web (con aviso). Si la web
             # muestra otro año, se salta este candidato (sin tocar el canal).
-            if _w_weak and target_year:
+            if _w_weak and (target_year or target_imdb or target_tmdb):
                 try:
-                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it):
-                        xbmc.log("Bridge Multi [Balandro]: %s '%s' descartado: la web muestra otro año" % (channel_id, title_check), xbmc.LOGINFO)
+                    if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
+                        xbmc.log("Bridge Multi [Balandro]: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
                         continue
                     if getattr(it, '_web_year_confirmed', False):
                         _w_weak = False
@@ -3545,7 +3758,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 it.infoLabels['tmdb'] = str(target_tmdb)
                                 it.tmdb_id = str(target_tmdb)
                             except: pass
-                        xbmc.log("Bridge Multi [Balandro]: %s año confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year), xbmc.LOGINFO)
+                        xbmc.log("Bridge Multi [Balandro]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
                 except Exception:
                     pass
             if is_series:
