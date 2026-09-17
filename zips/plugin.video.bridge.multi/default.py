@@ -97,6 +97,7 @@ if not os.path.exists(TMDB_PLAYERS_PATH):
 
 SEARCH_CACHE_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_search_cache.json')
 BOOKMARKS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_bookmarks.json')
+CONTINUE_WATCHING_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_continue_watching.json')
 CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
 
 _RAM_SEARCH_CACHE = {}
@@ -313,13 +314,57 @@ def save_bookmark(media_key, resume_time, total_time, title=""):
                     json.dump(data, f, indent=2, ensure_ascii=False)
             except: pass
     except: pass
+
+def load_continue_watching_data():
+    if os.path.exists(CONTINUE_WATCHING_FILE):
+        try:
+            with open(CONTINUE_WATCHING_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_continue_watching_record(media_key, record_data):
+    if not media_key or not isinstance(record_data, dict): return
+    try:
+        data = load_continue_watching_data()
+        data[media_key] = record_data
+        _tmp = CONTINUE_WATCHING_FILE + '.tmp'
+        with open(_tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(_tmp, CONTINUE_WATCHING_FILE)
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: save_continue_watching_record error: {e}", xbmc.LOGWARNING)
+
+def remove_continue_watching_record(media_key):
+    if not media_key: return
+    try:
+        data = load_continue_watching_data()
+        if media_key in data:
+            del data[media_key]
+            _tmp = CONTINUE_WATCHING_FILE + '.tmp'
+            with open(_tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(_tmp, CONTINUE_WATCHING_FILE)
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: remove_continue_watching_record error: {e}", xbmc.LOGWARNING)
+
+def clear_all_continue_watching():
+    try:
+        _tmp = CONTINUE_WATCHING_FILE + '.tmp'
+        with open(_tmp, 'w', encoding='utf-8') as f:
+            json.dump({}, f, indent=2, ensure_ascii=False)
+        os.replace(_tmp, CONTINUE_WATCHING_FILE)
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: clear_all_continue_watching error: {e}", xbmc.LOGWARNING)
+
 _floating_dialog_active = False
 _floating_dialog_lock = threading.Lock()
 _playback_monitor_token = 0
 _playback_monitor_lock = threading.Lock()
 _current_playing_link_index = -1
 
-def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0):
+def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
     with _playback_monitor_lock:
@@ -348,6 +393,33 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             return
 
         xbmc.log("Bridge Multi: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
+
+        # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
+        _m_dict = dict(meta or {})
+        session_record = {
+            'media_key': media_key,
+            'status': 'playing',
+            'interrupted': True,
+            'tmdb': _m_dict.get('tmdb') or '',
+            'imdb': _m_dict.get('imdb') or '',
+            'tvdb': _m_dict.get('tvdb') or '',
+            'trakt': _m_dict.get('trakt') or '',
+            'is_series': bool(_m_dict.get('season') and _m_dict.get('episode')),
+            'season': _m_dict.get('season'),
+            'episode': _m_dict.get('episode'),
+            'title': title_str or _m_dict.get('title') or '',
+            'showname': _m_dict.get('showname') or '',
+            'year': _m_dict.get('year') or _m_dict.get('showyear') or '',
+            'plot': _m_dict.get('plot') or '',
+            'poster': _m_dict.get('poster') or _m_dict.get('thumbnail') or '',
+            'fanart': _m_dict.get('fanart') or '',
+            'clearlogo': _m_dict.get('clearlogo') or '',
+            'thumbnail': _m_dict.get('thumbnail') or '',
+            'resume_time': float(seek_to_time or 0),
+            'total_time': 0,
+            'last_heartbeat': time.time()
+        }
+        save_continue_watching_record(media_key, session_record)
 
         if seek_to_time > 2:
             for _s in range(20):
@@ -381,6 +453,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                     save_bookmark(media_key, cur_time, tot_time, title=title_str)
                     last_saved_time = cur_time
 
+                    # Actualizar latido continuo en Continuar viendo
+                    session_record['resume_time'] = float(cur_time)
+                    session_record['total_time'] = float(tot_time)
+                    session_record['last_heartbeat'] = time.time()
+                    save_continue_watching_record(media_key, session_record)
+
                 # Detección de pausa en vivo
                 is_paused = bool(xbmc.getCondVisibility("Player.Paused"))
                 pause_setting = str(_bridge_addon.getSetting('live_switch_on_pause') or '').strip().lower()
@@ -407,8 +485,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         open_links = True
                                     else:
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
-                                            try: p.pause()
-                                            except: pass
+                                             try: p.pause()
+                                             except: pass
                                         pause_cooldown = time.time() + 2.0
 
                                 if open_links:
@@ -443,6 +521,18 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         if last_saved_time > 0 or tot_time > 0:
             save_bookmark(media_key, last_saved_time, tot_time, title=title_str)
+
+        # Distinción exacta: Parada normal voluntaria vs Interrupción anormal (corte de luz / crash)
+        normal_exit = not mon.abortRequested()
+        video_finished = bool(tot_time > 0 and (last_saved_time / float(tot_time) >= 0.90))
+
+        if normal_exit or video_finished:
+            # El usuario pulsó Stop, volvió atrás o vio el final: parada limpia
+            xbmc.log("Bridge Multi: parada normal voluntaria o finalizado. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
+            remove_continue_watching_record(media_key)
+        else:
+            # Cierre forzado o interrupción inesperada de Kodi
+            xbmc.log("Bridge Multi: parada abrupta/interrupción inesperada detectada. Preservando en Continuar viendo.", xbmc.LOGINFO)
 
     _th = threading.Thread(target=_monitor_loop, daemon=False)
     _th.name = "BridgeMultiPlaybackMonitor"
@@ -954,6 +1044,7 @@ tagline_es = get_param('tagline_es')
 poster = get_param('poster')
 fanart = get_param('fanart')
 thumbnail = get_param('thumbnail')
+clearlogo = get_param('clearlogo')
 
 def decode_base64_item(b64_str, ItemClass):
     try:
@@ -4616,6 +4707,89 @@ def _start_view_mode_monitor():
     except Exception:
         pass
 
+_clearlogo_cache = {}
+
+def _get_clearlogo(tmdb_id, is_series=False):
+    """Obtiene de forma instantánea el clearlogo de la base de datos local de TMDb Helper o caché en RAM."""
+    if not tmdb_id:
+        return ''
+    _id_str = str(tmdb_id).strip()
+    if not _id_str.isdigit():
+        return ''
+
+    _cache_key = f"{'tv' if is_series else 'movie'}.{_id_str}"
+    if _cache_key in _clearlogo_cache:
+        return _clearlogo_cache[_cache_key]
+
+    logo_url = ''
+    # 1. Búsqueda instantánea en SQLite local de TMDb Helper (ItemDetails.db)
+    try:
+        tmdb_base = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/')
+        db_files = []
+        if os.path.exists(tmdb_base):
+            for root, _, files in os.walk(tmdb_base):
+                for fn in files:
+                    if fn.lower() == 'itemdetails.db':
+                        db_files.append(os.path.join(root, fn))
+
+        pref_id = f"tv.{_id_str}" if is_series else f"movie.{_id_str}"
+        alt_id  = f"movie.{_id_str}" if is_series else f"tv.{_id_str}"
+
+        for db_path in db_files:
+            try:
+                conn = sqlite3.connect(db_path, timeout=1.0)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT icon, iso_language FROM art WHERE type = 'logos' AND (parent_id = ? OR parent_id = ?) "
+                    "ORDER BY (CASE WHEN parent_id = ? THEN 1 ELSE 0 END) DESC, "
+                    "(CASE WHEN iso_language = 'es' THEN 2 WHEN iso_language = 'en' THEN 1 ELSE 0 END) DESC, "
+                    "rating DESC, votes DESC LIMIT 1;",
+                    (pref_id, alt_id, pref_id)
+                )
+                row = cur.fetchone()
+                conn.close()
+                if row and row[0]:
+                    icon = row[0].strip()
+                    if icon.startswith('/'):
+                        logo_url = f"https://image.tmdb.org/t/p/original{icon}"
+                    elif icon.startswith('http'):
+                        logo_url = icon
+                    break
+            except Exception:
+                pass
+    except Exception as e:
+        xbmc.log(f"Bridge Multi: _get_clearlogo db error: {e}", xbmc.LOGDEBUG)
+
+    # 2. Fallback opcional a API TMDb si la base local aún no lo tiene
+    if not logo_url:
+        try:
+            import urllib.request, ssl
+            media_endpoint = 'tv' if is_series else 'movie'
+            api_url = f"https://api.themoviedb.org/3/{media_endpoint}/{_id_str}/images?api_key=a07324c669cac4d96789197134ce272b"
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                logos = data.get('logos', [])
+                if logos:
+                    best_fp = None
+                    for lg in logos:
+                        if lg.get('iso_639_1') == 'es':
+                            best_fp = lg.get('file_path'); break
+                    if not best_fp:
+                        for lg in logos:
+                            if lg.get('iso_639_1') == 'en':
+                                best_fp = lg.get('file_path'); break
+                    if not best_fp and logos:
+                        best_fp = logos[0].get('file_path')
+                    if best_fp:
+                        logo_url = f"https://image.tmdb.org/t/p/original{best_fp}"
+        except Exception:
+            pass
+
+    _clearlogo_cache[_cache_key] = logo_url
+    return logo_url
+
 def show_links_as_directory():
     xbmc.log("Bridge Multi: show_links_as_directory llamado", xbmc.LOGINFO)
     links = []
@@ -4668,6 +4842,11 @@ def show_links_as_directory():
         links = links[:_max_list]
 
     # 2. Plantilla compartida de metadatos y arte (calculada 1 sola vez fuera del bucle)
+    s_int = int(meta.get('season')) if meta.get('season') and str(meta.get('season')).isdigit() else None
+    e_int = int(meta.get('episode')) if meta.get('episode') and str(meta.get('episode')).isdigit() else None
+    is_s = bool(s_int is not None and e_int is not None)
+    media_type = 'episode' if is_s else 'movie'
+
     poster_val = meta.get('poster') or meta.get('thumbnail') or getattr(matched_item, 'thumbnail', '') or alfa_icon
     fanart_val = meta.get('fanart') or getattr(matched_item, 'fanart', '') or ''
     thumb_val = meta.get('thumbnail') or meta.get('poster') or getattr(matched_item, 'thumbnail', '') or alfa_icon
@@ -4675,12 +4854,7 @@ def show_links_as_directory():
     if len(_safe_str(poster_val)) > 1000: poster_val = alfa_icon
     if len(_safe_str(fanart_val)) > 1000: fanart_val = ''
 
-    base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
-
-    plot_text = _safe_str(meta.get('plot') or getattr(matched_item, 'plot', '') or '')[:2000]
-    tagline_text = _safe_str(meta.get('tagline') or '')
-
-    tmdb_val = meta.get('tmdb') or getattr(matched_item, 'tmdb', '') or ''
+    tmdb_val = meta.get('tmdb') or getattr(matched_item, 'tmdb', '') or _req_tmdb or ''
     imdb_val = meta.get('imdb') or getattr(matched_item, 'imdb', '') or ''
     tvdb_val = meta.get('tvdb') or getattr(matched_item, 'tvdb', '') or ''
     showname_val = _safe_str(meta.get('showname') or getattr(matched_item, 'showname', '') or '')
@@ -4688,10 +4862,29 @@ def show_links_as_directory():
     try: year_int = int(year_val) if year_val else None
     except: year_int = None
 
-    s_int = int(meta.get('season')) if meta.get('season') and str(meta.get('season')).isdigit() else None
-    e_int = int(meta.get('episode')) if meta.get('episode') and str(meta.get('episode')).isdigit() else None
-    is_s = bool(s_int is not None and e_int is not None)
-    media_type = 'episode' if is_s else 'movie'
+    duration_val = meta.get('duration') or meta.get('runtime') or getattr(matched_item, 'duration', 0)
+    try: duration_int = int(duration_val) if duration_val else None
+    except: duration_int = None
+
+    clearlogo_val = meta.get('clearlogo') or get_param('clearlogo') or getattr(matched_item, 'clearlogo', '') or ''
+    if clearlogo_val in ('_', 'None', 'none') or len(_safe_str(clearlogo_val)) > 1000:
+        clearlogo_val = ''
+    if not clearlogo_val and tmdb_val:
+        clearlogo_val = _get_clearlogo(tmdb_val, is_s)
+
+    base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
+    if clearlogo_val:
+        base_art['clearlogo'] = clearlogo_val
+        base_art['logo'] = clearlogo_val
+        if is_s:
+            base_art['tvshow.clearlogo'] = clearlogo_val
+            base_art['tvshow.logo'] = clearlogo_val
+
+    plot_text = _safe_str(meta.get('plot') or getattr(matched_item, 'plot', '') or '')[:2000]
+    tagline_text = _safe_str(meta.get('tagline') or '')
+
+    main_title = _safe_str(meta.get('title') or meta.get('title_es') or meta.get('title_lat') or getattr(matched_item, 'title', '') or getattr(matched_item, 'contentTitle', '') or '')
+    header_title = showname_val if (is_s and showname_val) else main_title
 
     base_unique = {}
     if tmdb_val:
@@ -4764,6 +4957,21 @@ def show_links_as_directory():
             li.setLabel2(ch)
             li.setProperty('title', lbl)
             li.setProperty('IsPlayable', 'false')
+            if clearlogo_val:
+                li.setProperty('clearlogo', clearlogo_val)
+                li.setProperty('Art(clearlogo)', clearlogo_val)
+                li.setProperty('logo', clearlogo_val)
+                li.setProperty('Art(logo)', clearlogo_val)
+                if is_s:
+                    li.setProperty('tvshow.clearlogo', clearlogo_val)
+                    li.setProperty('Art(tvshow.clearlogo)', clearlogo_val)
+            if header_title:
+                li.setProperty('TvShowTitle', header_title)
+                li.setProperty('tvshowtitle', header_title)
+            if not is_s:
+                li.setProperty('DBTYPE', 'movie')
+            else:
+                li.setProperty('DBTYPE', 'episode')
             if base_ctx_items:
                 li.addContextMenuItems(base_ctx_items)
 
@@ -4774,11 +4982,14 @@ def show_links_as_directory():
                     vt.setMediaType(media_type)
                     if plot_text: vt.setPlot(plot_text)
                     if year_int: vt.setYear(year_int)
+                    if duration_int: vt.setDuration(duration_int)
                     if tagline_text: vt.setTagLine(tagline_text)
                     if is_s:
                         if showname_val: vt.setTvShowTitle(showname_val)
                         if s_int is not None: vt.setSeason(s_int)
                         if e_int is not None: vt.setEpisode(e_int)
+                    else:
+                        if header_title: vt.setTvShowTitle(header_title)
                     if base_unique:
                         vt.setUniqueIDs(base_unique, 'tmdb' if tmdb_val else 'imdb')
             except Exception:
@@ -4787,6 +4998,13 @@ def show_links_as_directory():
             _dir_listing.append((play_url, li, False))
         except Exception:
             continue
+
+    if clearlogo_val:
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
+        except Exception:
+            pass
 
     if _dir_listing:
         try:
@@ -4797,7 +5015,10 @@ def show_links_as_directory():
                 except: pass
 
     xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
-    xbmcplugin.setContent(handle, 'episodes' if is_s else 'movies')
+    if header_title:
+        try: xbmcplugin.setPluginCategory(handle, header_title)
+        except Exception: pass
+    xbmcplugin.setContent(handle, 'episodes')
     _apply_saved_view_mode()
     xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
     _apply_saved_view_mode()
@@ -5159,7 +5380,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _sk = seek_to_time
             else:
                 _sk = 0
-            start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk, current_link_index=idx)
+            start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk, current_link_index=idx, meta=meta)
         except Exception as _se:
             xbmc.log('Bridge Multi autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
         _monitor_started = True
@@ -5720,8 +5941,8 @@ def check_and_run_migration():
         except: pass
 
     master_file = os.path.join(TMDB_PLAYERS_PATH, '(1)MultiBusqueda.json')
-    master_movie_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_title}&year={year}&title_es={es-ES_title}&title_lat={es-MX_title}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_title}&title_orig={originaltitle}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}")'
-    master_ep_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_showname}&season={season}&episode={episode}&showname={showname}&showyear={showyear}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_showname}&title_orig={original_name}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}")'
+    master_movie_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_title}&year={year}&title_es={es-ES_title}&title_lat={es-MX_title}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_title}&title_orig={originaltitle}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
+    master_ep_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_showname}&season={season}&episode={episode}&showname={showname}&showyear={showyear}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_showname}&title_orig={original_name}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
 
     master_data = {
         "name": "(1) Multi-Busqueda (Alfa / Balandro)",
@@ -5996,6 +6217,151 @@ def _get_last_cloud_import_datetime():
 
     return None, 0
 
+def show_continue_watching():
+    if handle < 0: return
+    cw_data = load_continue_watching_data()
+    valid_items = []
+    for mk, rec in (cw_data or {}).items():
+        if isinstance(rec, dict) and rec.get('interrupted'):
+            valid_items.append((mk, rec))
+
+    # Ordenar cronológicamente descendente por el último latido (los más recientes primero)
+    valid_items.sort(key=lambda x: float(x[1].get('last_heartbeat') or 0), reverse=True)
+
+    if not valid_items:
+        xbmcplugin.setContent(handle, 'videos')
+        xbmcplugin.endOfDirectory(handle, succeeded=True)
+        return
+
+    for mk, rec in valid_items:
+        is_series = bool(rec.get('is_series') or (rec.get('season') and rec.get('episode')))
+        tmdb_id_val = str(rec.get('tmdb') or '')
+        imdb_id_val = str(rec.get('imdb') or '')
+        season_val = rec.get('season')
+        episode_val = rec.get('episode')
+        title_val = rec.get('title') or ''
+        showname_val = rec.get('showname') or ''
+        year_val = str(rec.get('year') or '')
+        resume_t = float(rec.get('resume_time') or 0)
+        total_t = float(rec.get('total_time') or 0)
+
+        mins = int(resume_t // 60); secs = int(resume_t % 60); hrs = mins // 60; mins = mins % 60
+        time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+
+        if is_series:
+            s_num = int(season_val) if (season_val is not None and str(season_val).isdigit()) else 1
+            e_num = int(episode_val) if (episode_val is not None and str(episode_val).isdigit()) else 1
+            show_name = showname_val or title_val
+            ep_name = title_val if (title_val and title_val != show_name) else ''
+            if ep_name:
+                item_label = f"{show_name} - {s_num}x{e_num:02d} - {ep_name}"
+            else:
+                item_label = f"{show_name} - {s_num}x{e_num:02d}"
+
+            target_url = 'plugin://plugin.video.themoviedb.helper/?info=play&tmdb_type=tv'
+            if tmdb_id_val:
+                target_url += f'&tmdb_id={tmdb_id_val}'
+            elif imdb_id_val:
+                target_url += f'&imdb_id={imdb_id_val}'
+            else:
+                target_url += f'&query={uparse.quote_plus(show_name)}'
+            target_url += f'&season={s_num}&episode={e_num}'
+        else:
+            item_label = title_val or 'Película'
+            if year_val:
+                item_label += f' ({year_val})'
+
+            target_url = 'plugin://plugin.video.themoviedb.helper/?info=play&tmdb_type=movie'
+            if tmdb_id_val:
+                target_url += f'&tmdb_id={tmdb_id_val}'
+            elif imdb_id_val:
+                target_url += f'&imdb_id={imdb_id_val}'
+            else:
+                target_url += f'&query={uparse.quote_plus(title_val)}'
+
+        li = xbmcgui.ListItem(label=item_label)
+
+        poster_art = rec.get('poster') or rec.get('thumbnail') or 'DefaultVideo.png'
+        fanart_art = rec.get('fanart') or ''
+        clearlogo_art = rec.get('clearlogo') or ''
+        art_dict = {
+            'poster': poster_art,
+            'thumb': poster_art,
+            'icon': poster_art,
+            'fanart': fanart_art,
+            'clearlogo': clearlogo_art,
+            'landscape': fanart_art or poster_art,
+            'banner': fanart_art or poster_art
+        }
+        li.setArt(art_dict)
+
+        display_plot = f"[COLOR gold][B]▶ Interrumpido en {time_str}[/B][/COLOR]"
+
+        try:
+            vt = li.getVideoInfoTag()
+            if vt:
+                vt.setMediaType('episode' if is_series else 'movie')
+                vt.setTitle(title_val or item_label)
+                if is_series:
+                    if showname_val: vt.setTvShowTitle(showname_val)
+                    vt.setSeason(int(season_val) if (season_val is not None and str(season_val).isdigit()) else 1)
+                    vt.setEpisode(int(episode_val) if (episode_val is not None and str(episode_val).isdigit()) else 1)
+                if year_val and str(year_val).isdigit():
+                    vt.setYear(int(year_val))
+                vt.setPlot(display_plot)
+                if resume_t > 0 and total_t > 0:
+                    vt.setResumePoint(resume_t, total_t)
+                uids = {}
+                if tmdb_id_val: uids['tmdb'] = tmdb_id_val
+                if imdb_id_val: uids['imdb'] = imdb_id_val
+                if rec.get('tvdb'): uids['tvdb'] = str(rec['tvdb'])
+                if rec.get('trakt'): uids['trakt'] = str(rec['trakt'])
+                if uids:
+                    vt.setUniqueIDs(uids)
+        except Exception:
+            pass
+
+        info_video = {
+            'title': title_val or item_label,
+            'plot': display_plot,
+            'mediatype': 'episode' if is_series else 'movie'
+        }
+        if is_series and showname_val:
+            info_video['tvshowtitle'] = showname_val
+        if is_series and season_val is not None:
+            try: info_video['season'] = int(season_val)
+            except: pass
+        if is_series and episode_val is not None:
+            try: info_video['episode'] = int(episode_val)
+            except: pass
+        if year_val and str(year_val).isdigit():
+            try: info_video['year'] = int(year_val)
+            except: pass
+        if total_t > 0:
+            info_video['duration'] = int(total_t)
+        try:
+            li.setInfo('video', info_video)
+        except Exception:
+            pass
+
+        if total_t > 0 and resume_t > 0:
+            pct = int((resume_t / total_t) * 100.0)
+            li.setProperty('PercentPlayed', str(pct))
+            li.setProperty('ResumeTime', str(resume_t))
+            li.setProperty('TotalTime', str(total_t))
+
+        rm_url = 'plugin://plugin.video.bridge.multi/?action=remove_continue_watching&media_key=%s' % uparse.quote_plus(mk)
+        cl_url = 'plugin://plugin.video.bridge.multi/?action=clear_all_continue_watching'
+        li.addContextMenuItems([
+            ('[COLOR red]Quitar de Continuar viendo[/COLOR]', 'RunPlugin(%s)' % rm_url),
+            ('[COLOR orange]Limpiar todo Continuar viendo[/COLOR]', 'RunPlugin(%s)' % cl_url),
+        ])
+
+        xbmcplugin.addDirectoryItem(handle, target_url, li, isFolder=False)
+
+    xbmcplugin.setContent(handle, 'videos')
+    xbmcplugin.endOfDirectory(handle, succeeded=True)
+
 def show_player_manager_home():
     if handle < 0: return
     alfa_icon = os.path.join(alfa_path, 'resources', 'icon.png')
@@ -6019,7 +6385,17 @@ def show_player_manager_home():
             '[COLOR orange][B]Última importación:[/B] Aún no se ha realizado ninguna importación.[/COLOR]'
         )
 
+    cw_data = load_continue_watching_data()
+    cw_count = len(cw_data) if isinstance(cw_data, dict) else 0
+    cw_badge = (' (%d)' % cw_count) if cw_count > 0 else ''
+    cw_plot = (
+        'Películas y episodios cuya reproducción fue interrumpida abruptamente (corte de luz, congelamiento o cierre de Kodi).\n\n'
+        '[COLOR gold]Al seleccionarlo, TMDb Helper buscará de nuevo en los canales y continuará desde el punto exacto guardado.[/COLOR]'
+    )
+
     items = [
+        ('Continuar', 'Continuar viendo%s' % cw_badge, 'plugin://plugin.video.bridge.multi/?view=continue_watching', 'DefaultInProgressShows.png', True,
+         cw_plot),
         ('Alfa', 'Gestor de Players de Alfa (Películas)', 'plugin://plugin.video.bridge.multi/?view=list_players&engine=alfa', alfa_icon, True,
          'Administrar, activar o desactivar reproductores de TMDb Helper para los canales de Alfa.'),
         ('Balandro', 'Gestor de Players de Balandro', 'plugin://plugin.video.bridge.multi/?view=list_players&engine=balandro', balandro_icon, True,
@@ -8063,7 +8439,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
     if played:
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx)
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx, meta=meta)
         return True
     return False
 
@@ -8096,7 +8472,7 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
     if played:
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=chosen_idx)
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=chosen_idx, meta=meta)
         return True
     return False
 
@@ -8290,16 +8666,34 @@ def main():
     global title, title_es, title_lat, title_en, title_orig
     global showname, year, showyear, season, episode
     global tmdb_id, imdb_id, tvdb_id, trakt_id
-    global poster, fanart, thumbnail, director
+    global poster, fanart, thumbnail, director, clearlogo
 
     check_and_run_migration()
+    if clearlogo in ('_', 'None', 'none'):
+        clearlogo = ''
 
     if action in ('switch_source', 'floating_links'):
         show_floating_links_dialog()
         return
 
+    if action == 'remove_continue_watching':
+        mk = get_param('media_key')
+        if mk:
+            remove_continue_watching_record(mk)
+            xbmcgui.Dialog().notification('Bridge Multi', 'Elemento quitado', '', 2500)
+            xbmc.executebuiltin('Container.Refresh')
+        return
+
+    if action == 'clear_all_continue_watching':
+        if xbmcgui.Dialog().yesno('Continuar viendo', '¿Seguro que deseas vaciar toda la lista de Continuar viendo?'):
+            clear_all_continue_watching()
+            xbmcgui.Dialog().notification('Bridge Multi', 'Lista vaciada', '', 2500)
+            xbmc.executebuiltin('Container.Refresh')
+        return
+
     if not action and not url:
         if not view or view == 'home': show_player_manager_home()
+        elif view == 'continue_watching': show_continue_watching()
         elif view == 'list_players': show_players_list(engine_param or 'alfa')
         elif view in ('player_options', 'channel_options'): show_player_options(get_param('channel') or get_param('player'), engine_param or 'alfa')
         elif view == 'create_player': create_player_wizard()
@@ -8462,7 +8856,7 @@ def main():
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
             if played:
-                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx)
+                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta)
         else:
             xbmcgui.Dialog().notification('Bridge Multi', 'Enlace no disponible', '', 3000)
         return
@@ -8517,7 +8911,8 @@ def main():
             'tagline': tagline,
             'poster': poster or get_param('poster'),
             'fanart': fanart or get_param('fanart'),
-            'thumbnail': thumbnail or get_param('thumbnail')
+            'thumbnail': thumbnail or get_param('thumbnail'),
+            'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))
         }
         sync_tmdbhelper_playerstring(_init_meta)
 
@@ -8655,6 +9050,7 @@ def main():
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
                 'plot': plot or get_param('plot'), 'director': director or get_param('director'), 'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
+                'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
                 'verified_only': verified_flag, 'engine': eng
             }
             if matched_item:
@@ -8811,6 +9207,7 @@ def main():
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
                 'plot': plot or get_param('plot'), 'director': director or get_param('director'), 'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
+                'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
                 'verified_only': verified_flag, 'engine': eng
             }
             if matched_item:
