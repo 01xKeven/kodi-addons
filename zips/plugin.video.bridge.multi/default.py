@@ -8,6 +8,7 @@ import base64
 import threading
 import time
 import datetime
+import random
 import socket
 import builtins
 import types
@@ -364,13 +365,45 @@ _playback_monitor_token = 0
 _playback_monitor_lock = threading.Lock()
 _current_playing_link_index = -1
 
+def _get_global_monitor_token():
+    try:
+        return xbmcgui.Window(10000).getProperty('BridgeMulti.MonitorToken') or ''
+    except Exception:
+        return ''
+
+def _set_global_monitor_token(token):
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.MonitorToken', str(token or ''))
+    except Exception:
+        pass
+
+def _is_dialog_active_global():
+    try:
+        return xbmcgui.Window(10000).getProperty('BridgeMulti.DialogActive') == 'true'
+    except Exception:
+        return False
+
+def _set_dialog_active_global(active):
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.DialogActive', 'true' if active else 'false')
+    except Exception:
+        pass
+
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
     with _playback_monitor_lock:
         _playback_monitor_token += 1
-        my_token = _playback_monitor_token
+        my_token = "%f_%d_%d" % (time.time(), _playback_monitor_token, random.randint(10000, 99999))
+        _set_global_monitor_token(my_token)
+        try:
+            xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentMediaKey', str(media_key or ''))
+        except Exception:
+            pass
         _current_playing_link_index = current_link_index
+
+    # Limpiar cualquier estado residual de diálogo previo
+    _set_dialog_active_global(False)
 
     def _monitor_loop():
         global _floating_dialog_active
@@ -382,13 +415,22 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         # Esto es vital para torrents (Elementum, Quasar) que tardan en conectar con peers y descargar el pre-buffer
         video_started = False
         for _w in range(720):
-            if mon.abortRequested() or my_token != _playback_monitor_token: return
+            if mon.abortRequested() or _get_global_monitor_token() != my_token:
+                xbmc.log("Bridge Multi: monitor descartado antes de iniciar (superado por nuevo enlace o cancelado)", xbmc.LOGINFO)
+                return
             if p.isPlayingVideo():
+                # Comprobar que la clave de medios coincide con la sesión actual
+                cur_k = ''
+                try: cur_k = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or ''
+                except Exception: pass
+                if cur_k and cur_k != str(media_key):
+                    xbmc.log("Bridge Multi: monitor descartado (reproducción activa no coincide con media_key: %s != %s)" % (cur_k, media_key), xbmc.LOGINFO)
+                    return
                 video_started = True
                 break
             if mon.waitForAbort(0.25): return
 
-        if not video_started or not p.isPlayingVideo() or my_token != _playback_monitor_token:
+        if not video_started or not p.isPlayingVideo() or _get_global_monitor_token() != my_token:
             xbmc.log("Bridge Multi: monitor de reproducción cancelado (tiempo agotado o superado)", xbmc.LOGINFO)
             return
 
@@ -423,7 +465,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         if seek_to_time > 2:
             for _s in range(20):
-                if mon.abortRequested() or my_token != _playback_monitor_token: return
+                if mon.abortRequested() or _get_global_monitor_token() != my_token: return
                 if not p.isPlayingVideo(): break
                 try:
                     if p.getTime() > 0 or p.getTotalTime() > 0:
@@ -443,7 +485,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         active_idx = current_link_index
 
         while p.isPlayingVideo() and not mon.abortRequested():
-            if my_token != _playback_monitor_token:
+            if _get_global_monitor_token() != my_token:
+                xbmc.log("Bridge Multi: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
                 break
             try:
                 cur_time = p.getTime()
@@ -465,10 +508,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
                 if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
                     now = time.time()
-                    if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active:
+                    if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active and not _is_dialog_active_global():
                         xbmc.log("Bridge Multi: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
                         with _floating_dialog_lock:
                             _floating_dialog_active = True
+                        _set_dialog_active_global(True)
                         try:
                             c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
                             if c_links:
@@ -485,9 +529,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         open_links = True
                                     else:
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
-                                             try: p.pause()
-                                             except: pass
-                                        pause_cooldown = time.time() + 2.0
+                                            try: p.pause()
+                                            except: pass
+                                        is_paused = False
+                                        last_pause_state = False
+                                        pause_cooldown = time.time() + 4.0
 
                                 if open_links:
                                     dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True)
@@ -505,10 +551,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
                                             try: p.pause()
                                             except: pass
-                                        pause_cooldown = time.time() + 2.0
+                                        is_paused = False
+                                        last_pause_state = False
+                                        pause_cooldown = time.time() + 4.0
                         except Exception as _de:
                             xbmc.log(f"Bridge Multi: floating dialog error: {_de}", xbmc.LOGINFO)
                         finally:
+                            _set_dialog_active_global(False)
                             with _floating_dialog_lock:
                                 _floating_dialog_active = False
 
@@ -518,6 +567,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 pass
 
             if mon.waitForAbort(0.25): break
+
+        if _get_global_monitor_token() == my_token:
+            _set_global_monitor_token('')
+            try: xbmcgui.Window(10000).clearProperty('BridgeMulti.CurrentMediaKey')
+            except Exception: pass
 
         if last_saved_time > 0 or tot_time > 0:
             save_bookmark(media_key, last_saved_time, tot_time, title=title_str)
@@ -1151,13 +1205,49 @@ _SPECIAL_CHAR_MAP = {
     'ı': 'i',  'İ': 'i',
 }
 
-_ALL_ARTICLES = frozenset([
-    'the', 'a', 'an', 'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
-    'le', 'les', 'der', 'die', 'das', 'de', 'del', 'of',
+_ARTICLES_DEFINITE = frozenset([
+    'the', 'el', 'la', 'los', 'las', 'le', 'les', 'der', 'die', 'das', 'het',
 ])
+_ARTICLES_INDEFINITE = frozenset([
+    'a', 'an', 'un', 'una', 'unos', 'unas', 'ein', 'eine',
+])
+_ALL_ARTICLES = _ARTICLES_DEFINITE | _ARTICLES_INDEFINITE
 
 def _strip_all_articles(s):
     return ' '.join(w for w in s.split() if w not in _ALL_ARTICLES)
+
+def _has_conflicting_articles(s1, s2):
+    """Comprueba si dos títulos tienen artículos distintos en la misma posición.
+    Permite omisiones puras (ej. '2001 una odisea' vs '2001 odisea', 'the office' vs 'office').
+    Rechaza discrepancias de artículos opuestos (ej. 'una' vs 'la', 'the' vs 'a', 'un' vs 'el')."""
+    tokens1 = s1.split()
+    tokens2 = s2.split()
+    core1 = [w for w in tokens1 if w not in _ALL_ARTICLES]
+    core2 = [w for w in tokens2 if w not in _ALL_ARTICLES]
+    if core1 != core2:
+        return False
+
+    def get_article_slots(tokens):
+        slots = []
+        cur_art = []
+        for w in tokens:
+            if w in _ALL_ARTICLES:
+                cur_art.append(w)
+            else:
+                slots.append(tuple(cur_art))
+                cur_art = []
+        slots.append(tuple(cur_art))
+        return slots
+
+    slots1 = get_article_slots(tokens1)
+    slots2 = get_article_slots(tokens2)
+    if len(slots1) != len(slots2):
+        return False
+    for art1, art2 in zip(slots1, slots2):
+        if art1 and art2:
+            if art1 != art2:
+                return True
+    return False
 
 def clean_title(title_str):
     """Normalize a title for fuzzy comparison.
@@ -1529,8 +1619,9 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
 
         # 4. All articles stripped match (e.g. 2001: Una odisea del espacio vs 2001: Odisea del espacio)
         if _cr_all_art and _ct_all_art and (_cr_all_art == _ct_all_art or (_cr_art_comp == _ct_art_comp and len(_cr_art_comp) >= 3)):
-            best_title_score = max(best_title_score, 880)
-            continue
+            if not _has_conflicting_articles(clean_res, clean_target):
+                best_title_score = max(best_title_score, 880)
+                continue
 
         # 5. Compact + Number words normalized
         if _cr_nw_comp == _ct_nw_comp and len(_cr_nw_comp) >= 3:
@@ -1539,8 +1630,9 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
 
         # 6. Article-stripped match
         if (_cr_na == _ct_na and _cr_na) or (_cr_na.replace(' ', '') == _ct_na.replace(' ', '') and len(_cr_na) >= 3):
-            best_title_score = max(best_title_score, 800)
-            continue
+            if not _has_conflicting_articles(clean_res, clean_target):
+                best_title_score = max(best_title_score, 800)
+                continue
 
         # 7. Subtitle split handling: "Supergirl: Woman of Tomorrow" vs "Supergirl", "Dr. Strangelove or:..." vs "Dr. Strangelove"
         if ':' in name or ' - ' in name or '–' in name:
@@ -1571,26 +1663,35 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
                         best_title_score = max(best_title_score, 500)
                     continue
 
-        # 8. Substring match
+        # 8. Substring match (palabra completa estricta; sin letras/palabras extra no autorizadas)
         for _rv, _tv in [(clean_res, clean_target), (_cr_na, _ct_na)]:
             if not _rv or not _tv or _rv == _tv: continue
-            _sub_fwd = _tv in _rv
-            _sub_rev = _rv in _tv
+            _sub_fwd = bool(re.search(r'\b' + re.escape(_tv) + r'\b', _rv))
+            _sub_rev = bool(re.search(r'\b' + re.escape(_rv) + r'\b', _tv))
             if not _sub_fwd and not _sub_rev: continue
 
             _wc_res = len(_rv.split())
             _wc_tgt = len(_tv.split())
             _same_wc = _wc_res == _wc_tgt
 
+            # Si el resultado tiene palabras extra respecto al objetivo (ej. 'Avatar Extended' vs 'Avatar')
             if _sub_fwd and not _same_wc:
                 _pos = _rv.find(_tv)
                 _extra = (_rv[:_pos].strip() + ' ' + _rv[_pos + len(_tv):].strip()).strip()
                 if _extra and any(ch.isalpha() for ch in _extra):
-                    break
+                    continue
+
+            # Si el objetivo tiene palabras extra respecto al resultado (ej. 'Heart of the Beast' vs 'Beast')
+            # NUNCA permitir que una película distinta con un título más corto ('Beast') coincida con ('Heart of the Beast')
+            if _sub_rev and not _same_wc:
+                _pos = _tv.find(_rv)
+                _extra = (_tv[:_pos].strip() + ' ' + _tv[_pos + len(_rv):].strip()).strip()
+                if _extra and any(ch.isalpha() for ch in _extra):
+                    continue
 
             if year_score > 0 or tmdb_score > 0 or _same_wc:
                 best_title_score = max(best_title_score, 300)
-            break
+                break
 
     if best_title_score == 0 and tmdb_score == 0 and imdb_score == 0:
         return 0
@@ -2909,16 +3010,44 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 except: pass
                 return False
 
-        # 1. Encabezados h1 (lo más fiable: título principal de la ficha)
-        h1s = _re2.findall(r'<h1[^>]*>(.*?)</h1>', html, flags=_re2.IGNORECASE | _re2.DOTALL)
-        for _h in h1s:
+        # 1. Encabezados h1, h2 y enlaces bookmark (lo más fiable: título principal de la ficha)
+        # Portales como GnulaTv o temas de WordPress usan h2 con rel="bookmark" o título del post
+        cand_title = ''
+        if item is not None:
+            cand_title = _safe_str(getattr(item, 'contentTitle', '') or getattr(item, 'title', '')).strip()
+        cand_words = [w.lower() for w in _re2.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', cand_title)] if cand_title else []
+
+        headings = []
+        # Enlaces permalink del post con rel="bookmark" (ej. Gnula: <a rel="bookmark" title="Ver ... (2011) online">)
+        headings.extend(_re2.findall(r'<a[^>]+rel=["\']bookmark["\'][^>]*>(.*?)</a>', html, flags=_re2.IGNORECASE | _re2.DOTALL))
+        # Clases CSS explícitas de título del post/obra
+        headings.extend(_re2.findall(r'<[^>]+class=["\'][^"\']*(?:entry-title|post-title|item-title|film-title|tit_peli)[^"\']*["\'][^>]*>(.*?)</', html, flags=_re2.IGNORECASE | _re2.DOTALL))
+        # h1 (siempre)
+        headings.extend(_re2.findall(r'<h1[^>]*>(.*?)</h1>', html, flags=_re2.IGNORECASE | _re2.DOTALL))
+        # h2 (si coincide con palabras del título o términos de reproducción/post)
+        h2s = _re2.findall(r'<h2[^>]*>(.*?)</h2>', html, flags=_re2.IGNORECASE | _re2.DOTALL)
+        for _h in h2s:
+            _htxt = _re2.sub(r'<[^>]+>', ' ', _h).strip()
+            if cand_words and any(w in _htxt.lower() for w in cand_words):
+                headings.append(_h)
+            elif 'rel="bookmark"' in _h.lower() or 'online' in _htxt.lower() or 'ver ' in _htxt.lower():
+                headings.append(_h)
+
+        head_years = []
+        for _h in headings:
             _t = _re2.sub(r'<[^>]+>', ' ', _h)
             hy = [int(y) for y in _re2.findall(years_re, _t)]
             if hy:
-                if any(abs(y - year_t) <= 1 for y in hy):
-                    _mark_confirmed()
-                    return True
-                return False
+                head_years.extend(hy)
+
+        if head_years:
+            if any(abs(y - year_t) <= 1 for y in head_years):
+                _mark_confirmed()
+                return True
+            try:
+                xbmc.log("Bridge Multi: %s '%s' descartado por año en encabezado/título de la web (%s != %s)" % (channel_id, _u, head_years[0], year_t), xbmc.LOGINFO)
+            except: pass
+            return False
 
         # 2. Meta tags og:title / twitter:title
         meta_titles = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:title|twitter:title)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
@@ -2971,6 +3100,18 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             if abs(ly - year_t) <= 1:
                 _mark_confirmed()
                 return True
+            return False
+
+        # 6.5. Patrones de estreno o ficha en texto inline (ej. Ver película online [2011, Latino, HD])
+        inline_m = _re2.search(r'(?:ver\s+pel[ií]cula|online|estreno|a[ñn]o)[^<]{0,50}(?:\[|\()\s*(19\d\d|20[0-3]\d)\s*(?:\]|\)|,)', html, _re2.IGNORECASE)
+        if inline_m:
+            iy = int(inline_m.group(1))
+            if abs(iy - year_t) <= 1:
+                _mark_confirmed()
+                return True
+            try:
+                xbmc.log("Bridge Multi: %s '%s' descartado por año inline en web (%d != %d)" % (channel_id, _u, iy, year_t), xbmc.LOGINFO)
+            except: pass
             return False
 
         # 7. Clase CSS meta estricta (<span class="year">2013</span>)
@@ -4930,7 +5071,7 @@ def show_links_as_directory():
             lang = _format_language(lnk)
             qual = _format_quality(lnk)
             ch = _format_channel(lnk)
-            _weak_str = ' [COLOR orange][?][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
+            _weak_str = ' [COLOR orange][Dudoso][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
 
             is_tor = (srv.strip().lower() == 'torrent' or _is_torrent_link(lnk))
             if is_tor:
@@ -7515,6 +7656,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
 
     def __init__(self, current_server_name="", meta=None):
         super().__init__()
+        self._is_closed = False
         self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, -1=Cerrar/Atrás
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
         self.server_name = current_server_name or "Actual"
@@ -7668,6 +7810,15 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             self.selected = self.current
         self.close()
 
+    def close(self):
+        if getattr(self, '_is_closed', False):
+            return
+        self._is_closed = True
+        try:
+            super().close()
+        except Exception:
+            pass
+
 
 class _FloatingLinksDialog(xbmcgui.WindowDialog):
     ACTION_MOVE_LEFT          = 1
@@ -7694,6 +7845,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
     def __init__(self, links, current_index=0, meta=None, engine='alfa', is_playback=False, failed_links=None, initial_tab=None):
         super().__init__()
+        self._is_closed = False
         self.all_links = list(links or [])
         self.meta = meta or {}
         self.engine = engine or 'alfa'
@@ -7856,7 +8008,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         mid_parts = []
         if lang: mid_parts.append('[COLOR lime]%s[/COLOR]' % lang)
         if qual and qual != 'N/A': mid_parts.append('[COLOR gold]%s[/COLOR]' % qual)
-        if weak: mid_parts.append('[COLOR orange][?][/COLOR]')
+        if weak: mid_parts.append('[COLOR orange][Dudoso][/COLOR]')
         mid = ' | '.join(mid_parts)
 
         right_parts = []
@@ -8353,6 +8505,15 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self.selected = -1
         self.close()
 
+    def close(self):
+        if getattr(self, '_is_closed', False):
+            return
+        self._is_closed = True
+        try:
+            super().close()
+        except Exception:
+            pass
+
 
 def _load_cached_links_for_dialog():
     if not os.path.exists(SEARCH_CACHE_FILE):
@@ -8526,6 +8687,16 @@ def _verify_playback_started(is_torrent=False, timeout=None):
 
 
 def show_floating_links_dialog():
+    if _is_dialog_active_global():
+        xbmc.log("Bridge Multi: show_floating_links_dialog omitido porque ya hay un diálogo activo", xbmc.LOGINFO)
+        return False
+    _set_dialog_active_global(True)
+    try:
+        return _show_floating_links_dialog_impl()
+    finally:
+        _set_dialog_active_global(False)
+
+def _show_floating_links_dialog_impl():
     p = xbmc.Player()
     is_playing = False
     cur_playback_time = 0.0
