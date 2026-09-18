@@ -1,5 +1,29 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="service.guiaparental" name="Control Parental IMDb" version="1.2.1" provider-name="01xKeven">
+<addons>
+<addon id="repository.01xkeven" name="01xKeven Repository" version="1.1.0" provider-name="01xKeven">
+
+    <extension point="xbmc.addon.repository" name="01xKeven Repository">
+        <dir>
+            <info>https://raw.githubusercontent.com/01xKeven/kodi-addons/main/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/01xKeven/kodi-addons/main/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/01xKeven/kodi-addons/main/zips/</datadir>
+        </dir>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+       <summary>01xKeven addons repository</summary>
+       <summary lang="es_ES">Repositorio de addons de 01xKeven</summary>
+       <description>Repository containing 01xKeven add-ons.</description>
+       <description lang="es_ES">Repositorio que contiene los addons de 01xKeven.</description>
+       <platform>all</platform>
+       <license>MIT</license>
+       <source>https://github.com/01xKeven/kodi-addons</source>
+       <assets>
+          <icon>icon.png</icon>
+       </assets>
+    </extension>
+
+</addon>
+<addon id="service.guiaparental" name="Control Parental IMDb" version="1.1.1" provider-name="01xKeven">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="script.module.requests" version="2.22.0"/>
@@ -7,15 +31,273 @@
   <extension point="xbmc.service" library="service.py"/>
   <extension point="xbmc.addon.metadata">
     <summary>IMDb Parental Guide</summary>
-    <description>Displays the IMDb parental content guide for movies and episodes. Shows rating, content rating, violence, nudity, profanity and more.</description>
+    <description>Displays the IMDb parental content guide for movies and episodes. Shows violence, nudity, profanity and more.</description>
     <summary lang="es_ES">Guía Parental de IMDb</summary>
-    <description lang="es_ES">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra valoración, clasificación, violencia, desnudez, groserías y más.</description>
+    <description lang="es_ES">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra violencia, desnudez, groserías y más.</description>
     <summary lang="es_MX">Guía Parental de IMDb</summary>
-    <description lang="es_MX">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra valoración, clasificación, violencia, desnudez, groserías y más.</description>
+    <description lang="es_MX">Muestra la guía de contenido parental de IMDb para películas y episodios. Muestra violencia, desnudez, groserías y más.</description>
     <platform>all</platform>
-    <news>v1.2.0: N/A when IMDb has no category data; IMDb rating + votes; content rating; configurable overlay duration.</news>
     <assets>
         <icon>resources/icon.png</icon>
     </assets>
   </extension>
 </addon>
+<addon id="skin.estouchy" version="4.0.4" name="Estouchy" provider-name="Team Kodi">
+	<requires>
+		<import addon="xbmc.gui" version="5.17.0"/>
+	</requires>
+	<extension point="xbmc.gui.skin" debugging="false">
+		<res width="1280" height="960" aspect="4:3" folder="xml"/>
+		<res width="1706" height="960" aspect="16:9" default="true" folder="xml"/>
+	</extension>
+	<extension point="xbmc.addon.metadata">
+		<platform>all</platform>
+		<license>Creative Commons Attribution-Share Alike 3.0 United States</license>
+		<forum>http://forum.kodi.tv/forumdisplay.php?fid=261</forum>
+		<website></website>
+		<email></email>
+		<source>https://github.com/xbmc/xbmc/</source>
+		<assets>
+			<icon>resources/icon.png</icon>
+			<fanart>resources/fanart.jpg</fanart>
+			<screenshot>resources/screenshot-01.jpg</screenshot>
+			<screenshot>resources/screenshot-02.jpg</screenshot>
+			<screenshot>resources/screenshot-03.jpg</screenshot>
+			<screenshot>resources/screenshot-04.jpg</screenshot>
+			<screenshot>resources/screenshot-05.jpg</screenshot>
+			<screenshot>resources/screenshot-06.jpg</screenshot>
+			<screenshot>resources/screenshot-07.jpg</screenshot>
+			<screenshot>resources/screenshot-08.jpg</screenshot>
+			<screenshot>resources/screenshot-09.jpg</screenshot>
+			<screenshot>resources/screenshot-10.jpg</screenshot>
+			<screenshot>resources/screenshot-11.jpg</screenshot>
+			<screenshot>resources/screenshot-12.jpg</screenshot>
+		</assets>
+		<summary lang="af_ZA">Oortreksel vir raakskerm toestelle</summary>
+		<summary lang="am_ET">ለ ተችስክሪን አካሎች ቆዳ</summary>
+		<summary lang="ar_SA">مظهر للواجهة مخصص للأجهزة التي تعمل باللمس</summary>
+		<summary lang="be_BY">Абалонка для сэнсарных прылад</summary>
+		<summary lang="bg_BG">Облик за устройства със сензорен екран</summary>
+		<summary lang="ca_ES">Aparença per als dispositius amb pantalla tàctil</summary>
+		<summary lang="cs_CZ">Vzhled pro zařízení s dotykovou obrazovkou</summary>
+		<summary lang="da_DK">Skin for berøringsfølsomme enheder</summary>
+		<summary lang="de_DE">Skin für Touchscreen-Geräte</summary>
+		<summary lang="el_GR">Κέλυφος για συσκευές με οθόνη αφής</summary>
+		<summary lang="en_GB">Skin for touchscreen devices</summary>
+		<summary lang="en_NZ">Skin for touchscreen devices</summary>
+		<summary lang="en_US">Skin for touchscreen devices</summary>
+		<summary lang="es_ES">Skin para dispositivos táctiles</summary>
+		<summary lang="es_MX">Máscara para dispositivos con pantalla táctil</summary>
+		<summary lang="et_EE">Puutetundlike seadmete rüü</summary>
+		<summary lang="eu_ES">Ukipen-pantaila duten gailuentzako azala</summary>
+		<summary lang="fi_FI">Ulkoasu kosketusnäytöllisille laitteille</summary>
+		<summary lang="fr_CA">Habillage pour appareils à écran tactile</summary>
+		<summary lang="fr_FR">Habillage pour les appareils à écran tactile</summary>
+		<summary lang="gl_ES">Pel para dispositivos táctiles</summary>
+		<summary lang="he_IL">מעטפת עבור התקני מסך מגע</summary>
+		<summary lang="hr_HR">Presvlaka za uređaje s dodirom na zaslon</summary>
+		<summary lang="hu_HU">Felület érintőképernyős eszközöknek</summary>
+		<summary lang="id_ID">Skin untuk perangkat layar sentuh</summary>
+		<summary lang="is_IS">Skinn fyrir tæki með snertiskjá</summary>
+		<summary lang="it_IT">Skin per dispositivi touchscreen</summary>
+		<summary lang="ja_JP">スキンはタッチスクリーンデバイス向けです</summary>
+		<summary lang="ko_KR">터치 스크린 기기를 위한 스킨</summary>
+		<summary lang="lt_LT">Teminė išvaizda liečiamiesiems įrenginiams</summary>
+		<summary lang="lv_LV">Apvalks skārienekrāna ierīcēm</summary>
+		<summary lang="ms_MY">Kulit untuk peranti skrin sentuh</summary>
+		<summary lang="nb_NO">Drakt for enheter med berøringsskjerm</summary>
+		<summary lang="nl_NL">Skin voor aanraakschermapparaten</summary>
+		<summary lang="pl_PL">Skóra dla urządzeń z ekranem dotykowym</summary>
+		<summary lang="pt_BR">Skin para dispositivos com telas de toque</summary>
+		<summary lang="pt_PT">Tema para dispositivos touchscreen</summary>
+		<summary lang="ro_RO">Costum pentru dispozitive cu ecran tactil</summary>
+		<summary lang="ru_RU">Обложка для устройств с сенсорным экраном</summary>
+		<summary lang="sk_SK">Grafický vzhľad pre zariadenia s dotykovým displejom</summary>
+		<summary lang="sr_RS">Маска за уређаје са екраном осетљивим на додир</summary>
+		<summary lang="sr_RS@latin">Maska za uređaje sa ekranom osetljivim na dodir</summary>
+		<summary lang="sv_SE">Skal för enheter med pekskärm</summary>
+		<summary lang="szl">Skōra dlŏ maszin z tykowym ekranym</summary>
+		<summary lang="th_TH">หน้าตาสำหรับอุปกรณ์สัมผัส</summary>
+		<summary lang="tr_TR">Dokunmatik ekranlı aygıtlar için dış görünüm</summary>
+		<summary lang="uk_UA">Скін для сенсорних пристроїв</summary>
+		<summary lang="vi_VN">Giao diện cho thiết bị màn hình cảm ứng</summary>
+		<summary lang="zh_CN">针对触屏设备的皮肤</summary>
+		<summary lang="zh_TW">為具有觸控螢幕的裝置所製作的佈景主題</summary>
+		<description lang="af_ZA">Oortreksel ontwerp om op raakskerm toestelle soos tablette en slimfone te gebruik</description>
+		<description lang="ar_SA">مظهر للواجهة مصمم للأجهزة التي تعمل باللمس مثل الجوالات الذكية والأجهزة اللوحية</description>
+		<description lang="be_BY">Абалонка распрацаваная для выкарыстання на сэнсарных прыладах, такіх як планшэты і смартфоны</description>
+		<description lang="bg_BG">Обликът е разработен за ползване на устройства със сензорен екран, като таблети и телефони.</description>
+		<description lang="ca_ES">Aparença dissenyada perquè s&apos;utilitzi en dispositius amb pantalla tàctil com taules i telèfons intel·ligents</description>
+		<description lang="cs_CZ">Vzhled navržený pro použití na zařízeních s dotykovou obrazovkou, jako jsou tablety a chytré telefony</description>
+		<description lang="da_DK">Skin der er designet til brug på berøringsfølsomme enheder som f.eks. tablets og smartphones</description>
+		<description lang="de_DE">Dieser Skin wurde für die Verwendung mit Touchscreen-Geräten, wie Tablets und Handys, entworfen</description>
+		<description lang="el_GR">Κέλυφος σχεδιασμένο για να χρησιμοποιηθεί σε συσκευές με οθόνη αφής όπως ταμπλέτες και έξυπνα κινητά.</description>
+		<description lang="en_GB">Skin designed to be used on touchscreen devices like tablets and smartphones</description>
+		<description lang="en_NZ">Skin designed to be used on touchscreen devices like tablets and smartphones</description>
+		<description lang="en_US">Skin designed to be used on touchscreen devices like tablets and smartphones</description>
+		<description lang="es_ES">Esta skin está diseñada para usarla en dispositivos táctiles como tabletas y smartphones</description>
+		<description lang="es_MX">Máscara diseñada para ser usada en dispositivos de pantalla táctil como tabletas y teléfonos inteligentes</description>
+		<description lang="et_EE">Rüü on mõeldud kasutamiseks puutetundlike seadmetega nagu tahvelarvutid ja nutitelefonid.</description>
+		<description lang="eu_ES">Ukipen-pantaila duten gailuetan erabiltzeko diseinatutako azala</description>
+		<description lang="fi_FI">Ulkoasu, joka on suunniteltu käytettäväksi kosketusnäytöllisillä laitteilla, kuten tableteilla ja älypuhelimilla</description>
+		<description lang="fr_CA">Habillage conçu pour être utilisé sur les appareils à écran tactile comme les tablettes et les téléphones intelligents</description>
+		<description lang="fr_FR">[CR]Habillage conçu pour les appareils à écran tactile comme les tablettes et [CR]les téléphonesHabillage conçu pour les appareils à écran tactile comme les tablettes et les téléphones</description>
+		<description lang="gl_ES">Pel deseñada para se empregar en dispositivos táctiles como tabletas e móbiles</description>
+		<description lang="he_IL">מעטפת מיועדת לשימוש בהתקני מסך מגע כגון טאבלט וסמארטפון</description>
+		<description lang="hr_HR">Presvlaka dizajnirana za korištenje na uređajima s dodirom na zaslon poput tableta i pametnih telefona</description>
+		<description lang="hu_HU">Egy érintőképernyős eszközökre, például táblagépekre és okostelefonokra tervezett felület</description>
+		<description lang="id_ID">Skin dirancang untuk digunakan pada perangkat layar sentuh seperti tablet dan smartphone</description>
+		<description lang="is_IS">Skinn sem er hannað til notkunar á tækjum með snertiskjá, eins og til dæmis spjaldtölvum og snjallsímum</description>
+		<description lang="it_IT">Skin progettata per essere usata su dispositivi touchscreen come tablet e smartphone</description>
+		<description lang="ja_JP">スキンのデザインは、タッチスクリーンデバイスであるタブレットやスマホなどでの使用を想定されています</description>
+		<description lang="ko_KR">태블릿이나 스마트폰과 같은 터치 스크린 기기에서 사용할 수 있게 디자인한 스킨</description>
+		<description lang="lt_LT">Teminė išvaizda pritaikyta naudojimui įrenginiuose su liečiamaisiais ekranais, tokiuose kaip planšetiniai kompiuteriai ar išmanieji telefonai</description>
+		<description lang="ms_MY">Kulit direka untuk digunakan pada peranti berskrin sentuh seperti tablet dan telefon pintar</description>
+		<description lang="nb_NO">Drakt designet for å bli brukt på enheter med berørningsskjerm, som smarttelefoner og lesebrett</description>
+		<description lang="nl_NL">Skin ontworpen voor het gebruik van aanraakschermapparaten zoals tablets en smartphones</description>
+		<description lang="pl_PL">Skóra przeznaczona do użytku na urządzeniach z ekranem dotykowym, takich jak tablety i smartfony</description>
+		<description lang="pt_BR">Skin concebida para ser usada em dispositivos com telas de toque como tablets e smartphones</description>
+		<description lang="pt_PT">Tema criado com o intuito de ser utilizado em tablets e smartphones</description>
+		<description lang="ro_RO">Costum proiectat pentru a fi utilizat pe dispozitivele cu ecran tactil cum sunt tabletele și telefoanele deștepte</description>
+		<description lang="ru_RU">Обложка предназначена для использования на устройствах с сенсорным экраном, таких как планшеты и смартфоны</description>
+		<description lang="sk_SK">Grafický vzhľad určený pre použitie na dotykových zariadeniach ako sú tablety alebo mobilné telefóny</description>
+		<description lang="sr_RS">Маска дизајнирана да би била коришћена на уређајима са екранима осетљивим на додир као што су таблети и паметни телефони</description>
+		<description lang="sr_RS@latin">Maska dizajnirana da bi bila korišćena na uređajima sa ekranima osetljivim na dodir kao što su tableti i pametni telefoni</description>
+		<description lang="sv_SE">Skal avsedd att användas på enheter med pekskärm som surfplattor och smarttelefoner</description>
+		<description lang="szl">Skōra dlŏ maszin ze tykowym ekranym, jak tablety i smartfōny.</description>
+		<description lang="th_TH">หน้าตาที่ออกแบบมาเพื่อใช้งานบนอุปกรณ์หน้าจอสัมผัส เช่น แท็บเล็ตและสมาร์ทโฟน</description>
+		<description lang="tr_TR">Bu dış görünüm tabletler ve akıllı telefonlar gibi dokunmatik ekranlı aygıtlarda kullanılmak üzere tasarlandı</description>
+		<description lang="uk_UA">Ця обкладинка призначена для пристроїв із сенсорним екраном, наприклад планшетів чи смартфонів</description>
+		<description lang="vi_VN">Giao diện được thiết kế để sử dụng trên thiết bị màn hình cảm ứng như máy tính bảng và điện thoại thông minh</description>
+		<description lang="zh_CN">为触屏设备如平板电脑和智能手机而设计的皮肤</description>
+		<description lang="zh_TW">本佈景主題專為平板及手機等具有觸控螢幕的裝置而設計</description>
+	</extension>
+</addon>
+<addon id="plugin.video.bridge.multi" name="Bridge Multi para TMDb Helper (Alfa / Balandro)" version="1.0.25" provider-name="01xKeven">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+    <import addon="plugin.video.alfa" version="3.0.0" optional="true"/>
+    <import addon="plugin.video.balandro" version="1.0.4" optional="true"/>
+    <import addon="script.module.requests"/>
+    <import addon="script.module.beautifulsoup4" optional="true"/>
+    <import addon="script.module.html5lib" optional="true"/>
+    <import addon="script.module.js2py" optional="true"/>
+    <import addon="script.module.pyaes" optional="true"/>
+    <import addon="script.module.rijndael" optional="true"/>
+    <import addon="script.module.brotlipython" optional="true"/>
+    <import addon="script.module.requests-toolbelt" optional="true"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py" start="startup"/>
+  <extension point="xbmc.addon.metadata">
+    <summary>Multi-source parallel search bridge between TMDb Helper and Alfa / Balandro</summary>
+    <summary lang="es_ES">Puente unificado de búsqueda multifuente entre TMDb Helper y Alfa / Balandro</summary>
+    <description>Universal bridge combining parallel search across all Alfa and Balandro channels into unified directory listings with link verification, language/quality sorting, torrent support, and player management.</description>
+    <description lang="es_ES">Puente universal que combina la búsqueda paralela en todos los canales de Alfa y Balandro en listas unificadas con verificación de enlaces, ordenación por idioma y calidad, soporte torrent y gestor de players.</description>
+    <platform>all</platform>
+  </extension>
+</addon>
+<addon id="repository.alfa-addon" name="[COLOR red]Alfa Add-on[/COLOR] Repo" version="1.0.8" provider-name="Alfa Development Group">
+    <requires>
+        <import addon="xbmc.addon" version="12.0.0"/>
+    </requires>
+    <extension point="xbmc.addon.repository" name="Alfa Add-on Repo">
+        <dir>
+            <info compressed="false">https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/alfa-addon/alfa-repo/master/</datadir>
+        </dir>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="ca">Repositori d'Alfa Add-on</summary>
+        <summary lang="en">Alfa Add-on Repository</summary>
+        <summary lang="es">Repositorio de Alfa Add-on</summary>
+        <summary lang="it">Repository di Alfa Add-on</summary>
+        <summary lang="pt">Repositório de Alfa Add-on</summary>
+        <description lang="ca">Repositori per instal·lar Alfa Addon, un dels principals add-ons de contingut de parla hispana al món, successor al conegut Pelisalacarta-ce. També es proveeix algunes utilitats addicionals.</description>
+        <description lang="en">Repository to install Alfa Addon, one of the main Spanish-speaking content add-ons in the world, successor to the well-known Pelisalacarta-ce. Some additional utilities are also provided.</description>
+        <description lang="es">Repositorio para instalar Alfa Addon, uno de los principales add-ons de contenido de habla hispana en el mundo, sucesor al conocido Pelisalacarta-ce. También se provee de algunas utilidades adicionales.</description>
+        <description lang="it">Repository per installare Alfa Addon, uno dei principali add-on di contenuti di lingua spagnola nel mondo, successore del noto Pelisalacarta-ce. Vengono fornite anche alcune utilità aggiuntive.</description>
+        <description lang="pt">Repositório para instalação do Alfa Addon, um dos principais add-ons de conteúdo em língua espanhola do mundo, sucessor do conhecido Pelisalacarta-ce. Alguns utilitários adicionais também são fornecidos.</description>
+        <disclaimer lang="ca">[COLOR red]Els propietaris i distribuïdors d'aquest complemento no proveeixen ni distribueixen cap contingut mostrat pel complemento ni tenen affiliación alguna amb els proveïdors de l'contingut.[/COLOR]</disclaimer>
+        <disclaimer lang="en">[COLOR red]The owners and submitters to this add-on do not host or distribute any of the content displayed by these add-ons nor do they have any affiliation with the content providers.[/COLOR]</disclaimer>
+        <disclaimer lang="es">[COLOR red]Los propietarios y distribuidores de este add-on no proveen ni distribuyen ningún contenido mostrado por el add-on ni tienen afiliación alguna con los proveedores del contenido.[/COLOR]</disclaimer>
+        <disclaimer lang="it">[COLOR red]I proprietari e i distributori di questo add-on aggiuntivo non forniscono o distribuiscono alcun contenuto visualizzato dal add-on aggiuntivo né hanno alcuna affiliazione con i fornitori di contenuti.[/COLOR]</disclaimer>
+        <disclaimer lang="pt">[COLOR red]Os proprietários e distribuidores deste add-on não fornecem ou distribuem qualquer conteúdo exibido pelo add-on nem têm qualquer afiliação com os provedores de conteúdo.[/COLOR]</disclaimer>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
+        </assets>
+        <source>https://github.com/alfa-addon/alfa-repo</source>
+    </extension>
+</addon>
+<addon id="repository.balandro" name="[COLOR aqua]Balandro[/COLOR] Repo" version="4.0.1" provider-name="Team Balandro">
+
+    <extension point="xbmc.addon.repository" name="balandro repo">
+        <dir>
+            <info>https://raw.githubusercontent.com/repobal/base/main/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/repobal/base/main/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/repobal/base/main/</datadir>
+        </dir>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+       <summary>Repositorio de Balandro</summary>
+       <assets>
+          <icon>icon.png</icon>
+          <fanart>fanart.jpg</fanart>
+       </assets>
+       <news>
+       [COLOR cyan][B]Repositorio para instalar el addon de vídeo Balandro[/B][/COLOR]
+
+       [COLOR darkorange][B]Versión  [/COLOR][COLOR yellow]4.0.1[/COLOR][COLOR red]  Marzo 2024[/B][/COLOR]
+
+       [COLOR goldenrod][B]Media Centers:[/B][/COLOR]
+           [COLOR tan][B]Kodi Versiones Oficiales Soportadas:[/B][/COLOR]
+           [COLOR plum][B]22.x Piers,  21.x Omega,  20.x Nexus,  19.x Matrix,[/B][/COLOR]
+           [COLOR plum][B]18.x Leia  y  17.x Krypton[/B][/COLOR]
+
+       [COLOR springgreen][B]Fuente[/COLOR]  [COLOR cyan]repobal.github.io/base/[/B][/COLOR]
+
+       [COLOR firebrick][B]Team[/COLOR]  [COLOR orange]https://github.com/repobal[/B][/COLOR]
+
+       [COLOR limegreen][B]Contacto:[/B][/COLOR]
+           Foro  www.mimediacenter.info/foro/
+           Telegram  t.me/balandro_asesor
+           Team  t.me/Balandro_team
+       </news>
+       <summary>Balandro es un Navegador de Páginas Webs</summary>
+       <description>[COLOR moccasin][B]Navega con Kodi por Páginas Webs para poder ver sus contenidos de manera fácil. [COLOR yellow]Balandro es desde el año [COLOR cyan]2018[COLOR yellow] un MOD derivado de [COLOR yellowgreen]Pelisalacarta y Alfa[COLOR yellow],[COLOR mediumaquamarine] y tiene como objeto, permitir visualizar [COLOR deepskyblue]Películas[COLOR mediumaquamarine], [COLOR hotpink]Series[COLOR mediumaquamarine], [COLOR darkcyan]Documentales[COLOR mediumaquamarine], etc., todo a través de Internet y directamente desde su sistema Media Center. [COLOR orchid]Este Add-On es tan solo un mero Ejercicio de Aprendizaje del Lenguaje de Programación Python y se distribuye sin Ningún Contenido Multimedia adjunto al mismo [COLOR lightgrey][I]En consecuencia solo las Webs son Plenamente Responsables de los contenidos que publiquen.[/I][/B][/COLOR]</description>
+       <disclaimer>[COLOR aqua][B]Los Propietarios y Distribuidores de este Add-On no Proveen ni Distribuyen Ningún Contenido Mostrado por el Add-On, ni Tienen Afiliación alguna con los Proveedores/Webs de contenidos. [COLOR tan]Está Prohibida su distribución, solo ó junto con Contenidos Multimedia Protegidos por los Derechos de Autor. [COLOR chocolate]Si este tipo de contenido está Prohibido en su País, solamente Usted será el Responsable de su uso. [COLOR white]La vulneración de estas prohibiciones Exonerarán de cualquier Culpa a sus Autores, [COLOR red]Siendo el unico Responsable quien lo haya Distribuido ó Utilizado Ilegalmente.[/B][/COLOR]</disclaimer>
+       <platform>all</platform>
+       <license>GNU GPL v3</license>
+       <source>https://repobal.github.io/base/</source>
+       <forum>https://www.mimediacenter.info/foro/</forum>
+    </extension>
+
+    <extension point="xbmc.service" library="service.py" start="login|startup" />
+</addon>
+<addon id="repository.resolveurl" name="ResolveURL Repository" provider-name="gujal" version="1.0.0">
+  <extension point="xbmc.addon.repository" name="ResolveURL Repository">
+    <dir>
+      <info compressed="false">https://raw.githubusercontent.com/Gujal00/smrzips/master/addons.xml</info>
+      <checksum>https://raw.githubusercontent.com/Gujal00/smrzips/master/addons.xml.md5</checksum>
+      <datadir zip="true">https://raw.githubusercontent.com/Gujal00/smrzips/master/zips/</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary>ResolveURL Repository</summary>
+    <summary lang="es_ES">Repositorio de ResolveURL</summary>
+    <description lang="en_GB">ResolveURL and Link Tester</description>
+    <description lang="es_ES">Repositorio para instalar y actualizar ResolveURL</description>
+    <platform>all</platform>
+    <assets>
+      <icon>icon.png</icon>
+      <fanart>fanart.jpg</fanart>
+    </assets> 
+  </extension>
+</addon>
+</addons>
