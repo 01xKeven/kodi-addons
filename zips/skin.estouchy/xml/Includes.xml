@@ -1061,7 +1061,7 @@
 					<posx>0</posx>
 					<posy>$PARAM[panel-posy]</posy>
 					<width>350</width>
-					<height>640</height>
+					<height>$PARAM[panel-height]</height>
 					<onleft>9000</onleft>
 					<onright>50</onright>
 					<onup>9000</onup>
@@ -1085,6 +1085,7 @@
 				</control>
 				<control type="image">
 					<description>Panel Arrow image</description>
+					<visible>!Window.IsVisible(VideoOSD) + !Window.IsVisible(MusicOSD)</visible>
 					<posx>110r</posx>
 					<posy>122r</posy>
 					<width>75</width>

@@ -1094,8 +1094,8 @@
 		<!-- 5. POPUP MENU FOR AUDIO / SUBTITLES / SETTINGS            -->
 		<!-- ========================================================= -->
 		<include content="PopupMenu">
-			<param name="panel-posy">-420</param>
-			<param name="panel-height">640</param>
+			<param name="panel-posy">-185</param>
+			<param name="panel-height">560</param>
 		</include>
 	</include>
 </includes>
