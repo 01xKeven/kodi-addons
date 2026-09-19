@@ -42,7 +42,7 @@
     </assets>
   </extension>
 </addon>
-<addon id="skin.estouchy" version="4.0.5" name="Estouchy" provider-name="Team Kodi">
+<addon id="skin.estouchy" version="4.0.6" name="Estouchy" provider-name="Team Kodi">
 	<requires>
 		<import addon="xbmc.gui" version="5.17.0"/>
 	</requires>
