@@ -103,6 +103,13 @@ CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
 
 _RAM_SEARCH_CACHE = {}
 
+# Recolector tardio: hilos que terminan despues del cierre pierden sus
+# enlaces. Aqui se guardan para que el recolector los anexe a la lista
+# abierta (sin reordenar lo ya mostrado) con refresco del contenedor.
+_LAST_SEARCH_TOKEN = None
+_LAST_MERGED_PFS = set()
+_LAST_RESULTS_DICT = {}
+
 def _store_ram_search_cache(links, matched_item, meta, engine):
     global _RAM_SEARCH_CACHE
     try:
@@ -1508,6 +1515,9 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
       - Subtitle prefix match: +800
       - Substring match: +300
       - Media type compatibility (movie vs show): +500
+      - Title similarity is MANDATORY: with no title match the result is
+        REJECTED (0), even with TMDb/IMDb/year (channel items inherit the
+        search-item IDs via Item.clone, so matching IDs alone prove nothing).
     """
     result_title = _safe_str(result_title)
     if not result_title: return 0
@@ -1693,7 +1703,12 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
                 best_title_score = max(best_title_score, 300)
                 break
 
-    if best_title_score == 0 and tmdb_score == 0 and imdb_score == 0:
+    # El titulo es obligatorio: los resultados de canal heredan los IDs del
+    # item de busqueda via Item.clone() (ej. allcalidad clona it_search con
+    # tmdb_id/imdb_id inyectados), asi que IDs coincidentes sin similitud de
+    # titulo no prueban nada ('Pinky y Cerebro' llegaba a 21500 con el tmdb
+    # heredado). Sin titulo -> RECHAZO aunque haya IDs/anio.
+    if best_title_score == 0:
         return 0
 
     total_score = tmdb_score + imdb_score + year_score + best_title_score
@@ -4251,9 +4266,29 @@ def _run_parallel_search_impl(engine='alfa'):
 
     if not enabled_players: return [], None
 
-    timeout_secs = min(18, max(8, _get_int_setting('search_timeout', 14)))
+    # PlanB (vitaminar) es el mas lento y valioso: arrancarlo primero en Alfa.
+    # OJO: tiene que ir AQUI, antes de crear los hilos, porque threads[idx],
+    # started_indices y completed_indices van indexados por esta lista. Si se
+    # reordena despues, los indices se desalinean y el dialogo muestra OK/--
+    # de canales cruzados (ademas PlanB no arrancaria primero). Solo Alfa.
+    if engine == 'alfa':
+        try:
+            _pb = [pf for pf in enabled_players if 'planb' in pf.lower()]
+            _rest = [pf for pf in enabled_players if 'planb' not in pf.lower()]
+            if _pb:
+                enabled_players = _pb + _rest
+                xbmc.log('Bridge Multi: PlanB priorizado al inicio de la cola', xbmc.LOGINFO)
+        except: pass
+
+    # Respetar el ajuste del usuario (antes se recortaba a 18s aunque el
+    # ajuste permite hasta 120s): en PCs lentos los canales necesitan mas.
+    # Alfa necesita mas margen (vitaminar de PlanB tarda ~45s): suelo de 60s
+    # solo en Alfa (Balandro queda con el ajuste del usuario tal cual).
+    timeout_secs = min(120, max(10, _get_int_setting('search_timeout', 40)))
+    if engine == 'alfa':
+        timeout_secs = min(120, max(60, timeout_secs))
     if is_series:
-        timeout_secs = min(20, timeout_secs + 2)
+        timeout_secs = min(122, timeout_secs + 2)
         xbmc.log('Bridge Multi: modo serie, timeout ajustado a %ds' % timeout_secs, xbmc.LOGINFO)
     max_search_workers = min(35, max(1, _get_int_setting('search_threads_max', 6)))
 
@@ -4332,7 +4367,12 @@ def _run_parallel_search_impl(engine='alfa'):
 
     start_time = time.time()
     thread_start_times = {}
-    channel_timeout = 10 if is_series else 8
+    # En Alfa los canales son mas lentos (vitaminar, findvideos pesados):
+    # darles mas margen por canal que en Balandro (solo Alfa).
+    if engine == 'alfa':
+        channel_timeout = 25 if is_series else 20
+    else:
+        channel_timeout = 10 if is_series else 8
     i = 0
     while not xbmc.Monitor().abortRequested():
         now = time.time()
@@ -4348,7 +4388,16 @@ def _run_parallel_search_impl(engine='alfa'):
             if idx in started_indices and idx not in completed_indices:
                 st = thread_start_times.get(idx, start_time)
                 is_alive = threads[idx].is_alive()
-                if not is_alive or (now - st > channel_timeout):
+                if engine == 'alfa':
+                    # En Alfa solo cuenta como completo el hilo MUERTO (o el
+                    # timeout global): marcarlo por tiempo perdia sus enlaces
+                    # tardios (PlanB, lamovie...). Los vivos ya salen en
+                    # active_str. Solo Alfa; Balandro conserva su corte rapido.
+                    if not is_alive:
+                        completed_indices.add(idx)
+                        found = pf in results_dict
+                        finished_channels.append((clean_name(pf), found))
+                elif not is_alive or (now - st > channel_timeout):
                     completed_indices.add(idx)
                     found = pf in results_dict
                     finished_channels.append((clean_name(pf), found))
@@ -4404,8 +4453,156 @@ def _run_parallel_search_impl(engine='alfa'):
             if not matched_item and it: matched_item = it
             for lnk in links: all_links.append(lnk)
 
+    # Foto para el recolector tardio: que players entraron y donde quedaron
+    # los resultados de los hilos que sigan vivos tras el cierre.
+    try:
+        global _LAST_SEARCH_TOKEN, _LAST_MERGED_PFS, _LAST_RESULTS_DICT, _LAST_SEARCH_THREADS
+        _LAST_MERGED_PFS = set(pf for pf in enabled_players if pf in results_dict)
+        _LAST_RESULTS_DICT = results_dict
+        _LAST_SEARCH_TOKEN = (str(engine), str(target_tmdb or ''), str(p_season or ''), str(p_episode or ''), time.time())
+        _LAST_SEARCH_THREADS = [(pf, threads[idx]) for idx, pf in enumerate(enabled_players) if idx in started_indices and threads[idx].is_alive()]
+    except: pass
+
     all_links = _filter_and_sort_links(all_links)
     return all_links, matched_item
+
+def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_name=''):
+    """Anexa enlaces tardios a la cache (RAM + fichero) sin reordenar lo ya
+    mostrado, y refresca el contenedor solo si nuestra lista sigue abierta.
+    Devuelve el nº anexado (0 si la busqueda ya fue superada por otra)."""
+    added = 0
+    try:
+        if not new_links:
+            return 0
+        tmdb_s, sea_s, epi_s = str(target_tmdb or ''), str(season or ''), str(episode or '')
+        ram = _RAM_SEARCH_CACHE
+        if not ram or str(ram.get('tmdb') or '') != tmdb_s or str(ram.get('engine') or 'alfa') != str(engine or 'alfa'):
+            return 0
+        if sea_s and str(ram.get('season') or '') != sea_s:
+            return 0
+        if epi_s and str(ram.get('episode') or '') != epi_s:
+            return 0
+        try:
+            exist_urls = set()
+            for _l in (ram.get('links') or []):
+                try: exist_urls.add(str(getattr(_l, 'url', '') or ''))
+                except: pass
+            fresh = [_l for _l in new_links if str(getattr(_l, 'url', '') or '') not in exist_urls]
+        except: fresh = list(new_links)
+        if not fresh:
+            return 0
+        try:
+            ram['links'].extend(fresh)
+            ram['time'] = time.time()
+        except: pass
+        try:
+            if os.path.exists(SEARCH_CACHE_FILE):
+                with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as _f:
+                    _sc = json.load(_f)
+                _meta = _sc.get('meta', {}) if isinstance(_sc, dict) else {}
+                if str(_meta.get('tmdb') or '') == tmdb_s and str(_sc.get('engine') or 'alfa') == str(engine or 'alfa'):
+                    _cur = _sc.get('links', []) or []
+                    _have = set()
+                    for _d in _cur:
+                        try:
+                            if isinstance(_d, dict): _have.add(str(_d.get('url') or ''))
+                        except: pass
+                    _ser = []
+                    for _l in fresh:
+                        try:
+                            _d = _serialize_item(_l)
+                            if _d and str(_d.get('url') or '') not in _have:
+                                _have.add(str(_d.get('url') or ''))
+                                _ser.append(_d)
+                        except: pass
+                    if _ser:
+                        _sc['links'] = _cur + _ser
+                        with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as _fw:
+                            json.dump(_sc, _fw)
+                        added = len(_ser)
+        except: pass
+        if added:
+            try:
+                xbmc.log("Bridge Multi: recolector tardio +%d enlaces de %s (total %d)" % (added, channel_name or '?', len(ram.get('links') or [])), xbmc.LOGINFO)
+            except: pass
+            try:
+                _folder = xbmc.getInfoLabel('Container.FolderPath') or ''
+                if 'plugin.video.bridge.multi' in _folder and 'list_links' in _folder:
+                    xbmc.executebuiltin('Container.Refresh')
+                    try: xbmcgui.Dialog().notification('Bridge Multi', '+%d enlaces de %s' % (added, channel_name or 'canal'), '', 3000)
+                    except: pass
+            except: pass
+    except: pass
+    return added
+
+def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=120):
+    """Espera hilos rezagados tras el cierre y anexa sus enlaces a la lista
+    abierta. Se aborta si otra busqueda toma el relevo o al expirar deadline."""
+    try:
+        mon = xbmc.Monitor()
+        t0 = time.time()
+        done_pfs = set()
+        while time.time() - t0 < deadline and not mon.abortRequested():
+            try:
+                if _LAST_SEARCH_TOKEN != token:
+                    return
+                avail = []
+                for pf, res in list(_LAST_RESULTS_DICT.items()):
+                    if pf in _LAST_MERGED_PFS or pf in done_pfs:
+                        continue
+                    try:
+                        it, links = res
+                    except: continue
+                    if links:
+                        avail.append((pf, links))
+                for pf, links in avail:
+                    try:
+                        _ch = re.sub(r'^(Alfa|Balandro)-', '', str(pf).replace('.json', ''), flags=re.IGNORECASE)
+                    except: _ch = str(pf)
+                    _append_late_links(engine, target_tmdb, season, episode, links, _ch)
+                    done_pfs.add(pf)
+                # Terminar si no quedan hilos vivos pendientes
+                try:
+                    alive = False
+                    for _pf, _th in list(_LAST_SEARCH_THREADS):
+                        try:
+                            if _pf not in _LAST_MERGED_PFS and _pf not in done_pfs and _th.is_alive():
+                                alive = True
+                                break
+                        except: pass
+                    if not alive:
+                        return
+                except: return
+            except: pass
+            try: time.sleep(1.0)
+            except: return
+    except: pass
+
+_LAST_SEARCH_THREADS = []
+
+def _spawn_late_collector(engine, target_tmdb, season, episode):
+    """Arranca el recolector tardio si quedaron hilos vivos tras el cierre."""
+    try:
+        token = _LAST_SEARCH_TOKEN
+        if not token:
+            return
+        alive = False
+        try:
+            for _pf, _th in list(_LAST_SEARCH_THREADS):
+                try:
+                    if _pf not in _LAST_MERGED_PFS and _th.is_alive():
+                        alive = True
+                        break
+                except: pass
+        except: pass
+        if not alive:
+            return
+        th = threading.Thread(target=_late_collect_worker, args=(engine, target_tmdb, season, episode, token), daemon=True)
+        th.start()
+        try:
+            xbmc.log("Bridge Multi: recolector tardio activado (hilos rezagados en curso)", xbmc.LOGINFO)
+        except: pass
+    except: pass
 
 def run_parallel_search(engine='alfa'):
     global _search_in_progress
@@ -4975,12 +5172,22 @@ def show_links_as_directory():
         xbmcplugin.endOfDirectory(handle, succeeded=False)
         return
 
-    # Limitar enlaces según ajuste del usuario (Recomendado: 40)
+    # Paginacion segun ajuste max_links_list: cada pagina muestra _max_list
+    # enlaces y, si sobran, boton "Siguientes/Anteriores" en vez de truncar.
     _max_list = _get_int_setting('max_links_list', 40)
     if _max_list < 5: _max_list = 5
-    if len(links) > _max_list:
-        xbmc.log(f"Bridge Multi: truncando de {len(links)} a {_max_list} enlaces (ajuste max_links_list)", xbmc.LOGINFO)
-        links = links[:_max_list]
+    try:
+        _page = max(0, int(get_param('page') or 0))
+    except: _page = 0
+    _total_links = len(links)
+    _total_pages = max(1, (_total_links + _max_list - 1) // _max_list)
+    if _page >= _total_pages: _page = _total_pages - 1
+    _page_offset = _page * _max_list
+    _has_next = (_page + 1) < _total_pages
+    _has_prev = _page > 0
+    if _total_links > _max_list:
+        xbmc.log(f"Bridge Multi: paginando {_total_links} enlaces, pagina {_page + 1}/{_total_pages} (ajuste max_links_list={_max_list})", xbmc.LOGINFO)
+        links = links[_page_offset:_page_offset + _max_list]
 
     # 2. Plantilla compartida de metadatos y arte (calculada 1 sola vez fuera del bucle)
     s_int = int(meta.get('season')) if meta.get('season') and str(meta.get('season')).isdigit() else None
@@ -5090,7 +5297,7 @@ def show_links_as_directory():
             else:
                 lbl = '%s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, ch, _weak_str, bm_str)
 
-            play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s' % (idx, engine)
+            play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s' % (_page_offset + idx, engine)
             li = xbmcgui.ListItem(label=lbl)
             li.setPath(play_url)
             li.setArt(base_art)
@@ -5146,6 +5353,30 @@ def show_links_as_directory():
             xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
         except Exception:
             pass
+
+    # Botones de paginacion: anterior arriba, siguiente abajo del todo.
+    # Los indices de reproduccion son GLOBALES (offset de pagina), asi que
+    # play_single_link resuelve contra la cache completa sin cambios.
+    def _page_url(_p):
+        _u = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%d' % (_safe_str(_req_tmdb or meta.get('tmdb') or ''), int(time.time()))
+        _ss = _req_s or meta.get('season') or ''
+        _ee = _req_e or meta.get('episode') or ''
+        if _ss and _ee:
+            _u += '&season=%s&episode=%s' % (_ss, _ee)
+        return _u + '&page=%d' % int(_p)
+    if _has_prev:
+        _a0, _a1 = (_page - 1) * _max_list + 1, _page * _max_list
+        _li_prev = xbmcgui.ListItem(label='[COLOR deepskyblue][B]<<  Anteriores (%d-%d de %d)[/B][/COLOR]' % (_a0, _a1, _total_links))
+        try: _li_prev.setArt(base_art)
+        except: pass
+        _dir_listing.insert(0, (_page_url(_page - 1), _li_prev, True))
+    if _has_next:
+        _b0 = _page_offset + _max_list + 1
+        _b1 = min(_total_links, _page_offset + 2 * _max_list)
+        _li_next = xbmcgui.ListItem(label='[COLOR deepskyblue][B]Siguientes enlaces (%d-%d de %d)  >>[/B][/COLOR]' % (_b0, _b1, _total_links))
+        try: _li_next.setArt(base_art)
+        except: pass
+        _dir_listing.append((_page_url(_page + 1), _li_next, True))
 
     if _dir_listing:
         try:
@@ -8952,6 +9183,9 @@ def main():
                     'engine': _se_engine
                 }, _fw)
         except: pass
+        try:
+            _spawn_late_collector(_se_engine, _se_meta2.get('tmdb'), _se_meta2.get('season'), _se_meta2.get('episode'))
+        except: pass
 
         if not _se_links:
             _eng_name = 'Alfa' if _se_engine == 'alfa' else 'Balandro'
@@ -9231,6 +9465,9 @@ def main():
                 _store_ram_search_cache(links or [], matched_item, meta, eng)
                 with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump({'item': _serialize_item(matched_item) if matched_item else None, 'links': [_serialize_item(l) for l in (links or [])], 'meta': meta, 'engine': eng}, f)
+            except: pass
+            try:
+                _spawn_late_collector(eng, meta.get('tmdb'), meta.get('season'), meta.get('episode'))
             except: pass
 
         if not links:
