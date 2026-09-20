@@ -6620,7 +6620,7 @@ def check_and_run_migration():
         except Exception as e:
             xbmc.log("Multi Bridge: error guardando master player: %s" % e, xbmc.LOGWARNING)
 
-    # 2. Asegurar que channels.json existe internamente en Multi Bridge
+    # 2. Asegurar que channels.json existe internamente en Multi Bridge (userdata)
     if not os.path.exists(CHANNELS_JSON_FILE):
         channels_data = {'version': 1, 'channels': {'alfa': {}, 'balandro': {}}}
         # Si existen players antiguos en TMDB_PLAYERS_PATH, migrarlos a channels.json
@@ -7810,6 +7810,17 @@ def _show_engine_picker():
 
     if bal_ok and not alfa_ok:
         return 'balandro'
+
+    try:
+        _ch_info = load_channels_data().get('channels', {})
+        _a_has = any(c.get('movies') and not c.get('movie_disabled') for c in _ch_info.get('alfa', {}).values())
+        _b_has = any(c.get('movies') and not c.get('movie_disabled') for c in _ch_info.get('balandro', {}).values())
+        if _a_has and not _b_has:
+            return 'alfa'
+        if _b_has and not _a_has:
+            return 'balandro'
+    except Exception:
+        pass
 
     try:
         alfa_addon = xbmcaddon.Addon('plugin.video.alfa')
@@ -9493,6 +9504,79 @@ def main():
         _s_check = season if season is not None and str(season).strip() != '' else get_param('season')
         _e_check = episode if episode is not None and str(episode).strip() != '' else get_param('episode')
         _is_s_play = bool(_s_check is not None and str(_s_check).strip() != '' and _e_check is not None and str(_e_check).strip() != '')
+
+        # Comprobar si hay canales configurados al invocar desde TMDb Helper
+        ch_data = load_channels_data()
+        _all_alfa = ch_data.get('channels', {}).get('alfa', {})
+        _all_bal = ch_data.get('channels', {}).get('balandro', {})
+        if not _all_alfa and not _all_bal:
+            opt = xbmcgui.Dialog().yesno(
+                'Multi Bridge — Sin Canales',
+                'No hay ningún canal configurado en Multi Bridge.\n\n'
+                'Para buscar y reproducir contenido debes importar los canales:\n'
+                '1. Abre el add-on [B]Multi Bridge[/B]\n'
+                '2. Entra en [B]Importar / Actualizar Canales desde la Nube[/B]\n'
+                '3. Confirma la descarga desde GitHub\n\n'
+                '¿Deseas descargar e importar los canales ahora mismo desde la Nube?'
+            )
+            if opt:
+                try:
+                    update_players_from_cloud()
+                except Exception as _e:
+                    xbmc.log("Multi Bridge: error al importar canales desde aviso: %s" % _e, xbmc.LOGWARNING)
+                ch_data = load_channels_data()
+                _all_alfa = ch_data.get('channels', {}).get('alfa', {})
+                _all_bal = ch_data.get('channels', {}).get('balandro', {})
+            if not _all_alfa and not _all_bal:
+                return
+
+        if _is_s_play:
+            _bal_series = [c for c in _all_bal.values() if c.get('series') and not c.get('series_disabled')]
+            if not _bal_series:
+                opt_s = xbmcgui.Dialog().yesno(
+                    'Multi Bridge — Sin Canales de Series',
+                    'No hay ningún canal de series activo en Balandro.\n\n'
+                    '¿Deseas importar los canales de la Nube ahora mismo?'
+                )
+                if opt_s:
+                    try:
+                        update_players_from_cloud()
+                    except Exception as _e:
+                        xbmc.log("Multi Bridge: error importando canales: %s" % _e, xbmc.LOGWARNING)
+                    ch_data = load_channels_data()
+                    _all_bal = ch_data.get('channels', {}).get('balandro', {})
+                    _bal_series = [c for c in _all_bal.values() if c.get('series') and not c.get('series_disabled')]
+                if not _bal_series:
+                    xbmcgui.Dialog().ok(
+                        'Multi Bridge — Sin Canales de Series',
+                        'Para ver series:\n1. Ve a [B]Multi Bridge > Gestor de Canales de Balandro[/B] y activa canales de series, o\n2. Usa [B]Importar / Actualizar Canales desde la Nube[/B].'
+                    )
+                    return
+        else:
+            _alfa_movies = [c for c in _all_alfa.values() if c.get('movies') and not c.get('movie_disabled')]
+            _bal_movies = [c for c in _all_bal.values() if c.get('movies') and not c.get('movie_disabled')]
+            if not _alfa_movies and not _bal_movies:
+                opt_m = xbmcgui.Dialog().yesno(
+                    'Multi Bridge — Sin Canales de Películas',
+                    'No hay ningún canal de películas activo en Multi Bridge.\n\n'
+                    '¿Deseas importar los canales de la Nube ahora mismo?'
+                )
+                if opt_m:
+                    try:
+                        update_players_from_cloud()
+                    except Exception as _e:
+                        xbmc.log("Multi Bridge: error importando canales: %s" % _e, xbmc.LOGWARNING)
+                    ch_data = load_channels_data()
+                    _all_alfa = ch_data.get('channels', {}).get('alfa', {})
+                    _all_bal = ch_data.get('channels', {}).get('balandro', {})
+                    _alfa_movies = [c for c in _all_alfa.values() if c.get('movies') and not c.get('movie_disabled')]
+                    _bal_movies = [c for c in _all_bal.values() if c.get('movies') and not c.get('movie_disabled')]
+                if not _alfa_movies and not _bal_movies:
+                    xbmcgui.Dialog().ok(
+                        'Multi Bridge — Sin Canales de Películas',
+                        'Para ver películas:\n1. Ve a [B]Multi Bridge > Gestor de Canales[/B] y activa algún canal, o\n2. Usa [B]Importar / Actualizar Canales desde la Nube[/B].'
+                    )
+                    return
         _res_meta = _resolve_localized_metadata(
             tmdb_id=tmdb_id or get_param('tmdb'),
             is_series=_is_s_play,
