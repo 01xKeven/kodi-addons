@@ -100,6 +100,29 @@ SEARCH_CACHE_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_search_cache.js
 BOOKMARKS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_bookmarks.json')
 CONTINUE_WATCHING_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_continue_watching.json')
 CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
+CHANNELS_JSON_FILE = os.path.join(BRIDGE_DATA_PATH, 'channels.json')
+
+def load_channels_data():
+    if os.path.exists(CHANNELS_JSON_FILE):
+        try:
+            with open(CHANNELS_JSON_FILE, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            if isinstance(d, dict) and 'channels' in d:
+                return d
+        except Exception as e:
+            xbmc.log("Multi Bridge: error cargando channels.json: %s" % e, xbmc.LOGWARNING)
+    return {'version': 1, 'channels': {'alfa': {}, 'balandro': {}}}
+
+def save_channels_data(data):
+    try:
+        if not os.path.exists(BRIDGE_DATA_PATH):
+            os.makedirs(BRIDGE_DATA_PATH)
+        with open(CHANNELS_JSON_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        xbmc.log("Multi Bridge: error guardando channels.json: %s" % e, xbmc.LOGWARNING)
+        return False
 
 _RAM_SEARCH_CACHE = {}
 
@@ -342,7 +365,7 @@ def save_continue_watching_record(media_key, record_data):
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(_tmp, CONTINUE_WATCHING_FILE)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: save_continue_watching_record error: {e}", xbmc.LOGWARNING)
+        xbmc.log(f"Multi Bridge: save_continue_watching_record error: {e}", xbmc.LOGWARNING)
 
 def remove_continue_watching_record(media_key):
     if not media_key: return
@@ -355,7 +378,7 @@ def remove_continue_watching_record(media_key):
                 json.dump(data, f, indent=2, ensure_ascii=False)
             os.replace(_tmp, CONTINUE_WATCHING_FILE)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: remove_continue_watching_record error: {e}", xbmc.LOGWARNING)
+        xbmc.log(f"Multi Bridge: remove_continue_watching_record error: {e}", xbmc.LOGWARNING)
 
 def clear_all_continue_watching():
     try:
@@ -364,7 +387,7 @@ def clear_all_continue_watching():
             json.dump({}, f, indent=2, ensure_ascii=False)
         os.replace(_tmp, CONTINUE_WATCHING_FILE)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: clear_all_continue_watching error: {e}", xbmc.LOGWARNING)
+        xbmc.log(f"Multi Bridge: clear_all_continue_watching error: {e}", xbmc.LOGWARNING)
 
 _floating_dialog_active = False
 _floating_dialog_lock = threading.Lock()
@@ -416,14 +439,14 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         global _floating_dialog_active
         p = xbmc.Player()
         mon = xbmc.Monitor()
-        xbmc.log("Bridge Multi: monitor de reproducción iniciado para %s (esperando inicio de vídeo)..." % (title_str or media_key), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: monitor de reproducción iniciado para %s (esperando inicio de vídeo)..." % (title_str or media_key), xbmc.LOGINFO)
 
         # Esperar hasta 180 segundos (3 minutos) a que inicie la reproducción
         # Esto es vital para torrents (Elementum, Quasar) que tardan en conectar con peers y descargar el pre-buffer
         video_started = False
         for _w in range(720):
             if mon.abortRequested() or _get_global_monitor_token() != my_token:
-                xbmc.log("Bridge Multi: monitor descartado antes de iniciar (superado por nuevo enlace o cancelado)", xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: monitor descartado antes de iniciar (superado por nuevo enlace o cancelado)", xbmc.LOGINFO)
                 return
             if p.isPlayingVideo():
                 # Comprobar que la clave de medios coincide con la sesión actual
@@ -431,17 +454,17 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 try: cur_k = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or ''
                 except Exception: pass
                 if cur_k and cur_k != str(media_key):
-                    xbmc.log("Bridge Multi: monitor descartado (reproducción activa no coincide con media_key: %s != %s)" % (cur_k, media_key), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: monitor descartado (reproducción activa no coincide con media_key: %s != %s)" % (cur_k, media_key), xbmc.LOGINFO)
                     return
                 video_started = True
                 break
             if mon.waitForAbort(0.25): return
 
         if not video_started or not p.isPlayingVideo() or _get_global_monitor_token() != my_token:
-            xbmc.log("Bridge Multi: monitor de reproducción cancelado (tiempo agotado o superado)", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: monitor de reproducción cancelado (tiempo agotado o superado)", xbmc.LOGINFO)
             return
 
-        xbmc.log("Bridge Multi: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
@@ -480,10 +503,10 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 except: pass
                 if mon.waitForAbort(0.2): return
             try:
-                xbmc.log("Bridge Multi: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
                 p.seekTime(float(seek_to_time))
             except Exception as _ske:
-                xbmc.log("Bridge Multi: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
 
         last_saved_time = 0
         tot_time = 0
@@ -493,7 +516,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         while p.isPlayingVideo() and not mon.abortRequested():
             if _get_global_monitor_token() != my_token:
-                xbmc.log("Bridge Multi: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
                 break
             try:
                 cur_time = p.getTime()
@@ -516,7 +539,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
                     now = time.time()
                     if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active and not _is_dialog_active_global():
-                        xbmc.log("Bridge Multi: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
                         with _floating_dialog_lock:
                             _floating_dialog_active = True
                         _set_dialog_active_global(True)
@@ -562,7 +585,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         last_pause_state = False
                                         pause_cooldown = time.time() + 4.0
                         except Exception as _de:
-                            xbmc.log(f"Bridge Multi: floating dialog error: {_de}", xbmc.LOGINFO)
+                            xbmc.log(f"Multi Bridge: floating dialog error: {_de}", xbmc.LOGINFO)
                         finally:
                             _set_dialog_active_global(False)
                             with _floating_dialog_lock:
@@ -589,11 +612,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         if normal_exit or video_finished:
             # El usuario pulsó Stop, volvió atrás o vio el final: parada limpia
-            xbmc.log("Bridge Multi: parada normal voluntaria o finalizado. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: parada normal voluntaria o finalizado. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
             remove_continue_watching_record(media_key)
         else:
             # Cierre forzado o interrupción inesperada de Kodi
-            xbmc.log("Bridge Multi: parada abrupta/interrupción inesperada detectada. Preservando en Continuar viendo.", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: parada abrupta/interrupción inesperada detectada. Preservando en Continuar viendo.", xbmc.LOGINFO)
 
     _th = threading.Thread(target=_monitor_loop, daemon=False)
     _th.name = "BridgeMultiPlaybackMonitor"
@@ -626,6 +649,32 @@ def _safe_get_item_attr(item, attr_name, default=''):
 _current_engine_env = None
 _engine_lock = threading.RLock()
 
+def _is_engine_installed(engine):
+    """Comprueba si el motor (alfa o balandro) está instalado y disponible en Kodi."""
+    addon_id = 'plugin.video.alfa' if engine == 'alfa' else 'plugin.video.balandro'
+    addon_dir = alfa_path if engine == 'alfa' else balandro_path
+
+    try:
+        if xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+            return True
+    except Exception:
+        pass
+
+    try:
+        _a = xbmcaddon.Addon(addon_id)
+        if _a and _a.getAddonInfo('id'):
+            return True
+    except Exception:
+        pass
+
+    try:
+        if os.path.isdir(addon_dir) and os.path.isdir(os.path.join(addon_dir, 'channels')):
+            return True
+    except Exception:
+        pass
+
+    return False
+
 def _switch_engine_environment(target_engine):
     global _current_engine_env
     if _current_engine_env == target_engine:
@@ -648,6 +697,8 @@ def _switch_engine_environment(target_engine):
         _current_engine_env = target_engine
 
 def _get_alfa_modules():
+    if not _is_engine_installed('alfa'):
+        return None
     try:
         _switch_engine_environment('alfa')
         from platformcode import config, platformtools
@@ -665,10 +716,12 @@ def _get_alfa_modules():
             'httptools': httptools, 'scrapertools': scrapertools
         }
     except Exception as e:
-        xbmc.log("Bridge Multi: Error cargando Alfa: " + str(e), xbmc.LOGWARNING)
+        xbmc.log("Multi Bridge: Error cargando Alfa: " + str(e), xbmc.LOGWARNING)
         return None
 
 def _get_balandro_modules():
+    if not _is_engine_installed('balandro'):
+        return None
     try:
         _switch_engine_environment('balandro')
         from platformcode import config, platformtools
@@ -761,7 +814,7 @@ def _get_balandro_modules():
             'httptools': httptools, 'scrapertools': scrapertools
         }
     except Exception as e:
-        xbmc.log("Bridge Multi: Error cargando Balandro: " + str(e), xbmc.LOGWARNING)
+        xbmc.log("Multi Bridge: Error cargando Balandro: " + str(e), xbmc.LOGWARNING)
         return None
 
 _dialog_silence_depth = 0
@@ -991,7 +1044,7 @@ def _prepare_playable_link(link, engine='alfa'):
         try:
             item.url = base64.b64decode(data_url).decode('utf-8')
         except Exception as e:
-            xbmc.log(f"Bridge Multi: error decodificando data_url: {e}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: error decodificando data_url: {e}", xbmc.LOGINFO)
 
     # 2. Si el canal tiene metodo play(), ejecutarlo para resolver wrappers/protectores
     ch_name = _safe_str(getattr(item, 'channel', '') or '').strip()
@@ -1017,7 +1070,7 @@ def _prepare_playable_link(link, engine='alfa'):
                             elif isinstance(p_res, str) and p_res.startswith('http'):
                                 item.url = p_res
             except Exception as e:
-                xbmc.log(f"Bridge Multi: balandro canal {ch_name}.play error: {e}", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: balandro canal {ch_name}.play error: {e}", xbmc.LOGINFO)
         else:  # alfa
             try:
                 _switch_engine_environment('alfa')
@@ -1036,7 +1089,7 @@ def _prepare_playable_link(link, engine='alfa'):
                             elif isinstance(p_res, str) and p_res.startswith('http'):
                                 item.url = p_res
             except Exception as e:
-                xbmc.log(f"Bridge Multi: alfa canal {ch_name}.play error: {e}", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: alfa canal {ch_name}.play error: {e}", xbmc.LOGINFO)
 
     # 3. Comprobacion secundaria de data_url si url sigue vacia
     if (not getattr(item, 'url', '') or str(getattr(item, 'url', '')).lower() == 'none') and getattr(item, 'data_url', ''):
@@ -1823,14 +1876,14 @@ def _get_torrent_client():
                 if addon_id and xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
                     return addon_id, client.get('url', '')
                 else:
-                    xbmc.log('Bridge Multi: cliente torrent "%s" (%s) no instalado' % (cliente, addon_id), xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge: cliente torrent "%s" (%s) no instalado' % (cliente, addon_id), xbmc.LOGINFO)
                     return None, None
 
-        xbmc.log('Bridge Multi: cliente torrent "%s" no encontrado en torrent.json' % cliente, xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: cliente torrent "%s" no encontrado en torrent.json' % cliente, xbmc.LOGINFO)
         return None, None
 
     except Exception as _e:
-        xbmc.log('Bridge Multi: _get_torrent_client error: ' + str(_e), xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: _get_torrent_client error: ' + str(_e), xbmc.LOGINFO)
         return None, None
 
 
@@ -1873,7 +1926,7 @@ def _resolve_torrent_url(link, engine='balandro'):
                     _pt.start()
                     try:
                         _pdlg = xbmcgui.DialogProgressBG()
-                        _pdlg.create('Bridge Multi', 'Resolviendo torrent (%s)...' % _ch_dbg)
+                        _pdlg.create('Multi Bridge', 'Resolviendo torrent (%s)...' % _ch_dbg)
                     except Exception:
                         _pdlg = None
                     _deadline = time.time() + _TORRENT_PLAY_BUDGET
@@ -1890,11 +1943,11 @@ def _resolve_torrent_url(link, engine='balandro'):
                     except Exception:
                         pass
                     if _pt.is_alive():
-                        xbmc.log("Bridge Multi: torrent %s canal.play supero %ds, se abandona" % (_ch_dbg, _TORRENT_PLAY_BUDGET), xbmc.LOGWARNING)
+                        xbmc.log("Multi Bridge: torrent %s canal.play supero %ds, se abandona" % (_ch_dbg, _TORRENT_PLAY_BUDGET), xbmc.LOGWARNING)
                         fail_detail = 'El canal tardó demasiado en responder'
                         _p_res = None
                     elif _play_err[0] is not None:
-                        xbmc.log("Bridge Multi: torrent canal.play error: %s" % _play_err[0], xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: torrent canal.play error: %s" % _play_err[0], xbmc.LOGINFO)
                         _p_res = None
                     else:
                         _p_res = _play_holder[0]
@@ -1912,9 +1965,9 @@ def _resolve_torrent_url(link, engine='balandro'):
                                 _cand = _p_res
                             if _cand is not None and _safe_str(getattr(_cand, 'url', '') or ''):
                                 torrent_url = _safe_str(getattr(_cand, 'url', '') or '')
-                                xbmc.log("Bridge Multi: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
         except Exception as _e:
-            xbmc.log("Bridge Multi: torrent canal.play error: %s" % _e, xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: torrent canal.play error: %s" % _e, xbmc.LOGINFO)
     return torrent_url, fail_detail
 
 def _play_torrent_link(torrent_url, matched_item=None, meta=None):
@@ -1932,14 +1985,14 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     # acortador darian "Invalid input" en Elementum).
     _tl = torrent_url.strip()
     if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
-        xbmc.log('Bridge Multi: _play_torrent_link rechaza URL no-torrent: %s...' % _tl[:80], xbmc.LOGWARNING)
+        xbmc.log('Multi Bridge: _play_torrent_link rechaza URL no-torrent: %s...' % _tl[:80], xbmc.LOGWARNING)
         return False
     torrent_url = _tl
 
     _tor_id, _tor_tpl = _get_torrent_client()
     if not (_tor_id and _tor_tpl):
         xbmcgui.Dialog().notification(
-            'Bridge Multi',
+            'Multi Bridge',
             'Configura un cliente torrent en Ajustes → Balandro → Torrents',
             '', 5000)
         return False
@@ -1998,13 +2051,13 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
                 # url = "%s/show/%s/season/%s/episode/%s/infolabels" % (ELEMENTUMD_HOST, tmdb_id, query['season'][0], query['episode'][0])
                 play_url += ('&episode=%s&library=&season=%s&show=%s&tmdb=%s&type=episode'
                              % (_epnum, _season, _tmdb, _tmdb))
-                xbmc.log('Bridge Multi: torrent enriquecido [serie] tmdb=%s S%sE%s' % (
+                xbmc.log('Multi Bridge: torrent enriquecido [serie] tmdb=%s S%sE%s' % (
                     _tmdb, _season, _epnum), xbmc.LOGINFO)
             else:
                 play_url += '&library=&tmdb=%s&type=movie' % _tmdb
-                xbmc.log('Bridge Multi: torrent enriquecido [peli] tmdb=%s' % _tmdb, xbmc.LOGINFO)
+                xbmc.log('Multi Bridge: torrent enriquecido [peli] tmdb=%s' % _tmdb, xbmc.LOGINFO)
 
-    xbmc.log('Bridge Multi: torrent → %s' % _tor_id, xbmc.LOGINFO)
+    xbmc.log('Multi Bridge: torrent → %s' % _tor_id, xbmc.LOGINFO)
     sync_tmdbhelper_playerstring(meta)
 
     # Crear y enriquecer ListItem completo para que Kodi OSD y Trakt tengan los metadatos completos
@@ -2014,7 +2067,7 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
         set_listitem_info(_li, meta=meta)
         xbmc.Player().play(play_url, _li)
     except Exception as _pe:
-        xbmc.log('Bridge Multi: error reproduciendo torrent con ListItem: %s, usando fallback PlayMedia' % _pe, xbmc.LOGWARNING)
+        xbmc.log('Multi Bridge: error reproduciendo torrent con ListItem: %s, usando fallback PlayMedia' % _pe, xbmc.LOGWARNING)
         xbmc.executebuiltin('PlayMedia(%s)' % play_url)
     return True
 
@@ -2040,7 +2093,7 @@ def _offer_elementum_search(meta):
     label = '[B]%s[/B]' % title if title else 'este contenido'
 
     ans = xbmcgui.Dialog().yesno(
-        'Bridge Multi — Sin enlaces',
+        'Multi Bridge — Sin enlaces',
         'No se encontraron enlaces para %s.\n¿Buscar en [B]Elementum[/B]?' % label,
         nolabel='No',
         yeslabel='Sí')
@@ -2056,10 +2109,10 @@ def _offer_elementum_search(meta):
     else:
         elem_url = 'plugin://plugin.video.elementum/movie/%s/links' % tmdb_id
 
-    xbmc.log('Bridge Multi: lanzando Elementum via PlayMedia → %s' % elem_url, xbmc.LOGINFO)
+    xbmc.log('Multi Bridge: lanzando Elementum via PlayMedia → %s' % elem_url, xbmc.LOGINFO)
 
     # PlayMedia asigna a Elementum un handle de reproductor real para que al elegir el torrent
-    # Elementum pueda resolver e iniciar la reproducción en Kodi. Bridge Multi termina aquí su ejecución.
+    # Elementum pueda resolver e iniciar la reproducción en Kodi. Multi Bridge termina aquí su ejecución.
     sync_tmdbhelper_playerstring(meta)
     xbmc.executebuiltin('PlayMedia("%s")' % elem_url)
     return
@@ -2393,7 +2446,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             direct_items_to_test.append((idx, lnk))
 
     if not direct_items_to_test:
-        xbmc.log("Bridge Multi: _verify_links_headless - todos los enlaces son torrents (%d), ninguno a verificar" % len(links), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: _verify_links_headless - todos los enlaces son torrents (%d), ninguno a verificar" % len(links), xbmc.LOGINFO)
         return [verified_results[idx] for idx in sorted(verified_results.keys())]
 
     mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
@@ -2741,7 +2794,7 @@ def _resolve_localized_metadata(tmdb_id=None, is_series=False, season=None, epis
         _tmdb_translations_cache[cache_key] = res
 
     try:
-        xbmc.log(f"Bridge Multi: traducción resuelta (tmdb={tmdb_id_str}): plot={final_plot[:50]}... tagline={final_tagline} title={final_title}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: traducción resuelta (tmdb={tmdb_id_str}): plot={final_plot[:50]}... tagline={final_tagline} title={final_title}", xbmc.LOGINFO)
     except Exception:
         pass
 
@@ -2755,7 +2808,7 @@ def _notify_scan(channel_id):
     # Aviso desactivado por peticion del usuario: el chequeo sigue corriendo
     # en silencio (solo deja rastro en el log, sin ventanas emergentes).
     try:
-        xbmc.log('Bridge Multi: comprobando año en web real (%s)...' % channel_id, xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: comprobando año en web real (%s)...' % channel_id, xbmc.LOGINFO)
     except Exception:
         pass
 
@@ -2938,7 +2991,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             if _url_year:
                 if abs(_url_year - year_t) > 1:
                     try:
-                        xbmc.log("Bridge Multi: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
                     except: pass
                     return False
                 # Coincide con el año objetivo (tolerancia +/- 1)
@@ -2964,7 +3017,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             html = resp.read(80000).decode('utf-8', errors='ignore')
     except Exception as _e:
         try:
-            xbmc.log('Bridge Multi: page-check sin red (%s): %s' % (channel_id, _e), xbmc.LOGINFO)
+            xbmc.log('Multi Bridge: page-check sin red (%s): %s' % (channel_id, _e), xbmc.LOGINFO)
         except: pass
         return True
     if not html or len(html) < 200:
@@ -2985,7 +3038,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                     else:
                         # Si la web muestra un IMDb explícito y no coincide con el buscado, descartar
                         try:
-                            xbmc.log("Bridge Multi: %s '%s' descartado por IMDb diferente en web (%s != %s)" % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s '%s' descartado por IMDb diferente en web (%s != %s)" % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
                         except: pass
                         return False
 
@@ -3002,12 +3055,12 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                             if _match_actors(norm_web, norm_tmdb):
                                 _mark_confirmed()
                                 try:
-                                    xbmc.log("Bridge Multi: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
+                                    xbmc.log("Multi Bridge: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
                                 except: pass
                                 return True
                             elif len(web_actors) >= 3:
                                 try:
-                                    xbmc.log("Bridge Multi: %s '%s' descartado por reparto no coincidente" % (channel_id, _u), xbmc.LOGINFO)
+                                    xbmc.log("Multi Bridge: %s '%s' descartado por reparto no coincidente" % (channel_id, _u), xbmc.LOGINFO)
                                 except: pass
                                 return False
                 except Exception: pass
@@ -3021,7 +3074,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 return True
             else:
                 try:
-                    xbmc.log("Bridge Multi: %s '%s' descartado por año en ficha HDFull (%d != %d)" % (channel_id, _u, hdfull_years[0], year_t), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: %s '%s' descartado por año en ficha HDFull (%d != %d)" % (channel_id, _u, hdfull_years[0], year_t), xbmc.LOGINFO)
                 except: pass
                 return False
 
@@ -3060,7 +3113,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 _mark_confirmed()
                 return True
             try:
-                xbmc.log("Bridge Multi: %s '%s' descartado por año en encabezado/título de la web (%s != %s)" % (channel_id, _u, head_years[0], year_t), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: %s '%s' descartado por año en encabezado/título de la web (%s != %s)" % (channel_id, _u, head_years[0], year_t), xbmc.LOGINFO)
             except: pass
             return False
 
@@ -3125,7 +3178,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 _mark_confirmed()
                 return True
             try:
-                xbmc.log("Bridge Multi: %s '%s' descartado por año inline en web (%d != %d)" % (channel_id, _u, iy, year_t), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: %s '%s' descartado por año inline en web (%d != %d)" % (channel_id, _u, iy, year_t), xbmc.LOGINFO)
             except: pass
             return False
 
@@ -3163,17 +3216,17 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                         if _match_actors(norm_web, norm_tmdb):
                             _mark_confirmed()
                             try:
-                                xbmc.log("Bridge Multi: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
                             except: pass
                             return True
                         elif len(web_actors) >= 3:
                             try:
-                                xbmc.log("Bridge Multi: %s '%s' descartado por reparto no coincidente (%s != %s)" % (channel_id, _u, web_actors[:3], tmdb_cast[:3]), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: %s '%s' descartado por reparto no coincidente (%s != %s)" % (channel_id, _u, web_actors[:3], tmdb_cast[:3]), xbmc.LOGINFO)
                             except: pass
                             return False
             except Exception as _ce:
                 try:
-                    xbmc.log("Bridge Multi: cast verify error (%s): %s" % (channel_id, _ce), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: cast verify error (%s): %s" % (channel_id, _ce), xbmc.LOGINFO)
                 except: pass
 
         # 10. Resto de la página (fallback de último recurso si no hubo actores):
@@ -3244,6 +3297,82 @@ def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=Fals
     except Exception:
         return False
 
+_tmdb_identity_cache = {}
+
+_PAREN_TAG_RE = re.compile(r'(?i)^\s*(4k|uhd|2160p|1080p|720p|480p|360p|bluray|blu-ray|bdrip|brrip|hdrip|hdtv|dvdrip|dvdscr|web-?d[l1]|webrip|web-rip|x26[45]|h26[45]|hevc|avc|xvid|divx|latino|castellano|espa[ñn]ol|subtitulad[oa]s?|dual|audio|hdr|sdr|dts|aac|ac3|mp3|extended|remastered|unrated|theatrical|directors?\s*cut|3d|sbs|hsbs|hdts|hd-ts|cam|ts|vose?|repack|proper)\s*$')
+
+def _stripped_paren_extra(raw_title):
+    """Texto entre parentesis/corchetes que NO es anio ni etiqueta tecnica.
+    Ej. '(Cuenta Atras)' -> 'Cuenta Atras'; '(1995)', '(Latino)' -> ''.
+    El limpiador clean_title borra estos segmentos para puntuar, pero aqui se
+    detecta si lo borrado era significativo (desambigua homonimos)."""
+    try:
+        segs = re.findall(r'[\(\[\{]([^\)\]\}]{1,80})[\)\]\}]', _safe_str(raw_title) or '')
+        out = []
+        for s in segs:
+            t = _safe_str(s).strip()
+            if not t:
+                continue
+            if re.search(r'(19\d\d|20\d\d)', t):
+                continue
+            if _PAREN_TAG_RE.match(t):
+                continue
+            out.append(t)
+        return ' '.join(out)
+    except Exception:
+        return ''
+
+def _tmdb_identity_conflict(raw_title, target_tmdb, target_year):
+    """True si TMDb reconoce el titulo EXACTO como OTRA pelicula (!= target).
+    Caza homonimos con parentesis distintivo: 'Horas Desesperadas (Cuenta
+    Atras)' es Hours 2013, no Desperate Hours (tmdb 18612). Solo cuenta si el
+    top-1 de TMDb casa exacto con el titulo Y su anio difiere del objetivo
+    (misma pelicula = mismo anio). Fail-open: ante cualquier duda, False.
+    1 llamada API como maximo por titulo (cache de sesion), timeout 4s."""
+    try:
+        t = _safe_str(raw_title).strip()
+        if not t or not target_tmdb:
+            return False
+        key = ('movie', t.lower(), str(target_tmdb))
+        if key in _tmdb_identity_cache:
+            return _tmdb_identity_cache[key]
+        conflict = False
+        try:
+            api_key = "a1ab8b8669da03637a4b98fa39c39228"
+            import json as _json
+            import urllib.request as _ureq
+            q = uparse.quote(t)
+            url = f"https://api.themoviedb.org/3/search/movie?api_key={api_key}&query={q}&language=es-MX&page=1&include_adult=false"
+            with _ureq.urlopen(url, timeout=4) as resp:
+                data = _json.loads(resp.read().decode('utf-8', errors='ignore'))
+            results = data.get('results', []) if isinstance(data, dict) else []
+            if results and isinstance(results[0], dict):
+                top = results[0]
+                top_id = str(top.get('id', ''))
+                if top_id and top_id != str(target_tmdb):
+                    for _k in ('title', 'original_title'):
+                        _tt = _safe_str(top.get(_k) or '').strip()
+                        if _tt and clean_title(_tt) == clean_title(t):
+                            _ry = _safe_str(top.get('release_date') or '')[:4]
+                            _ty = _safe_str(target_year or '').strip()
+                            if _ry.isdigit() and _ty.isdigit():
+                                if abs(int(_ry) - int(_ty)) > 1:
+                                    conflict = True
+                            else:
+                                conflict = True
+                            break
+        except Exception:
+            conflict = False
+        try:
+            if len(_tmdb_identity_cache) > 500:
+                _tmdb_identity_cache.clear()
+            _tmdb_identity_cache[key] = conflict
+        except Exception:
+            pass
+        return conflict
+    except Exception:
+        return False
+
 def _fetch_tmdb_titles(tmdb_id, is_series=False):
     # Cache + 3 idiomas en paralelo (es-MX, es-ES y EN siempre: el titulo
     # original ingles es el que casa con webs extranjeras) + 1 reintento por
@@ -3257,7 +3386,7 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
     cache_key = f"{tmdb_id_str}_{1 if is_series else 0}"
     if cache_key in _tmdb_titles_cache:
         try:
-            xbmc.log(f"Bridge Multi: tmdb titles cache-hit {cache_key}: {_tmdb_titles_cache[cache_key]}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: tmdb titles cache-hit {cache_key}: {_tmdb_titles_cache[cache_key]}", xbmc.LOGINFO)
         except: pass
         return list(_tmdb_titles_cache[cache_key])
     try:
@@ -3297,7 +3426,7 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
             th.join(timeout=5.5)
         for lang in langs:
             try:
-                xbmc.log(f"Bridge Multi: tmdb titles {lang}: {results.get(lang, [])}", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: tmdb titles {lang}: {results.get(lang, [])}", xbmc.LOGINFO)
             except: pass
             for cand in results.get(lang, []):
                 if cand and cand not in titles:
@@ -3317,7 +3446,7 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
         return uniq
     except Exception as e:
         try:
-            xbmc.log(f"Bridge Multi: _fetch_tmdb_titles error: {e}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: _fetch_tmdb_titles error: {e}", xbmc.LOGINFO)
         except:
             pass
         return []
@@ -3400,12 +3529,12 @@ def _search_planb(target_title, target_year, is_series, s_num, e_num, all_names,
                     try:
                         raw_links = planb.vitaminar(it_vit) or []
                     except Exception as e:
-                        xbmc.log("Bridge Multi: PlanB vitaminar error title '%s': %s" % (try_title, str(e)), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: PlanB vitaminar error title '%s': %s" % (try_title, str(e)), xbmc.LOGINFO)
                 if not raw_links and hasattr(planb, 'findvideos'):
                     try:
                         raw_links = planb.findvideos(it_vit) or []
                     except Exception as e:
-                        xbmc.log("Bridge Multi: PlanB findvideos error title '%s': %s" % (try_title, str(e)), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: PlanB findvideos error title '%s': %s" % (try_title, str(e)), xbmc.LOGINFO)
             if raw_links and isinstance(raw_links, list):
                 valid_links = []
                 for l in raw_links:
@@ -3415,11 +3544,11 @@ def _search_planb(target_title, target_year, is_series, s_num, e_num, all_names,
                         l.bridge_engine = 'alfa'
                         valid_links.append(l)
                 if valid_links:
-                    xbmc.log("Bridge Multi: PlanB encontro %d enlaces para '%s' (try_title='%s')" % (len(valid_links), target_title, try_title), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: PlanB encontro %d enlaces para '%s' (try_title='%s')" % (len(valid_links), target_title, try_title), xbmc.LOGINFO)
                     return it_vit, valid_links
-            xbmc.log("Bridge Multi: PlanB sin enlaces para try_title='%s'" % try_title, xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: PlanB sin enlaces para try_title='%s'" % try_title, xbmc.LOGINFO)
     except Exception as e:
-        xbmc.log("Bridge Multi: PlanB search error: " + str(e), xbmc.LOGWARNING)
+        xbmc.log("Multi Bridge: PlanB search error: " + str(e), xbmc.LOGWARNING)
         import traceback
         xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
     return None, None
@@ -3442,7 +3571,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
             terms_to_try = [cleaned]
         else:
             return None, None
-    xbmc.log("Bridge Multi: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
+    xbmc.log("Multi Bridge: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
     canal = None
     with _engine_lock:
         try:
@@ -3485,8 +3614,65 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                         _ht.downloadpage_proxy = _fast_dp_proxy
                 except:
                     pass
+            if hasattr(canal, 'read_api') and callable(getattr(canal, 'read_api', None)):
+                try:
+                    if not getattr(canal.read_api, '_bridge_hooked', False):
+                        _orig_ra = canal.read_api
+                        def _hooked_ra(*args, **kwargs):
+                            data = _orig_ra(*args, **kwargs)
+                            try:
+                                if isinstance(data, dict):
+                                    candidates_lists = []
+                                    d_data = data.get('data') if isinstance(data.get('data'), dict) else data
+                                    if isinstance(d_data, dict):
+                                        for k in ('posts', 'searchFilm', 'items', 'films', 'movies', 'results'):
+                                            v = d_data.get(k)
+                                            if isinstance(v, list): candidates_lists.append(v)
+                                        pag = d_data.get('paginationFilm')
+                                        if isinstance(pag, dict) and isinstance(pag.get('items'), list):
+                                            candidates_lists.append(pag['items'])
+
+                                    if not hasattr(canal, '_bridge_post_metadata'):
+                                        canal._bridge_post_metadata = {}
+
+                                    for cl in candidates_lists:
+                                        for p in cl:
+                                            if isinstance(p, dict):
+                                                pid = p.get('_id') or p.get('id')
+                                                rd = str(p.get('release_date') or p.get('first_air_date') or p.get('premiered') or '').strip()
+                                                t_str = str(p.get('title') or p.get('name') or p.get('name_es') or '').strip()
+                                                orig_t = str(p.get('original_title') or p.get('original_name') or '').strip()
+                                                slug_str = str(p.get('slug') or '').strip()
+                                                y_found = None
+                                                if rd and len(rd) >= 4 and rd[:4].isdigit():
+                                                    y_found = int(rd[:4])
+                                                elif t_str:
+                                                    m_y = re.search(r'\b(19\d\d|20[0-3]\d)\b', t_str)
+                                                    if m_y:
+                                                        y_found = int(m_y.group(1))
+                                                if not y_found and slug_str:
+                                                    m_s = re.search(r'\b(19\d\d|20[0-3]\d)\b', slug_str)
+                                                    if m_s:
+                                                        y_found = int(m_s.group(1))
+                                                if pid:
+                                                    entry = {
+                                                        'year': y_found,
+                                                        'title': t_str,
+                                                        'original_title': orig_t,
+                                                        'release_date': rd
+                                                    }
+                                                    canal._bridge_post_metadata[str(pid)] = entry
+                                                    try: canal._bridge_post_metadata[int(pid)] = entry
+                                                    except: pass
+                            except Exception:
+                                pass
+                            return data
+                        _hooked_ra._bridge_hooked = True
+                        canal.read_api = _hooked_ra
+                except Exception:
+                    pass
         except Exception as e:
-            xbmc.log("Bridge Multi: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             return None, None
 
     search_actions = []
@@ -3496,7 +3682,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                 mainlist_items = canal.mainlist(Item(channel=channel_id))
                 search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
         except Exception as e:
-            xbmc.log("Bridge Multi: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             search_actions = []
 
     for cur_term in terms_to_try:
@@ -3516,9 +3702,9 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                             if isinstance(res, list) and res:
                                 results.extend(res)
                         except Exception as e2:
-                            xbmc.log("Bridge Multi: %s search(s_act) TypeError fallback failed: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s search(s_act) TypeError fallback failed: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
                     except Exception as e:
-                        xbmc.log("Bridge Multi: %s search(s_act) error term '%s': %s" % (channel_id, cur_term, str(e)), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: %s search(s_act) error term '%s': %s" % (channel_id, cur_term, str(e)), xbmc.LOGINFO)
             else:
                 try:
                     if base_item and hasattr(base_item, 'clone'):
@@ -3573,22 +3759,65 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                 if isinstance(res, list) and res:
                                     results.extend(res)
                             except Exception as e2:
-                                xbmc.log("Bridge Multi: %s fallback TypeError2: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: %s fallback TypeError2: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
                         except Exception as e:
-                            xbmc.log("Bridge Multi: %s fallback search error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s fallback search error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                     elif hasattr(canal, 'list_all'):
                         try:
                             res = canal.list_all(it_search)
                             if isinstance(res, list) and res:
                                 results.extend(res)
                         except Exception as e:
-                            xbmc.log("Bridge Multi: %s list_all fallback error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s list_all fallback error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                 except Exception as e:
-                    xbmc.log("Bridge Multi: %s fallback construction error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: %s fallback construction error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
         if not results:
-            xbmc.log("Bridge Multi: %s sin resultados para '%s'" % (channel_id, cur_term), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: %s sin resultados para '%s'" % (channel_id, cur_term), xbmc.LOGINFO)
             continue
-        xbmc.log("Bridge Multi: %s obtuvo %d resultados para '%s'" % (channel_id, len(results), cur_term), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: %s obtuvo %d resultados para '%s'" % (channel_id, len(results), cur_term), xbmc.LOGINFO)
+        if results:
+            for it in results:
+                try:
+                    # 1. Rescate por metadatos de API capturados
+                    if hasattr(canal, '_bridge_post_metadata'):
+                        pid = getattr(it, '_id', None)
+                        if pid is None: pid = getattr(it, 'id', None)
+                        if pid is not None and pid in canal._bridge_post_metadata:
+                            p_meta = canal._bridge_post_metadata[pid]
+                            y_val = p_meta.get('year')
+                            if y_val:
+                                if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                    it.infoLabels = {}
+                                it.infoLabels['year'] = y_val
+                                if p_meta.get('release_date'):
+                                    it.infoLabels['release_date'] = p_meta.get('release_date')
+                                it.year = y_val
+                                if target_year and str(y_val) == str(target_year).strip():
+                                    setattr(it, '_web_year_confirmed', True)
+                                xbmc.log("Multi Bridge: %s rescatado año %s para '%s' de metadatos API" % (channel_id, y_val, getattr(it, 'title', '')), xbmc.LOGINFO)
+                            if p_meta.get('title') and not getattr(it, 'contentTitle', None):
+                                it.contentTitle = p_meta.get('title')
+
+                    # 2. Rescate universal para cualquier canal presente o futuro:
+                    # Si el item no tiene año en infoLabels/year pero su título o contenido incluye (YYYY) o [YYYY]
+                    it_y = None
+                    if hasattr(it, 'infoLabels') and isinstance(getattr(it, 'infoLabels', None), dict):
+                        it_y = it.infoLabels.get('year')
+                    if not it_y:
+                        it_y = getattr(it, 'year', None)
+                    if not it_y:
+                        t_check = getattr(it, 'title', '') or getattr(it, 'contentTitle', '') or ''
+                        m_y = re.search(r'[\(\[]\s*(19\d\d|20[0-3]\d)\s*[\)\]]', str(t_check))
+                        if m_y:
+                            y_parsed = int(m_y.group(1))
+                            if not hasattr(it, 'infoLabels') or not isinstance(getattr(it, 'infoLabels', None), dict):
+                                it.infoLabels = {}
+                            it.infoLabels['year'] = y_parsed
+                            it.year = y_parsed
+                            if target_year and y_parsed == int(str(target_year).strip()):
+                                setattr(it, '_web_year_confirmed', True)
+                except Exception:
+                    pass
         _enrich_with_tmdb(results, 'alfa')
         candidates = []
         for it in results:
@@ -3598,7 +3827,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
             # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad, PelisPedia, HDFull)
             _low_title = _safe_str(title_check).lower().strip()
             if any(p in _low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or _low_title.startswith('>>') or _low_title.startswith('<<') or _low_title.endswith('>>') or _low_title.endswith('<<'):
-                xbmc.log(f"Bridge Multi: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
                 continue
             score = score_match(title_check, target_year, all_names, target_tmdb=target_tmdb, item=it, target_imdb=target_imdb, is_series=is_series)
             if score <= 0:
@@ -3615,14 +3844,14 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                            and not _get_item_year(it, title_check))
             except Exception:
                 _w_weak = False
-            xbmc.log("Bridge Multi: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)%s" % (channel_id, score, title_check, cur_term, target_year, target_tmdb, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)%s" % (channel_id, score, title_check, cur_term, target_year, target_tmdb, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
             # Chequeo de pagina real: si el match es debil y conocemos el año,
             # se verifica el año que muestra la web (con aviso). Si la web
             # muestra otro año, se salta este candidato (sin tocar el canal).
             if _w_weak and (target_year or target_imdb or target_tmdb):
                 try:
                     if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
-                        xbmc.log("Bridge Multi: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
                         continue
                     if getattr(it, '_web_year_confirmed', False):
                         _w_weak = False
@@ -3634,9 +3863,21 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                 it.infoLabels['tmdb'] = str(target_tmdb)
                                 it.tmdb_id = str(target_tmdb)
                             except: pass
-                        xbmc.log("Bridge Multi [Alfa]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge [Alfa]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
                 except Exception:
                     pass
+            # Conflicto de identidad TMDb (solo Alfa): aunque el match sea
+            # FUERTE por IDs, si el titulo traia parentesis con texto
+            # significativo ('(Cuenta Atras)') que el limpiador borra, TMDb
+            # puede reconocer ese titulo exacto como OTRA pelicula
+            # (Hours 2013 vs tmdb 18612). En ese caso se rechaza.
+            try:
+                if not is_series and target_tmdb:
+                    _extra_txt = _stripped_paren_extra(title_check)
+                    if _extra_txt and _tmdb_identity_conflict(title_check, target_tmdb, target_year):
+                        xbmc.log("Multi Bridge: %s '%s' descartado: TMDb lo identifica como otra pelicula (parentesis '%s')" % (channel_id, title_check, _extra_txt), xbmc.LOGINFO)
+                        continue
+            except: pass
             if is_series and hasattr(canal, 'episodios'):
                 try:
                     if target_tmdb:
@@ -3650,7 +3891,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     with silenced_dialogs():
                         ep_list = canal.episodios(it)
                     if not ep_list:
-                        xbmc.log("Bridge Multi: %s episodios vacio para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: %s episodios vacio para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
                     for ep in (ep_list or []):
                         ep_season = int(getattr(ep, 'contentSeason', 0) or getattr(ep, 'infoLabels', {}).get('season', 0) or getattr(ep, 'season', 0) or 0)
                         ep_episode = int(getattr(ep, 'contentEpisodeNumber', 0) or getattr(ep, 'infoLabels', {}).get('episode', 0) or getattr(ep, 'episode', 0) or 0)
@@ -3660,7 +3901,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                 with silenced_dialogs():
                                     links = canal.findvideos(ep) if hasattr(canal, 'findvideos') else None
                             except Exception as e:
-                                xbmc.log("Bridge Multi: %s findvideos(ep) error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: %s findvideos(ep) error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                             if links and isinstance(links, list) and len(links) > 0:
                                 valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                                 if valid:
@@ -3671,14 +3912,14 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                             l.bridge_score = int(score)
                                             l.bridge_weak = bool(_w_weak)
                                         except: pass
-                                    xbmc.log("Bridge Multi: %s OK serie %dx%d %d enlaces" % (channel_id, ep_season, ep_episode, len(valid)), xbmc.LOGINFO)
+                                    xbmc.log("Multi Bridge: %s OK serie %dx%d %d enlaces" % (channel_id, ep_season, ep_episode, len(valid)), xbmc.LOGINFO)
                                     return ep, valid
                                 else:
-                                    xbmc.log("Bridge Multi: %s findvideos(ep) sin enlaces validos" % channel_id, xbmc.LOGINFO)
+                                    xbmc.log("Multi Bridge: %s findvideos(ep) sin enlaces validos" % channel_id, xbmc.LOGINFO)
                             else:
-                                xbmc.log("Bridge Multi: %s findvideos(ep) vacio" % channel_id, xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge: %s findvideos(ep) vacio" % channel_id, xbmc.LOGINFO)
                 except Exception as e:
-                    xbmc.log("Bridge Multi: %s episodios exception: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: %s episodios exception: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                     import traceback
                     xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
             elif hasattr(canal, 'findvideos'):
@@ -3703,7 +3944,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                             it.infoLabels['tmdb'] = str(target_tmdb)
                                             it.tmdb_id = str(target_tmdb)
                                         except: pass
-                                        xbmc.log("Bridge Multi: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
+                                        xbmc.log("Multi Bridge: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
                                 except: pass
                             for l in valid:
                                 l.channel = channel_id
@@ -3712,14 +3953,14 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                                     l.bridge_score = int(score)
                                     l.bridge_weak = bool(_w_weak and not _w_conf)
                                 except: pass
-                            xbmc.log("Bridge Multi: %s OK peli %d enlaces para '%s'" % (channel_id, len(valid), title_check), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s OK peli %d enlaces para '%s'" % (channel_id, len(valid), title_check), xbmc.LOGINFO)
                             return it, valid
                         else:
-                            xbmc.log("Bridge Multi: %s findvideos sin enlaces validos para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s findvideos sin enlaces validos para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
                     else:
-                        xbmc.log("Bridge Multi: %s findvideos vacio para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: %s findvideos vacio para '%s'" % (channel_id, title_check), xbmc.LOGINFO)
                 except Exception as e:
-                    xbmc.log("Bridge Multi: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                     import traceback
                     xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
         if is_series and candidates:
@@ -3742,7 +3983,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
             terms_to_try = [cleaned]
         else:
             return None, None
-    xbmc.log("Bridge Multi [Balandro]: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
+    xbmc.log("Multi Bridge [Balandro]: %s terms_to_try=%s" % (channel_id, terms_to_try), xbmc.LOGINFO)
     canal = None
     with _engine_lock:
         try:
@@ -3818,7 +4059,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 try:
                                     return _orig_panda_episodios(item, *args, **kwargs)
                                 except Exception as _e2:
-                                    xbmc.log("Bridge Multi [Balandro]: pelispanda episodios fallback error: %s" % _e2, xbmc.LOGINFO)
+                                    xbmc.log("Multi Bridge [Balandro]: pelispanda episodios fallback error: %s" % _e2, xbmc.LOGINFO)
                                     return []
                             try:
                                 if item.page == 0 and item.perpage == 50:
@@ -3844,7 +4085,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                         break
                                 return _itemlist
                             except Exception as _e3:
-                                xbmc.log("Bridge Multi [Balandro]: pelispanda episodios safe error: %s" % _e3, xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge [Balandro]: pelispanda episodios safe error: %s" % _e3, xbmc.LOGINFO)
                                 return []
                         _pelispanda_episodios_safe._bridge_json_safe = True
                         canal.episodios = _pelispanda_episodios_safe
@@ -3854,10 +4095,10 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
             # resolver episodios de series: se omiten con log explicito en vez
             # de buscar para nada (ej. repelishd).
             if is_series and not hasattr(canal, 'temporadas') and not hasattr(canal, 'episodios'):
-                xbmc.log("Bridge Multi [Balandro]: %s sin soporte para series (solo peliculas), omitido" % channel_id, xbmc.LOGINFO)
+                xbmc.log("Multi Bridge [Balandro]: %s sin soporte para series (solo peliculas), omitido" % channel_id, xbmc.LOGINFO)
                 return None, None
         except Exception as e:
-            xbmc.log("Bridge Multi [Balandro]: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge [Balandro]: %s import error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             return None, None
 
     search_actions = []
@@ -3867,7 +4108,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                 mainlist_items = canal.mainlist(Item(channel=channel_id))
                 search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
         except Exception as e:
-            xbmc.log("Bridge Multi [Balandro]: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge [Balandro]: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             search_actions = []
 
     for cur_term in terms_to_try:
@@ -3887,9 +4128,9 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                             if isinstance(res, list) and res:
                                 results.extend(res)
                         except Exception as e2:
-                            xbmc.log("Bridge Multi [Balandro]: %s search TypeError fallback: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge [Balandro]: %s search TypeError fallback: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
                     except Exception as e:
-                        xbmc.log("Bridge Multi [Balandro]: %s search error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge [Balandro]: %s search error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             else:
                 try:
                     if base_item and hasattr(base_item, 'clone'):
@@ -3940,22 +4181,22 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 if isinstance(res, list) and res:
                                     results.extend(res)
                             except Exception as e2:
-                                xbmc.log("Bridge Multi [Balandro]: %s fallback TypeError2: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge [Balandro]: %s fallback TypeError2: %s" % (channel_id, str(e2)), xbmc.LOGINFO)
                         except Exception as e:
-                            xbmc.log("Bridge Multi [Balandro]: %s fallback error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge [Balandro]: %s fallback error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                     elif hasattr(canal, 'list_all'):
                         try:
                             res = canal.list_all(it_search)
                             if isinstance(res, list) and res:
                                 results.extend(res)
                         except Exception as e:
-                            xbmc.log("Bridge Multi [Balandro]: %s list_all error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge [Balandro]: %s list_all error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
                 except Exception as e:
-                    xbmc.log("Bridge Multi [Balandro]: %s fallback construction error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge [Balandro]: %s fallback construction error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
         if not results:
-            xbmc.log("Bridge Multi [Balandro]: %s sin resultados para '%s'" % (channel_id, cur_term), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge [Balandro]: %s sin resultados para '%s'" % (channel_id, cur_term), xbmc.LOGINFO)
             continue
-        xbmc.log("Bridge Multi [Balandro]: %s obtuvo %d resultados para '%s'" % (channel_id, len(results), cur_term), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge [Balandro]: %s obtuvo %d resultados para '%s'" % (channel_id, len(results), cur_term), xbmc.LOGINFO)
         _debug_nomatch_count = 0
         _enrich_with_tmdb(results, 'balandro')
         candidates = []
@@ -3966,14 +4207,14 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
             # Filtrar items de paginacion / siguiente pagina que contaminan resultados (ej. CineCalidad, PelisPedia, HDFull)
             _low_title = _safe_str(title_check).lower().strip()
             if any(p in _low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or _low_title.startswith('>>') or _low_title.startswith('<<') or _low_title.endswith('>>') or _low_title.endswith('<<'):
-                xbmc.log(f"Bridge Multi: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: {channel_id} skip pagination '{title_check}'", xbmc.LOGINFO)
                 continue
             score = score_match(title_check, target_year, all_names, target_tmdb=target_tmdb, item=it, target_imdb=target_imdb, is_series=is_series)
             if score <= 0:
                 if _debug_nomatch_count < 5:
                     _item_yr = _get_item_year(it, title_check)
                     _item_tmdb = _get_item_tmdb(it)
-                    xbmc.log("Bridge Multi [Balandro]: %s NO match '%s' yr=%s tmdb=%s" % (channel_id, title_check, _item_yr, _item_tmdb), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge [Balandro]: %s NO match '%s' yr=%s tmdb=%s" % (channel_id, title_check, _item_yr, _item_tmdb), xbmc.LOGINFO)
                     _debug_nomatch_count += 1
                 continue
             candidates.append((score, it, title_check))
@@ -3986,14 +4227,14 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                            and not _get_item_year(it, title_check))
             except Exception:
                 _w_weak = False
-            xbmc.log("Bridge Multi [Balandro]: %s MATCH (score=%d) '%s' para term '%s'%s" % (channel_id, score, title_check, cur_term, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
+            xbmc.log("Multi Bridge [Balandro]: %s MATCH (score=%d) '%s' para term '%s'%s" % (channel_id, score, title_check, cur_term, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
             # Chequeo de pagina real: si el match es debil y conocemos el año,
             # se verifica el año que muestra la web (con aviso). Si la web
             # muestra otro año, se salta este candidato (sin tocar el canal).
             if _w_weak and (target_year or target_imdb or target_tmdb):
                 try:
                     if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
-                        xbmc.log("Bridge Multi [Balandro]: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge [Balandro]: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
                         continue
                     if getattr(it, '_web_year_confirmed', False):
                         _w_weak = False
@@ -4005,7 +4246,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 it.infoLabels['tmdb'] = str(target_tmdb)
                                 it.tmdb_id = str(target_tmdb)
                             except: pass
-                        xbmc.log("Bridge Multi [Balandro]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge [Balandro]: %s confirmado en web (%s), match verificado (no débil)" % (channel_id, target_year or target_imdb or target_tmdb), xbmc.LOGINFO)
                 except Exception:
                     pass
             if is_series:
@@ -4033,7 +4274,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 with silenced_dialogs():
                                     _lk = canal.findvideos(ep) if hasattr(canal, 'findvideos') else None
                             except Exception as _fe:
-                                xbmc.log('Bridge Multi [Balandro]: %s findvideos error: %s' % (channel_id, _fe), xbmc.LOGINFO)
+                                xbmc.log('Multi Bridge [Balandro]: %s findvideos error: %s' % (channel_id, _fe), xbmc.LOGINFO)
                             if _lk and isinstance(_lk, list):
                                 valid = [l for l in _lk if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
                                 if valid:
@@ -4048,18 +4289,18 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                     if _any_ep is None:
                                         _any_ep = ep
                     if _all_valid:
-                        xbmc.log('Bridge Multi [Balandro]: %s OK serie %sx%s %d enlaces' % (channel_id, _target_s, _target_e, len(_all_valid)), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s OK serie %sx%s %d enlaces' % (channel_id, _target_s, _target_e, len(_all_valid)), xbmc.LOGINFO)
                         return _any_ep, _all_valid
                     return None, None
 
                 # Patrón estándar Balandro: temporadas() → episodios(season_item)
                 if hasattr(canal, 'temporadas') and hasattr(canal, 'episodios'):
                     try:
-                        xbmc.log('Bridge Multi [Balandro]: %s show_url=%s' % (channel_id, getattr(it, 'url', '?')[:80]), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s show_url=%s' % (channel_id, getattr(it, 'url', '?')[:80]), xbmc.LOGINFO)
                         with silenced_dialogs():
                             seasons = canal.temporadas(it)
 
-                        xbmc.log('Bridge Multi [Balandro]: %s temporadas() -> %d items' % (channel_id, len(seasons) if seasons else 0), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s temporadas() -> %d items' % (channel_id, len(seasons) if seasons else 0), xbmc.LOGINFO)
                         if not seasons:
                             pass
                         else:
@@ -4074,7 +4315,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
 
                             if _is_ep_list:
                                 # temporadas() devolvio episodios directamente (1 temporada)
-                                xbmc.log('Bridge Multi [Balandro]: %s temporadas devolvio %d eps directo' % (channel_id, len(seasons)), xbmc.LOGINFO)
+                                xbmc.log('Multi Bridge [Balandro]: %s temporadas devolvio %d eps directo' % (channel_id, len(seasons)), xbmc.LOGINFO)
                                 _rep_ep, _rep_lk = _try_ep_list(seasons)
                                 if _rep_lk:
                                     return _rep_ep, _rep_lk
@@ -4090,7 +4331,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                         break
                                 if sea_item is None:
                                     sea_item = seasons[0]  # fallback a primera temporada
-                                xbmc.log('Bridge Multi [Balandro]: %s usando temporada %s' % (channel_id, getattr(sea_item, 'contentSeason', '?')), xbmc.LOGINFO)
+                                xbmc.log('Multi Bridge [Balandro]: %s usando temporada %s' % (channel_id, getattr(sea_item, 'contentSeason', '?')), xbmc.LOGINFO)
                                 if target_tmdb:
                                     sea_item.tmdb_id = str(target_tmdb)
                                     if not hasattr(sea_item, 'infoLabels') or not isinstance(sea_item.infoLabels, dict):
@@ -4108,7 +4349,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 if ep_list:
                                     _found_ep = True
                     except Exception as e:
-                        xbmc.log('Bridge Multi [Balandro]: %s temporadas/episodios error: %s' % (channel_id, str(e)), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s temporadas/episodios error: %s' % (channel_id, str(e)), xbmc.LOGINFO)
 
                 # Fallback: intentar episodios() directo en el show (algunos canales lo soportan)
                 if not _found_ep and hasattr(canal, 'episodios'):
@@ -4126,12 +4367,12 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                         _it_fallback.page = 0
                         with silenced_dialogs():
                             ep_list = canal.episodios(_it_fallback)
-                        xbmc.log('Bridge Multi [Balandro]: %s episodios fallback(s=%s) -> %d items' % (channel_id, _target_s, len(ep_list) if ep_list else 0), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s episodios fallback(s=%s) -> %d items' % (channel_id, _target_s, len(ep_list) if ep_list else 0), xbmc.LOGINFO)
                         _rep_ep, _rep_lk = _try_ep_list(ep_list)
                         if _rep_lk:
                             return _rep_ep, _rep_lk
                     except Exception as e:
-                        xbmc.log('Bridge Multi [Balandro]: %s episodios directo error: %s' % (channel_id, str(e)), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge [Balandro]: %s episodios directo error: %s' % (channel_id, str(e)), xbmc.LOGINFO)
 
             elif hasattr(canal, 'findvideos'):
                 try:
@@ -4155,7 +4396,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                             it.infoLabels['tmdb'] = str(target_tmdb)
                                             it.tmdb_id = str(target_tmdb)
                                         except: pass
-                                        xbmc.log("Bridge Multi [Balandro]: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
+                                        xbmc.log("Multi Bridge [Balandro]: %s TMDb confirmado (%s), inyectado" % (channel_id, target_tmdb), xbmc.LOGINFO)
                                 except: pass
                             for l in valid:
                                 l.channel = channel_id
@@ -4166,42 +4407,64 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                                 except: pass
                             return it, valid
                 except Exception as e:
-                    xbmc.log("Bridge Multi [Balandro]: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge [Balandro]: %s findvideos error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
         if is_series and candidates:
             break
     return None, None
 
-def _search_on_player(player_file, engine, is_series, target_title, target_year, s_num, e_num, all_names, alt_terms=None, target_tmdb=None, target_imdb=None):
-    fpath = os.path.join(TMDB_PLAYERS_PATH, player_file)
+def _search_on_player(player_data_or_file, engine, is_series, target_title, target_year, s_num, e_num, all_names, alt_terms=None, target_tmdb=None, target_imdb=None):
     try:
-        with open(fpath, 'r', encoding='utf-8') as f: data = json.load(f)
+        if isinstance(player_data_or_file, dict):
+            data = player_data_or_file
+            target_channel = data.get('channel') or data.get('id') or ''
+            p_engine = data.get('engine', engine)
+        else:
+            player_file = str(player_data_or_file)
+            fpath = os.path.join(TMDB_PLAYERS_PATH, player_file)
+            if os.path.exists(fpath):
+                with open(fpath, 'r', encoding='utf-8') as f: data = json.load(f)
+            else:
+                ch_clean = player_file.lower().replace('.json', '')
+                prefix = 'alfa-' if engine == 'alfa' else 'balandro-'
+                if ch_clean.startswith(prefix): ch_clean = ch_clean[len(prefix):]
+                ch_clean = re.sub(r'-(series|movies?)$', '', ch_clean).strip()
+                ch_map = load_channels_data().get('channels', {}).get(engine, {})
+                data = ch_map.get(ch_clean, {})
+            target_channel = data.get('channel', '')
+            p_engine = 'alfa' if player_file.lower().startswith('alfa-') else ('balandro' if player_file.lower().startswith('balandro-') else engine)
+
         key = 'play_episode' if is_series else 'play_movie'
         url_list = data.get(key, [])
-        if not url_list or not isinstance(url_list, list): return None, None
-        url_str = url_list[0]
-        mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+        url_str = ''
+        if isinstance(url_list, list) and url_list:
+            url_str = url_list[0]
+        elif isinstance(url_list, str):
+            url_str = url_list
+
+        mods = _get_alfa_modules() if p_engine == 'alfa' else _get_balandro_modules()
         if not mods: return None, None
         ItemClass = mods['Item']
         search_item = None
-        target_channel = ''
-        if 'plugin://plugin.video.alfa/?' in url_str:
-            raw_b64 = url_str.split('plugin://plugin.video.alfa/?')[1].split('&')[0]
-            raw_b64 = uparse.unquote(raw_b64)
-            search_item = decode_base64_item(raw_b64, ItemClass)
-            target_channel = getattr(search_item, 'channel', '')
-        elif 'plugin://plugin.video.balandro/?' in url_str:
-            raw_b64 = url_str.split('plugin://plugin.video.balandro/?')[1].split('&')[0]
-            raw_b64 = uparse.unquote(raw_b64)
-            search_item = decode_base64_item(raw_b64, ItemClass)
-            target_channel = getattr(search_item, 'channel', '')
-        else:
-            clean_fn = player_file.replace('.json', '')
-            clean_fn = re.sub(r'^(Alfa|Balandro)-', '', clean_fn, flags=re.IGNORECASE)
-            target_channel = re.sub(r'-(Series|Movies?)$', '', clean_fn, flags=re.IGNORECASE).lower()
+
+        if url_str:
+            if 'plugin://plugin.video.alfa/?' in url_str:
+                raw_b64 = url_str.split('plugin://plugin.video.alfa/?')[1].split('&')[0]
+                raw_b64 = uparse.unquote(raw_b64)
+                search_item = decode_base64_item(raw_b64, ItemClass)
+                if not target_channel:
+                    target_channel = getattr(search_item, 'channel', '')
+            elif 'plugin://plugin.video.balandro/?' in url_str:
+                raw_b64 = url_str.split('plugin://plugin.video.balandro/?')[1].split('&')[0]
+                raw_b64 = uparse.unquote(raw_b64)
+                search_item = decode_base64_item(raw_b64, ItemClass)
+                if not target_channel:
+                    target_channel = getattr(search_item, 'channel', '')
+
+        if not target_channel:
+            target_channel = str(data.get('id', '')).lower()
 
         if not target_channel or target_channel == 'search': return None, None
 
-        p_engine = 'alfa' if player_file.lower().startswith('alfa-') else ('balandro' if player_file.lower().startswith('balandro-') else engine)
         if p_engine == 'alfa':
             res_it, res_links = _search_channel_alfa(target_channel, target_title, target_year, is_series, s_num, e_num, all_names, base_item=search_item, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
             if res_links:
@@ -4212,13 +4475,19 @@ def _search_on_player(player_file, engine, is_series, target_title, target_year,
             if res_links:
                 for l in res_links: l.bridge_engine = 'balandro'
             return res_it, res_links
-    except Exception:
+    except Exception as e:
+        xbmc.log("Multi Bridge: error en _search_on_player: %s" % e, xbmc.LOGWARNING)
         return None, None
 
 # ---------------------------------------------------------
 # Master Parallel Search Execution
 # ---------------------------------------------------------
 def _run_parallel_search_impl(engine='alfa'):
+    if not _is_engine_installed(engine):
+        xbmc.log("Multi Bridge: El motor %s no está instalado. Cancelando búsqueda." % engine, xbmc.LOGWARNING)
+        xbmcgui.Dialog().notification('Multi Bridge', 'El addon %s no está instalado' % engine.capitalize(), '', 3000)
+        return [], None
+
     p_title = title or get_param('title') or get_param('title_es') or get_param('title_lat') or get_param('title_orig') or get_param('title_en') or ''
     p_showname = showname or get_param('showname') or ''
     p_year = year or get_param('year') or ''
@@ -4230,8 +4499,11 @@ def _run_parallel_search_impl(engine='alfa'):
 
     is_series = bool(p_season and p_episode)
     if is_series and engine == 'alfa':
-        xbmc.log("Bridge Multi: Alfa solo soporta películas. Cambiando motor a Balandro para series.", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: Alfa solo soporta películas. Cambiando motor a Balandro para series.", xbmc.LOGINFO)
         engine = 'balandro'
+        if not _is_engine_installed('balandro'):
+            xbmcgui.Dialog().ok('Multi Bridge', 'Para reproducir series se requiere tener instalado el addon Balandro.')
+            return [], None
 
     if is_series:
         target_title = (p_showname or p_title or '').strip()
@@ -4246,38 +4518,30 @@ def _run_parallel_search_impl(engine='alfa'):
     target_tmdb = p_tmdb
     target_imdb = p_imdb
 
+    ch_data = load_channels_data()
+    engine_channels = ch_data.get('channels', {}).get(engine, {})
+
     enabled_players = []
-    prefix = 'Alfa-' if engine == 'alfa' else 'Balandro-'
-    if os.path.exists(TMDB_PLAYERS_PATH):
-        for fname in sorted(os.listdir(TMDB_PLAYERS_PATH)):
-            if not fname.endswith('.json') or fname.startswith('(1)MultiBusqueda') or fname.startswith('(1)AlfaMulti') or fname.startswith('(1)BalandroMulti'):
-                continue
-            if not fname.lower().startswith(prefix.lower()):
-                continue
-            fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f: data = json.load(f)
-                if str(data.get('disabled', '')).lower() in ('true', '1') or data.get('disabled') is True:
-                    continue
-                if is_series and 'play_episode' not in data: continue
-                if not is_series and 'play_movie' not in data: continue
-                enabled_players.append(fname)
-            except: pass
+    for ch_id in sorted(engine_channels.keys(), key=lambda k: engine_channels[k].get('name', k).lower()):
+        ch_info = engine_channels[ch_id]
+        if is_series:
+            if not ch_info.get('series'): continue
+            if ch_info.get('series_disabled'): continue
+        else:
+            if not ch_info.get('movies'): continue
+            if ch_info.get('movie_disabled'): continue
+        enabled_players.append(ch_info)
 
     if not enabled_players: return [], None
 
     # PlanB (vitaminar) es el mas lento y valioso: arrancarlo primero en Alfa.
-    # OJO: tiene que ir AQUI, antes de crear los hilos, porque threads[idx],
-    # started_indices y completed_indices van indexados por esta lista. Si se
-    # reordena despues, los indices se desalinean y el dialogo muestra OK/--
-    # de canales cruzados (ademas PlanB no arrancaria primero). Solo Alfa.
     if engine == 'alfa':
         try:
-            _pb = [pf for pf in enabled_players if 'planb' in pf.lower()]
-            _rest = [pf for pf in enabled_players if 'planb' not in pf.lower()]
+            _pb = [ch for ch in enabled_players if 'planb' in str(ch.get('channel', '')).lower() or 'planb' in str(ch.get('id', '')).lower()]
+            _rest = [ch for ch in enabled_players if 'planb' not in str(ch.get('channel', '')).lower() and 'planb' not in str(ch.get('id', '')).lower()]
             if _pb:
                 enabled_players = _pb + _rest
-                xbmc.log('Bridge Multi: PlanB priorizado al inicio de la cola', xbmc.LOGINFO)
+                xbmc.log('Multi Bridge: PlanB priorizado al inicio de la cola', xbmc.LOGINFO)
         except: pass
 
     # Respetar el ajuste del usuario (antes se recortaba a 18s aunque el
@@ -4289,30 +4553,30 @@ def _run_parallel_search_impl(engine='alfa'):
         timeout_secs = min(120, max(60, timeout_secs))
     if is_series:
         timeout_secs = min(122, timeout_secs + 2)
-        xbmc.log('Bridge Multi: modo serie, timeout ajustado a %ds' % timeout_secs, xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: modo serie, timeout ajustado a %ds' % timeout_secs, xbmc.LOGINFO)
     max_search_workers = min(35, max(1, _get_int_setting('search_threads_max', 6)))
 
     total_channels = len(enabled_players)
     engine_name = 'Alfa' if engine == 'alfa' else 'Balandro'
     p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create('Bridge Multi (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
+    p_dialog.create('Multi Bridge (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
         _distinct = len(set([_safe_str(x).lower().strip() for x in all_names if x]))
         if target_tmdb and not is_series and _distinct < 3:
             p_dialog.update(5, 'Obteniendo titulos TMDB...')
             fetched = _fetch_tmdb_titles(target_tmdb, is_series)
-            xbmc.log(f"Bridge Multi: fetched TMDB titles for {target_tmdb}: {fetched}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: fetched TMDB titles for {target_tmdb}: {fetched}", xbmc.LOGINFO)
             for ft in fetched:
                 if ft and ft not in all_names:
                     all_names.append(ft)
                 if ft and ft != target_title and ft not in alt_terms:
                     alt_terms.append(ft)
-            xbmc.log(f"Bridge Multi: run_parallel_search target_title='{target_title}' all_names={all_names} alt_terms={alt_terms}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: run_parallel_search target_title='{target_title}' all_names={all_names} alt_terms={alt_terms}", xbmc.LOGINFO)
         else:
-            xbmc.log(f"Bridge Multi: run_parallel_search (sin fetch) target_title='{target_title}' all_names={all_names} alt_terms={alt_terms}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: run_parallel_search (sin fetch) target_title='{target_title}' all_names={all_names} alt_terms={alt_terms}", xbmc.LOGINFO)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: fetch titles error: {e}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: fetch titles error: {e}", xbmc.LOGINFO)
     # Variantes con alias de traduccion (wolverine/lobezno...) para cazar
     # matches entre idiomas que el puntuador no puede unir solo.
     try:
@@ -4328,10 +4592,9 @@ def _run_parallel_search_impl(engine='alfa'):
     # Pre-importar canales secuencialmente para evitar contencion de lock al inicio (acelera arranque)
     try:
         p_dialog.update(2, 'Preparando canales...')
-        for _pf in enabled_players:
+        for ch_info in enabled_players:
             try:
-                _ch = re.sub(r'^(Alfa|Balandro)-', '', _pf.replace('.json',''), flags=re.IGNORECASE)
-                _ch = re.sub(r'-(Series|Movies?)$', '', _ch, flags=re.IGNORECASE).lower()
+                _ch = str(ch_info.get('channel') or ch_info.get('id') or '').strip().lower()
                 if not _ch or _ch == 'search':
                     continue
                 with _engine_lock:
@@ -4341,34 +4604,35 @@ def _run_parallel_search_impl(engine='alfa'):
                 pass
             if xbmc.Monitor().abortRequested() or p_dialog.iscanceled():
                 break
-        xbmc.log(f"Bridge Multi: pre-import completado para {len(enabled_players)} canales", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: pre-import completado para {len(enabled_players)} canales", xbmc.LOGINFO)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: pre-import error: {e}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: pre-import error: {e}", xbmc.LOGINFO)
 
     results_dict = {}
     threads = []
-    def _worker(pf):
+    def _worker(ch_info):
         try:
-            it, links = _search_on_player(pf, engine, is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
-            if it and links: results_dict[pf] = (it, links)
+            ch_key = ch_info.get('id') or ch_info.get('channel')
+            it, links = _search_on_player(ch_info, engine, is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
+            if it and links: results_dict[ch_key] = (it, links)
         except Exception: pass
 
-    for pf in enabled_players:
-        threads.append(threading.Thread(target=_worker, args=(pf,), daemon=True))
+    for ch_info in enabled_players:
+        threads.append(threading.Thread(target=_worker, args=(ch_info,), daemon=True))
 
     started_indices = set()
     completed_indices = set()
     finished_channels = []
 
-    def clean_name(pf):
-        n = pf.replace('.json', '')
+    def clean_name(ch_info):
+        if isinstance(ch_info, dict):
+            return ch_info.get('name') or ch_info.get('channel') or ch_info.get('id') or ''
+        n = str(ch_info).replace('.json', '')
         n = re.sub(r'^(Alfa|Balandro)-', '', n, flags=re.IGNORECASE)
         return re.sub(r'-(Series|Movies?)$', '', n, flags=re.IGNORECASE).strip()
 
     start_time = time.time()
     thread_start_times = {}
-    # En Alfa los canales son mas lentos (vitaminar, findvideos pesados):
-    # darles mas margen por canal que en Balandro (solo Alfa).
     if engine == 'alfa':
         channel_timeout = 25 if is_series else 20
     else:
@@ -4384,23 +4648,20 @@ def _run_parallel_search_impl(engine='alfa'):
             active_cnt += 1
             i += 1
 
-        for idx, pf in enumerate(enabled_players):
+        for idx, ch_info in enumerate(enabled_players):
             if idx in started_indices and idx not in completed_indices:
                 st = thread_start_times.get(idx, start_time)
                 is_alive = threads[idx].is_alive()
+                ch_key = ch_info.get('id') or ch_info.get('channel') if isinstance(ch_info, dict) else ch_info
                 if engine == 'alfa':
-                    # En Alfa solo cuenta como completo el hilo MUERTO (o el
-                    # timeout global): marcarlo por tiempo perdia sus enlaces
-                    # tardios (PlanB, lamovie...). Los vivos ya salen en
-                    # active_str. Solo Alfa; Balandro conserva su corte rapido.
                     if not is_alive:
                         completed_indices.add(idx)
-                        found = pf in results_dict
-                        finished_channels.append((clean_name(pf), found))
+                        found = ch_key in results_dict
+                        finished_channels.append((clean_name(ch_info), found))
                 elif not is_alive or (now - st > channel_timeout):
                     completed_indices.add(idx)
-                    found = pf in results_dict
-                    finished_channels.append((clean_name(pf), found))
+                    found = ch_key in results_dict
+                    finished_channels.append((clean_name(ch_info), found))
 
         completed = len(completed_indices)
         pct = int((completed / float(total_channels)) * 100) if total_channels else 100
@@ -4419,10 +4680,6 @@ def _run_parallel_search_impl(engine='alfa'):
         if completed >= total_channels or elapsed > timeout_secs:
             break
 
-        # Sin salida temprana por nº de enlaces: se espera a TODOS los canales
-        # (o al timeout global) para no descartar a los mas lentos. El bucle
-        # ya termina solo cuando completan todos (completed >= total).
-
         if p_dialog.iscanceled():
             if elapsed > 4 or len(results_dict) > 0:
                 break
@@ -4431,13 +4688,11 @@ def _run_parallel_search_impl(engine='alfa'):
     try:
         p_dialog.close()
     except: pass
-    # Esperar animacion de cierre del Progress antes de procesar resultados (evita hang)
     try:
         xbmc.sleep(200)
     except:
         time.sleep(0.2)
 
-    # Si tras el bucle no hay enlaces pero hay hilos vivos, esperar hasta 2s de gracia revisando results_dict
     if not results_dict:
         _grace_start = time.time()
         while time.time() - _grace_start < 2.0:
@@ -4447,20 +4702,29 @@ def _run_parallel_search_impl(engine='alfa'):
 
     all_links = []
     matched_item = None
-    for pf in enabled_players:
-        if pf in results_dict:
-            it, links = results_dict[pf]
+    for ch_info in enabled_players:
+        ch_key = ch_info.get('id') or ch_info.get('channel') if isinstance(ch_info, dict) else ch_info
+        if ch_key in results_dict:
+            it, links = results_dict[ch_key]
             if not matched_item and it: matched_item = it
             for lnk in links: all_links.append(lnk)
 
-    # Foto para el recolector tardio: que players entraron y donde quedaron
+    # Foto para el recolector tardio: que canales entraron y donde quedaron
     # los resultados de los hilos que sigan vivos tras el cierre.
     try:
         global _LAST_SEARCH_TOKEN, _LAST_MERGED_PFS, _LAST_RESULTS_DICT, _LAST_SEARCH_THREADS
-        _LAST_MERGED_PFS = set(pf for pf in enabled_players if pf in results_dict)
+        _LAST_MERGED_PFS = set(
+            (ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch)
+            for ch in enabled_players
+            if (ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch) in results_dict
+        )
         _LAST_RESULTS_DICT = results_dict
         _LAST_SEARCH_TOKEN = (str(engine), str(target_tmdb or ''), str(p_season or ''), str(p_episode or ''), time.time())
-        _LAST_SEARCH_THREADS = [(pf, threads[idx]) for idx, pf in enumerate(enabled_players) if idx in started_indices and threads[idx].is_alive()]
+        _LAST_SEARCH_THREADS = [
+            ((ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch), threads[idx])
+            for idx, ch in enumerate(enabled_players)
+            if idx in started_indices and threads[idx].is_alive()
+        ]
     except: pass
 
     all_links = _filter_and_sort_links(all_links)
@@ -4523,13 +4787,13 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
         except: pass
         if added:
             try:
-                xbmc.log("Bridge Multi: recolector tardio +%d enlaces de %s (total %d)" % (added, channel_name or '?', len(ram.get('links') or [])), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: recolector tardio +%d enlaces de %s (total %d)" % (added, channel_name or '?', len(ram.get('links') or [])), xbmc.LOGINFO)
             except: pass
             try:
                 _folder = xbmc.getInfoLabel('Container.FolderPath') or ''
                 if 'plugin.video.bridge.multi' in _folder and 'list_links' in _folder:
                     xbmc.executebuiltin('Container.Refresh')
-                    try: xbmcgui.Dialog().notification('Bridge Multi', '+%d enlaces de %s' % (added, channel_name or 'canal'), '', 3000)
+                    try: xbmcgui.Dialog().notification('Multi Bridge', '+%d enlaces de %s' % (added, channel_name or 'canal'), '', 3000)
                     except: pass
             except: pass
     except: pass
@@ -4600,7 +4864,7 @@ def _spawn_late_collector(engine, target_tmdb, season, episode):
         th = threading.Thread(target=_late_collect_worker, args=(engine, target_tmdb, season, episode, token), daemon=True)
         th.start()
         try:
-            xbmc.log("Bridge Multi: recolector tardio activado (hilos rezagados en curso)", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: recolector tardio activado (hilos rezagados en curso)", xbmc.LOGINFO)
         except: pass
     except: pass
 
@@ -4754,9 +5018,9 @@ def sync_tmdbhelper_playerstring(meta=None):
 
         p_str = json.dumps(p_dict)
         xbmcgui.Window(10000).setProperty('TMDbHelper.PlayerInfoString', p_str)
-        xbmc.log(f"Bridge Multi: TMDbHelper.PlayerInfoString sincronizado -> {p_str}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: TMDbHelper.PlayerInfoString sincronizado -> {p_str}", xbmc.LOGINFO)
     except Exception as ex:
-        xbmc.log(f"Bridge Multi: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
 
 def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
     if info is None: info = {}
@@ -4921,7 +5185,7 @@ def _get_saved_view_mode():
                     if 45 <= vid <= 650:
                         return vid
     except Exception as e:
-        xbmc.log(f"Bridge Multi: _get_saved_view_mode db error: {e}", xbmc.LOGDEBUG)
+        xbmc.log(f"Multi Bridge: _get_saved_view_mode db error: {e}", xbmc.LOGDEBUG)
 
     # 3. Default según el skin activo si nada se ha guardado
     skin_id = ''
@@ -4936,9 +5200,9 @@ def _save_view_mode(view_id):
             os.makedirs(BRIDGE_DATA_PATH)
         with open(VIEW_MODE_FILE, 'w', encoding='utf-8') as f:
             json.dump({'view_id': int(view_id)}, f)
-        xbmc.log(f"Bridge Multi: Vista persistente guardada -> {view_id}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: Vista persistente guardada -> {view_id}", xbmc.LOGINFO)
     except Exception as e:
-        xbmc.log(f"Bridge Multi: _save_view_mode error: {e}", xbmc.LOGWARNING)
+        xbmc.log(f"Multi Bridge: _save_view_mode error: {e}", xbmc.LOGWARNING)
 
 def _in_own_list():
     """True solo si la ventana activa es nuestra lista de enlaces.
@@ -5096,7 +5360,7 @@ def _get_clearlogo(tmdb_id, is_series=False):
             except Exception:
                 pass
     except Exception as e:
-        xbmc.log(f"Bridge Multi: _get_clearlogo db error: {e}", xbmc.LOGDEBUG)
+        xbmc.log(f"Multi Bridge: _get_clearlogo db error: {e}", xbmc.LOGDEBUG)
 
     # 2. Fallback opcional a API TMDb si la base local aún no lo tiene
     if not logo_url:
@@ -5129,7 +5393,7 @@ def _get_clearlogo(tmdb_id, is_series=False):
     return logo_url
 
 def show_links_as_directory():
-    xbmc.log("Bridge Multi: show_links_as_directory llamado", xbmc.LOGINFO)
+    xbmc.log("Multi Bridge: show_links_as_directory llamado", xbmc.LOGINFO)
     links = []
     matched_item = None
     meta = {}
@@ -5146,7 +5410,7 @@ def show_links_as_directory():
         matched_item = ram_hit.get('matched_item')
         meta = dict(ram_hit.get('meta', {}))
         engine = ram_hit.get('engine', 'alfa') or 'alfa'
-        xbmc.log("Bridge Multi: show_links_as_directory usando RAM cache directa (0ms disk)", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: show_links_as_directory usando RAM cache directa (0ms disk)", xbmc.LOGINFO)
     else:
         # Fallback a disco si la RAM fue purgada (1 sola lectura)
         if os.path.exists(SEARCH_CACHE_FILE):
@@ -5165,10 +5429,10 @@ def show_links_as_directory():
                 meta = cache.get('meta', {}) or {}
                 _store_ram_search_cache(links, matched_item, meta, engine)
             except Exception as e:
-                xbmc.log(f"Bridge Multi: disk cache read error: {e}", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: disk cache read error: {e}", xbmc.LOGINFO)
 
     if not links:
-        xbmcgui.Dialog().notification('Bridge Multi', 'No hay enlaces en caché', '', 3000)
+        xbmcgui.Dialog().notification('Multi Bridge', 'No hay enlaces en caché', '', 3000)
         xbmcplugin.endOfDirectory(handle, succeeded=False)
         return
 
@@ -5186,7 +5450,7 @@ def show_links_as_directory():
     _has_next = (_page + 1) < _total_pages
     _has_prev = _page > 0
     if _total_links > _max_list:
-        xbmc.log(f"Bridge Multi: paginando {_total_links} enlaces, pagina {_page + 1}/{_total_pages} (ajuste max_links_list={_max_list})", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: paginando {_total_links} enlaces, pagina {_page + 1}/{_total_pages} (ajuste max_links_list={_max_list})", xbmc.LOGINFO)
         links = links[_page_offset:_page_offset + _max_list]
 
     # 2. Plantilla compartida de metadatos y arte (calculada 1 sola vez fuera del bucle)
@@ -5363,7 +5627,9 @@ def show_links_as_directory():
         _ee = _req_e or meta.get('episode') or ''
         if _ss and _ee:
             _u += '&season=%s&episode=%s' % (_ss, _ee)
-        return _u + '&page=%d' % int(_p)
+        # replace=1: navegar entre paginas REEMPLAZA la entrada del historial
+        # (no la apila), asi el back sale de la lista a TMDb Helper.
+        return _u + '&page=%d&replace=1' % int(_p)
     if _has_prev:
         _a0, _a1 = (_page - 1) * _max_list + 1, _page * _max_list
         _li_prev = xbmcgui.ListItem(label='[COLOR deepskyblue][B]<<  Anteriores (%d-%d de %d)[/B][/COLOR]' % (_a0, _a1, _total_links))
@@ -5392,7 +5658,13 @@ def show_links_as_directory():
         except Exception: pass
     xbmcplugin.setContent(handle, 'episodes')
     _apply_saved_view_mode()
-    xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+    # updateListing=True al navegar entre paginas (o venir con replace=1):
+    # la pagina reemplaza a la anterior en el historial y el back sale de la
+    # lista directo a TMDb Helper. La primera apertura apila normal.
+    try:
+        _upd = bool(_page > 0 or str(get_param('replace') or '') == '1')
+    except: _upd = False
+    xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=_upd, cacheToDisc=False)
     _apply_saved_view_mode()
     _start_view_mode_monitor()
 
@@ -5496,7 +5768,7 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
                     try: pt.dialog_select = _orig_sel
                     except: pass
     except Exception as _ex:
-        xbmc.log('Bridge Multi _resolve_link error: ' + str(_ex), xbmc.LOGINFO)
+        xbmc.log('Multi Bridge _resolve_link error: ' + str(_ex), xbmc.LOGINFO)
         _result[0] = False
     finally:
         if _orig_sru is not None:
@@ -5600,13 +5872,13 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         _qual_part = (' · %s' % qual) if qual else ''
         _label = '%s%s%s' % (server, _lang_part, _qual_part)
 
-        xbmc.log('Bridge Multi autoplay [%d/%d] → %s %s (%s)' % (
+        xbmc.log('Multi Bridge autoplay [%d/%d] → %s %s (%s)' % (
             idx+1, total_att, server, lang_lbl, ch), xbmc.LOGINFO)
 
 
         # ── Step 1: Resolve ────────────────────────────────────────────────
         _prog = xbmcgui.DialogProgress()
-        _prog.create('Bridge Multi',
+        _prog.create('Multi Bridge',
                      '[%d/%d] Conectando a [B]%s[/B]...\n[COLOR grey]Espere por favor (0.0s / %ds)[/COLOR]' % (idx+1, total_att, _label, _resolve_timeout))
         _prog.update(10)
 
@@ -5636,14 +5908,14 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         if cancelled:
             try: _prog.close()
             except: pass
-            xbmc.log('Bridge Multi autoplay: usuario canceló resolución', xbmc.LOGINFO)
+            xbmc.log('Multi Bridge autoplay: usuario canceló resolución', xbmc.LOGINFO)
             _cancelled_by_user = True
             break
 
         if not _res_done[0] or _res_li[0] is None:
             try: _prog.close()
             except: pass
-            xbmc.log('Bridge Multi autoplay [%d/%d] %s no resolvió, siguiente...' % (
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s no resolvió, siguiente...' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             continue
 
@@ -5654,7 +5926,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         if not _media_url:
             try: _prog.close()
             except: pass
-            xbmc.log('Bridge Multi autoplay [%d/%d] %s URL vacía, siguiente...' % (
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s URL vacía, siguiente...' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             continue
 
@@ -5668,7 +5940,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         except Exception as _pe:
             try: _prog.close()
             except: pass
-            xbmc.log('Bridge Multi autoplay Player.play error: ' + str(_pe), xbmc.LOGINFO)
+            xbmc.log('Multi Bridge autoplay Player.play error: ' + str(_pe), xbmc.LOGINFO)
             continue
 
         try: _prog.close()
@@ -5698,7 +5970,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             break
 
         if not started:
-            xbmc.log('Bridge Multi autoplay [%d/%d] %s nunca arrancó / usuario paró en arranque (15s)' % (
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s nunca arrancó / usuario paró en arranque (15s)' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             try: player.stop()
             except: pass
@@ -5713,20 +5985,20 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             if remaining > 0:
                 try:
                     ans = _KODI_ORIG_DIALOG().yesno(
-                        'Bridge Multi — Autoplay',
+                        'Multi Bridge — Autoplay',
                         '[B]%s[/B] no pudo reproducirse o fue detenido.\n¿Intentar con el siguiente enlace?' % _srv_lang,
                         nolabel='No, abrir lista',
                         yeslabel='Sí, siguiente')
                 except Exception as _ye:
-                    xbmc.log('Bridge Multi autoplay not started yesno error: ' + str(_ye), xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge autoplay not started yesno error: ' + str(_ye), xbmc.LOGINFO)
                     ans = False
-                xbmc.log('Bridge Multi autoplay: respuesta de usuario en arranque = %s' % str(ans), xbmc.LOGINFO)
+                xbmc.log('Multi Bridge autoplay: respuesta de usuario en arranque = %s' % str(ans), xbmc.LOGINFO)
                 if not ans:
                     _cancelled_by_user = True
                     break
             continue
 
-        xbmc.log('Bridge Multi autoplay [%d/%d] %s arrancó, monitoreando 3 min reales...' % (
+        xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, monitoreando 3 min reales...' % (
             idx+1, total_att, server), xbmc.LOGINFO)
 
         # Arrancar el monitor de bookmarks + reanudar AL INICIO de cada
@@ -5754,7 +6026,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _sk = 0
             start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk, current_link_index=idx, meta=meta)
         except Exception as _se:
-            xbmc.log('Bridge Multi autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
+            xbmc.log('Multi Bridge autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
         _monitor_started = True
 
         mon_start       = time.time()
@@ -5771,11 +6043,11 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
             if not player.isPlaying():
                 elapsed = time.time() - mon_start
-                xbmc.log('Bridge Multi autoplay [%d/%d] %s se detuvo a %.1fs reales' % (
+                xbmc.log('Multi Bridge autoplay [%d/%d] %s se detuvo a %.1fs reales' % (
                     idx+1, total_att, server, elapsed), xbmc.LOGINFO)
 
                 # Asegurar dialogo real SIN cerrojos (nunca puede bloquearse aqui)
-                xbmc.log('Bridge Multi autoplay: restaurando dialogo real sin cerrojos...', xbmc.LOGINFO)
+                xbmc.log('Multi Bridge autoplay: restaurando dialogo real sin cerrojos...', xbmc.LOGINFO)
                 _restore_dialog_noblock()
 
                 # Esperar a que la ventana de vídeo de Kodi termine de cerrarse
@@ -5784,16 +6056,16 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 remaining = total_att - (idx + 1)
                 _srv_lang = server + ((' [%s]' % lang_lbl) if lang_lbl else '')
                 if remaining > 0:
-                    xbmc.log('Bridge Multi autoplay: mostrando ventana al usuario (%s)...' % _srv_lang, xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge autoplay: mostrando ventana al usuario (%s)...' % _srv_lang, xbmc.LOGINFO)
                     # Ventana personalizada (Si/No/Ver enlaces). Devuelve
                     # 0/1/2 o -1; ante cualquier fallo, volver sin lista.
                     try:
                         ans = _show_autoplay_stop_dialog(_srv_lang)
                     except Exception as _ye:
-                        xbmc.log('Bridge Multi autoplay stop dialog error: ' + str(_ye), xbmc.LOGINFO)
+                        xbmc.log('Multi Bridge autoplay stop dialog error: ' + str(_ye), xbmc.LOGINFO)
                         ans = 1
 
-                    xbmc.log('Bridge Multi autoplay: respuesta de usuario sobre siguiente enlace = %s' % str(ans), xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge autoplay: respuesta de usuario sobre siguiente enlace = %s' % str(ans), xbmc.LOGINFO)
                     if ans == 0:
                         link_failed = True   # Si → continuar con siguiente
                     elif ans == 2:
@@ -5810,7 +6082,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             except: pass
             try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
             except: pass
-            xbmc.log('Bridge Multi autoplay: usuario detuvo → volver', xbmc.LOGINFO)
+            xbmc.log('Multi Bridge autoplay: usuario detuvo → volver', xbmc.LOGINFO)
             return False
 
         if _ver_enlaces:
@@ -5821,7 +6093,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                        '&tmdb=%s&t=%s' % (str(tmdb_for_list), _ts))
                 if meta and meta.get('season') and meta.get('episode'):
                     _lu += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-                xbmc.log('Bridge Multi autoplay: ver enlaces → abriendo list_links', xbmc.LOGINFO)
+                xbmc.log('Multi Bridge autoplay: ver enlaces → abriendo list_links', xbmc.LOGINFO)
                 xbmc.executebuiltin('Dialog.Close(all,true)')
                 xbmc.sleep(200)
                 _open_links_view(_lu)
@@ -5842,7 +6114,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             continue   # → siguiente enlace
 
         # ── 60 s reales transcurridos con reproducción activa → ÉXITO ────────
-        xbmc.log('Bridge Multi autoplay [%d/%d] %s verificado OK tras 3 min reales' % (
+        xbmc.log('Multi Bridge autoplay [%d/%d] %s verificado OK tras 3 min reales' % (
             idx+1, total_att, server), xbmc.LOGINFO)
         return True
 
@@ -5861,15 +6133,15 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             if meta and meta.get('season') and meta.get('episode'):
                 _lu += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
             if _cancelled_by_user:
-                xbmc.log('Bridge Multi autoplay: cancelado por usuario → abriendo list_links', xbmc.LOGINFO)
+                xbmc.log('Multi Bridge autoplay: cancelado por usuario → abriendo list_links', xbmc.LOGINFO)
             else:
-                xbmc.log('Bridge Multi autoplay: enlaces agotados → abriendo list_links', xbmc.LOGINFO)
+                xbmc.log('Multi Bridge autoplay: enlaces agotados → abriendo list_links', xbmc.LOGINFO)
             xbmc.executebuiltin('Dialog.Close(all,true)')
             xbmc.sleep(200)
             _open_links_view(_lu)
         else:
             xbmcgui.Dialog().notification(
-                'Bridge Multi',
+                'Multi Bridge',
                 'Ningún enlace pudo reproducirse (%d intentos)' % total_att,
                 '', 5000)
     return False
@@ -5893,7 +6165,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
         torrent_url, _fail_detail = _resolve_torrent_url(link, engine=engine)
         _tl = (torrent_url or '').strip()
         if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
-            xbmc.log('Bridge Multi autoplay: torrent no reproducible (%s)' % (_fail_detail or 'sin URL'), xbmc.LOGINFO)
+            xbmc.log('Multi Bridge autoplay: torrent no reproducible (%s)' % (_fail_detail or 'sin URL'), xbmc.LOGINFO)
             xbmcplugin.setResolvedUrl(handle, False, _absorb)
             return False
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
@@ -5915,7 +6187,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
         parent = matched_item if matched_item else link
 
         _prog = xbmcgui.DialogProgress()
-        _prog.create('Bridge Multi', 'Reproduciendo via [B]%s[/B]...' % server_name)
+        _prog.create('Multi Bridge', 'Reproduciendo via [B]%s[/B]...' % server_name)
         _prog.update(5)
 
         _resolved_li = [None]
@@ -5942,7 +6214,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
                 if _result[0] is None:
                     _result[0] = False
             except Exception as _ex:
-                xbmc.log('Bridge Multi _autoplay_link Balandro error: ' + str(_ex), xbmc.LOGINFO)
+                xbmc.log('Multi Bridge _autoplay_link Balandro error: ' + str(_ex), xbmc.LOGINFO)
                 _result[0] = False
             finally:
                 if _orig is not None:
@@ -5968,7 +6240,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
         _t.join(timeout=2)
 
         if _result[0] is True and _resolved_li[0] is not None:
-            xbmc.log('Bridge Multi _autoplay_link: setResolvedUrl True via %s' % server_name,
+            xbmc.log('Multi Bridge _autoplay_link: setResolvedUrl True via %s' % server_name,
                      xbmc.LOGINFO)
             xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
             return True
@@ -5977,7 +6249,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             xbmcplugin.setResolvedUrl(handle, False, _absorb)
             if _result[0] != 'cancel':
                 xbmcgui.Dialog().notification(
-                    'Bridge Multi',
+                    'Multi Bridge',
                     '[B]%s[/B] no pudo reproducirse' % server_name,
                     '', 4000)
             return False
@@ -5999,7 +6271,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             _absorb = xbmcgui.ListItem()
             xbmcplugin.setResolvedUrl(handle, False, _absorb)
             xbmcgui.Dialog().notification(
-                'Bridge Multi', 'Error al reproducir: ' + str(_e)[:60], '', 3500)
+                'Multi Bridge', 'Error al reproducir: ' + str(_e)[:60], '', 3500)
             return False
 
 
@@ -6032,15 +6304,15 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
         _tl = (torrent_url or '').strip()
         if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
             msg = _fail_detail or 'Enlace torrent sin URL reproducible'
-            xbmc.log("Bridge Multi: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
-            xbmcgui.Dialog().notification('Bridge Multi', msg, '', 4000)
+            xbmc.log("Multi Bridge: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
+            xbmcgui.Dialog().notification('Multi Bridge', msg, '', 4000)
             return False
         return _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
 
     # 2. Preparar enlace (resolver canal.play y data_url)
     prepared = _prepare_playable_link(link, engine=engine)
     if not prepared:
-        xbmcgui.Dialog().notification('Bridge Multi', 'No se pudo preparar el enlace', '', 3000)
+        xbmcgui.Dialog().notification('Multi Bridge', 'No se pudo preparar el enlace', '', 3000)
         return False
 
     server_name = (_safe_str(getattr(prepared, 'server', '') or getattr(link, 'server', '') or '').strip().capitalize()
@@ -6050,8 +6322,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
     has_video_urls = bool(getattr(prepared, 'video_urls', None))
 
     if not has_url and not has_video_urls:
-        xbmc.log(f"Bridge Multi: enlace sin URL para {server_name}", xbmc.LOGINFO)
-        xbmcgui.Dialog().notification('Bridge Multi', f'{server_name} — No se encontró URL reproducible', '', 3500)
+        xbmc.log(f"Multi Bridge: enlace sin URL para {server_name}", xbmc.LOGINFO)
+        xbmcgui.Dialog().notification('Multi Bridge', f'{server_name} — No se encontró URL reproducible', '', 3500)
         return False
 
     # 3. Reproductor según el motor
@@ -6065,7 +6337,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
 
         # Ventana de progreso visual exclusiva para Balandro
         prog = xbmcgui.DialogProgress()
-        prog.create('Bridge Multi', 'Conectando a [B]%s[/B]...' % server_name)
+        prog.create('Multi Bridge', 'Conectando a [B]%s[/B]...' % server_name)
         prog.update(5, 'Conectando a [B]%s[/B]...' % server_name)
 
         import xbmcplugin as _xp
@@ -6110,7 +6382,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 platformtools.dialog_notification = _cap_notif
                 platformtools.dialog_select = _cap_sel
                 sys.argv[1] = str(handle)
-                xbmc.log(f"Bridge Multi: conectando a {server_name} en Balandro (url={str(getattr(prepared, 'url', ''))[:60]})", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: conectando a {server_name} en Balandro (url={str(getattr(prepared, 'url', ''))[:60]})", xbmc.LOGINFO)
                 res = platformtools.play_video(prepared, parent, autoplay=False)
                 if res is True and _resolved_li[0] is not None:
                     _result[0] = True
@@ -6119,7 +6391,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 elif _result[0] is None:
                     _result[0] = False
             except Exception as _ex:
-                xbmc.log(f"Bridge Multi: error en play_video Balandro: {_ex}", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: error en play_video Balandro: {_ex}", xbmc.LOGINFO)
                 if not _fail_reason[0]:
                     _fail_reason[0] = str(_ex)
                 _result[0] = False
@@ -6162,7 +6434,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
         _t.join(timeout=1.0)
 
         if _result[0] == 'cancel':
-            xbmc.log(f"Bridge Multi: conexión a {server_name} cancelada", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: conexión a {server_name} cancelada", xbmc.LOGINFO)
             return False
 
         if _result[0] is True and _resolved_li[0] is not None:
@@ -6170,7 +6442,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
             try: media_url = _resolved_li[0].getPath()
             except: pass
             if media_url:
-                xbmc.log(f"Bridge Multi: reproduciendo {server_name} con éxito (url={media_url[:60]})", xbmc.LOGINFO)
+                xbmc.log(f"Multi Bridge: reproduciendo {server_name} con éxito (url={media_url[:60]})", xbmc.LOGINFO)
                 sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
@@ -6178,15 +6450,15 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 return True
             else:
                 xbmcgui.Dialog().ok(
-                    'Bridge Multi — Error de Reproducción',
+                    'Multi Bridge — Error de Reproducción',
                     f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] resolvió pero no proporcionó la ruta final del vídeo.'
                 )
                 return False
 
         if _result[0] is None:
-            xbmc.log(f"Bridge Multi: timeout conectando a {server_name} tras 15s", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: timeout conectando a {server_name} tras 15s", xbmc.LOGINFO)
             xbmcgui.Dialog().ok(
-                'Bridge Multi — Tiempo de Espera Agotado',
+                'Multi Bridge — Tiempo de Espera Agotado',
                 f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] no respondió a tiempo (15 segundos).\n\n'
                 f'[COLOR red][B]Causa:[/B][/COLOR] Tiempo de espera agotado.\n'
                 f'El servidor puede estar caído, saturado o bloqueando la conexión.'
@@ -6198,9 +6470,9 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
         if not clean_reason:
             clean_reason = 'El vídeo ya no existe, el enlace está caído o el servidor no responde.'
 
-        xbmc.log(f"Bridge Multi: fallo reproduciendo {server_name}: {clean_reason}", xbmc.LOGINFO)
+        xbmc.log(f"Multi Bridge: fallo reproduciendo {server_name}: {clean_reason}", xbmc.LOGINFO)
         xbmcgui.Dialog().ok(
-            'Bridge Multi — Fallo del Servidor',
+            'Multi Bridge — Fallo del Servidor',
             f'No se pudo reproducir en el servidor [B][COLOR gold]{server_name}[/COLOR][/B].\n\n'
             f'[COLOR red][B]Motivo:[/B][/COLOR] {clean_reason}'
         )
@@ -6221,7 +6493,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
             # Limpiar video_urls para que Alfa resuelva de forma fresca con su ventana nativa de progreso
             prepared.video_urls = []
 
-            xbmc.log(f"Bridge Multi: reproduciendo {server_name} en Alfa (url={str(getattr(prepared, 'url', ''))[:60]})", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: reproduciendo {server_name} en Alfa (url={str(getattr(prepared, 'url', ''))[:60]})", xbmc.LOGINFO)
 
             orig_select = getattr(platformtools, 'dialog_select', None)
             def _smart_alfa_select(heading="", options=None, *args, **kwargs):
@@ -6266,8 +6538,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
 
             return True
         except Exception as e:
-            xbmc.log(f"Bridge Multi: error en play_video Alfa: {e}", xbmc.LOGINFO)
-            xbmcgui.Dialog().notification('Bridge Multi', f'{server_name} — Error: {str(e)[:60]}', '', 3500)
+            xbmc.log(f"Multi Bridge: error en play_video Alfa: {e}", xbmc.LOGINFO)
+            xbmcgui.Dialog().notification('Multi Bridge', f'{server_name} — Error: {str(e)[:60]}', '', 3500)
             return False
 
 def verify_and_filter_links():
@@ -6286,13 +6558,13 @@ def verify_and_filter_links():
 
     if not links: return
     p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create('Bridge Multi', 'Verificando disponibilidad de enlaces...')
+    p_dialog.create('Multi Bridge', 'Verificando disponibilidad de enlaces...')
     verified_links = _verify_links_headless(links, engine=engine, p_dialog=p_dialog)
     try: p_dialog.close()
     except: pass
 
     if not verified_links:
-        xbmcgui.Dialog().ok('Bridge Multi', 'No se encontraron enlaces funcionales.')
+        xbmcgui.Dialog().ok('Multi Bridge', 'No se encontraron enlaces funcionales.')
         return
 
     verified_links = _filter_and_sort_links(verified_links)
@@ -6312,12 +6584,13 @@ def check_and_run_migration():
         try: os.makedirs(TMDB_PLAYERS_PATH)
         except: pass
 
+    # 1. Asegurar el player maestro (1) Multi Bridge en TMDb Helper
     master_file = os.path.join(TMDB_PLAYERS_PATH, '(1)MultiBusqueda.json')
     master_movie_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_title}&year={year}&title_es={es-ES_title}&title_lat={es-MX_title}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_title}&title_orig={originaltitle}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
     master_ep_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_showname}&season={season}&episode={episode}&showname={showname}&showyear={showyear}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_showname}&title_orig={original_name}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
 
     master_data = {
-        "name": "(1) Multi-Busqueda (Alfa / Balandro)",
+        "name": "(1) Multi Bridge",
         "plugin": "plugin.video.bridge.multi",
         "priority": 100,
         "is_resolvable": "false",
@@ -6330,94 +6603,100 @@ def check_and_run_migration():
         "is_folder": "false"
     }
 
-    with open(master_file, 'w', encoding='utf-8') as f:
-        json.dump(master_data, f, indent=4, ensure_ascii=False)
-
-    for fname in os.listdir(TMDB_PLAYERS_PATH):
-        if not fname.endswith('.json') or fname.startswith('(1)MultiBusqueda'): continue
-        fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
+    need_write_master = True
+    if os.path.exists(master_file):
         try:
-            with open(fpath, 'r', encoding='utf-8') as f: p_data = json.load(f)
-            p_data['plugin'] = 'plugin.video.bridge.multi'
-            is_alfa = 'alfa' in fname.lower() or 'alfa' in str(p_data.get('play_movie', '')).lower() or 'alfa' in str(p_data.get('play_episode', '')).lower()
-            is_series = 'play_episode' in p_data or fname.lower().endswith('-series.json')
-            clean_ch = fname.replace('.json', '')
-            clean_ch = re.sub(r'^\(\d+\)', '', clean_ch)
-            clean_ch = re.sub(r'^(Alfa|Balandro)[\-_]?', '', clean_ch, flags=re.IGNORECASE)
-            clean_ch = re.sub(r'-(Series|Movies?)$', '', clean_ch, flags=re.IGNORECASE).strip()
+            with open(master_file, 'r', encoding='utf-8') as f:
+                cur_master = json.load(f)
+            if cur_master == master_data:
+                need_write_master = False
+        except Exception:
+            pass
 
-            if is_alfa:
-                # ALFA ES EXCLUSIVAMENTE PARA PELICULAS: eliminar cualquier player de series
-                if is_series or fname.lower().endswith('-series.json'):
-                    try:
-                        if os.path.exists(fpath): os.remove(fpath)
-                    except: pass
-                    continue
-                # Limpiar cualquier residuo de play_episode si existiera
-                if 'play_episode' in p_data:
-                    del p_data['play_episode']
-                if 'assert' in p_data and isinstance(p_data['assert'], dict) and 'play_episode' in p_data['assert']:
-                    del p_data['assert']['play_episode']
-                new_fn = 'Alfa-%s.json' % clean_ch
-                p_data['name'] = 'Alfa-%s' % clean_ch
-            else:
-                new_fn = 'Balandro-%s-Series.json' % clean_ch if is_series else 'Balandro-%s.json' % clean_ch
-                p_data['name'] = 'Balandro-%s%s' % (clean_ch, ' (Series)' if is_series else '')
+    if need_write_master:
+        try:
+            with open(master_file, 'w', encoding='utf-8') as f:
+                json.dump(master_data, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            xbmc.log("Multi Bridge: error guardando master player: %s" % e, xbmc.LOGWARNING)
 
-            with open(fpath, 'w', encoding='utf-8') as f:
-                json.dump(p_data, f, indent=4, ensure_ascii=False)
+    # 2. Asegurar que channels.json existe internamente en Multi Bridge
+    if not os.path.exists(CHANNELS_JSON_FILE):
+        channels_data = {'version': 1, 'channels': {'alfa': {}, 'balandro': {}}}
+        # Si existen players antiguos en TMDB_PLAYERS_PATH, migrarlos a channels.json
+        for fname in os.listdir(TMDB_PLAYERS_PATH):
+            if not fname.endswith('.json') or fname.startswith('(1)'): continue
+            fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f: p_data = json.load(f)
+                engine = 'alfa' if fname.lower().startswith('alfa-') else 'balandro'
+                clean = fname[:-5]
+                prefix = 'Alfa-' if engine == 'alfa' else 'Balandro-'
+                if clean.lower().startswith(prefix.lower()):
+                    clean = clean[len(prefix):]
+                is_series = False
+                if clean.lower().endswith('-series'):
+                    clean = re.sub(r'-series$', '', clean, flags=re.IGNORECASE)
+                    is_series = True
+                elif 'play_episode' in p_data and 'play_movie' not in p_data:
+                    is_series = True
+                ch_id = clean.lower().strip()
 
-            new_path = os.path.join(TMDB_PLAYERS_PATH, new_fn)
-            if new_path != fpath:
-                if os.path.exists(new_path): os.remove(new_path)
-                os.rename(fpath, new_path)
-        except Exception: pass
+                pm = p_data.get('play_movie') or p_data.get('play_episode')
+                url = pm[0] if isinstance(pm, list) and pm else (pm if isinstance(pm, str) else '')
+                embedded_ch = ''
+                if 'url=plugin://' in url:
+                    sub = url.split('url=plugin://')[1].split('&')[0]
+                    if '?' in sub:
+                        q = sub.split('?', 1)[1]
+                        try:
+                            dec = json.loads(urllib.parse.unquote(base64.b64decode(urllib.parse.unquote(q)).decode('utf-8')))
+                            embedded_ch = dec.get('channel')
+                        except: pass
+                elif 'channel=' in url:
+                    m = re.search(r'channel=([^&]+)', url)
+                    if m: embedded_ch = m.group(1)
 
-def _player_engine_channel(player_data, fname):
-    """Extrae (engine, channel) de un player de TMDbHelper.
-    Decodifica el item base64 de play_movie/play_episode; si falla, deriva
-    engine y canal del nombre del archivo."""
-    refs = []
-    for key in ('play_movie', 'play_episode'):
-        val = player_data.get(key)
-        urls = []
-        if isinstance(val, list):
-            urls = [el for el in val if isinstance(el, str) and el.startswith('plugin://')]
-        elif isinstance(val, str) and val.startswith('plugin://'):
-            urls = [val]
-        for url in urls:
-            engine = ''
-            if 'plugin.video.balandro/' in url:
-                engine = 'balandro'
-            elif 'plugin.video.alfa/' in url:
-                engine = 'alfa'
-            else:
+                actual_ch = embedded_ch.lower().strip() if embedded_ch else ch_id
+                entry = channels_data['channels'][engine].setdefault(ch_id, {
+                    'id': ch_id,
+                    'name': clean.strip(),
+                    'channel': actual_ch,
+                    'engine': engine,
+                    'movies': False,
+                    'series': False,
+                    'movie_disabled': False,
+                    'series_disabled': False,
+                    'play_movie': None,
+                    'play_episode': None
+                })
+                dis = str(p_data.get('disabled', '')).lower() in ('true', '1') or p_data.get('disabled') is True
+                if is_series or 'play_episode' in p_data:
+                    entry['series'] = True
+                    entry['series_disabled'] = dis
+                    if 'play_episode' in p_data: entry['play_episode'] = p_data['play_episode']
+                if not is_series or 'play_movie' in p_data:
+                    entry['movies'] = True
+                    entry['movie_disabled'] = dis
+                    if 'play_movie' in p_data: entry['play_movie'] = p_data['play_movie']
+            except Exception: pass
+        save_channels_data(channels_data)
+
+    # 3. Limpieza de TMDb Helper: eliminar todos los players individuales
+    # TMDb Helper unicamente debe tener (1)MultiBusqueda.json
+    try:
+        for fname in os.listdir(TMDB_PLAYERS_PATH):
+            if not fname.endswith('.json') or fname.startswith('(1)MultiBusqueda'):
                 continue
-            marker = 'plugin.video.%s/?' % engine
-            channel = ''
-            if marker in url:
+            fn_low = fname.lower()
+            if fn_low.startswith('alfa-') or fn_low.startswith('balandro-') or fn_low.startswith('(1)alfa') or fn_low.startswith('(1)balandro'):
                 try:
-                    b64 = url.split(marker, 1)[1].split('&', 1)[0]
-                    b64 = uparse.unquote(b64)
-                    b64 += '=' * (-len(b64) % 4)
-                    channel = str(json.loads(base64.b64decode(b64).decode('utf-8')).get('channel', '') or '').strip().lower()
-                except Exception:
-                    channel = ''
-                if not channel:
-                    # Formato alternativo ?channel=xxx&... (ej. Balandro-Gnulatv)
-                    try:
-                        m = re.search(r'[?&]channel=([^&]+)', url)
-                        if m:
-                            channel = uparse.unquote(m.group(1)).strip().lower()
-                    except Exception:
-                        pass
-            if channel:
-                refs.append((engine, channel))
-    if not refs:
-        m = re.match(r'^(Alfa|Balandro)[\-_]?(.+?)(-(Series|Movies?))?\.json$', fname or '', flags=re.IGNORECASE)
-        if m:
-            refs.append((m.group(1).lower(), m.group(2).strip().lower()))
-    return refs
+                    fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
+                    if os.path.exists(fpath):
+                        os.remove(fpath)
+                except Exception: pass
+    except Exception as e:
+        xbmc.log("Multi Bridge: error limpiando players de TMDb Helper: %s" % e, xbmc.LOGWARNING)
 
 def _channel_display_name(base, channel):
     """Nombre visible del canal (ej. 'Gnula'). Lee su descriptor si existe,
@@ -6432,8 +6711,8 @@ def _channel_display_name(base, channel):
     return channel
 
 def check_orphan_players():
-    """Arranque de Kodi: muestra una ventana SOLO si algun player apunta a un
-    canal que no existe en Balandro/Alfa. Si todos existen, no muestra nada.
+    """Arranque de Kodi: muestra una ventana SOLO si algun canal apunta a un
+    descriptor que no existe en Balandro/Alfa. Si todos existen, no muestra nada.
     Se puede desactivar con el ajuste startup_orphan_check."""
     try:
         try:
@@ -6441,55 +6720,51 @@ def check_orphan_players():
                 return
         except Exception:
             pass
-        if not os.path.isdir(TMDB_PLAYERS_PATH):
-            return
+
+        ch_data = load_channels_data()
+        channels_dict = ch_data.get('channels', {})
         missing = []
-        for fname in sorted(os.listdir(TMDB_PLAYERS_PATH)):
-            if not fname.endswith('.json') or fname.startswith('(1)'):
+
+        for engine in ('alfa', 'balandro'):
+            # Si el addon no está instalado en Kodi, no comprobar si sus canales existen
+            if not _is_engine_installed(engine):
+                xbmc.log('Multi Bridge: %s no está instalado, omitiendo comprobación de canales.' % engine.capitalize(), xbmc.LOGINFO)
                 continue
-            fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
+
+            base = balandro_path if engine == 'balandro' else alfa_path
+            channels_dir = os.path.join(base, 'channels')
+            if not os.path.isdir(channels_dir):
+                continue
+
             try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    p_data = json.load(f)
+                avail = [x.lower() for x in os.listdir(channels_dir)]
             except Exception:
-                continue
-            if not isinstance(p_data, dict):
-                continue
-            if str(p_data.get('disabled', '')).lower() in ('true', '1') or p_data.get('disabled') is True:
-                continue
-            for engine, channel in _player_engine_channel(p_data, fname):
-                if not engine or not channel:
+                avail = []
+
+            for ch_id, ch_info in channels_dict.get(engine, {}).items():
+                if ch_info.get('movie_disabled') and ch_info.get('series_disabled'):
                     continue
-                base = balandro_path if engine == 'balandro' else alfa_path
-                try:
-                    avail = [x.lower() for x in os.listdir(os.path.join(base, 'channels'))]
-                except Exception:
-                    avail = []
-                exists = (channel + '.py').lower() in avail
-                if not exists and engine == 'alfa' and channel in ('planb', 'plan_b'):
-                    # PlanB de Alfa vive en lib/ (no en channels/) y Bridge lo
-                    # resuelve de forma especial (_search_planb).
+                actual_ch = str(ch_info.get('channel') or ch_id).strip().lower()
+                exists = (actual_ch + '.py') in avail
+                if not exists and engine == 'alfa' and actual_ch in ('planb', 'plan_b'):
                     try:
                         libfiles = [x.lower() for x in os.listdir(os.path.join(base, 'lib'))]
                     except Exception:
                         libfiles = []
                     exists = any(x.startswith('planb') and x.endswith('.py') for x in libfiles)
                 if not exists:
-                    missing.append((fname, channel, engine))
+                    missing.append((ch_info.get('name', ch_id), actual_ch, engine))
+
         if not missing:
-            xbmc.log('Bridge Multi: todos los players tienen su canal en Balandro/Alfa', xbmc.LOGINFO)
+            xbmc.log('Multi Bridge: todos los canales configurados existen en Balandro/Alfa', xbmc.LOGINFO)
             return
-        xbmc.log('Bridge Multi: players huerfanos: %s' % ['%s (canal "%s" no existe en %s)' % t for t in missing], xbmc.LOGWARNING)
+        xbmc.log('Multi Bridge: canales no encontrados: %s' % ['%s (canal "%s" no existe en %s)' % t for t in missing], xbmc.LOGWARNING)
         try:
             mon = xbmc.Monitor()
             if not mon.waitForAbort(8):
-                # Ventana normal: Cerrar o ir al gestor. Si los huerfanos son de
-                # un solo motor, el boton lleva directo a su lista de players.
-                # Se muestra el nombre del canal, no el archivo del player.
                 msg_lines = []
-                for fname, channel, engine in missing[:12]:
-                    base = balandro_path if engine == 'balandro' else alfa_path
-                    msg_lines.append('%s: no existe en %s' % (_channel_display_name(base, channel), engine))
+                for name, channel, engine in missing[:12]:
+                    msg_lines.append('%s: no existe en %s' % (name, engine))
                 if len(missing) > 12:
                     msg_lines.append('... y %d mas' % (len(missing) - 12))
                 engines = sorted(set(e for _, _, e in missing))
@@ -6497,15 +6772,15 @@ def check_orphan_players():
                     url = 'plugin://plugin.video.bridge.multi/?view=list_players&engine=%s' % engines[0]
                 else:
                     url = 'plugin://plugin.video.bridge.multi/?view=home'
-                go = xbmcgui.Dialog().yesno('Bridge Multi: canal no existente',
-                                            'Estos players apuntan a canales que no existen:\n%s' % '\n'.join(msg_lines),
+                go = xbmcgui.Dialog().yesno('Multi Bridge: canal no existente',
+                                            'Estos canales configurados no existen en sus respectivos addons:\n%s' % '\n'.join(msg_lines),
                                             nolabel='Cerrar', yeslabel='Ir al gestor')
                 if go:
                     xbmc.executebuiltin('ActivateWindow(videos,"%s",return)' % url)
         except Exception as e:
-            xbmc.log('Bridge Multi: no se pudo mostrar aviso de huerfanos: %s' % e, xbmc.LOGINFO)
+            xbmc.log('Multi Bridge: no se pudo mostrar aviso de no existentes: %s' % e, xbmc.LOGINFO)
     except Exception as e:
-        xbmc.log('Bridge Multi: check_orphan_players error: %s' % e, xbmc.LOGWARNING)
+        xbmc.log('Multi Bridge: check_orphan_players error: %s' % e, xbmc.LOGWARNING)
 
 # ---------------------------------------------------------
 # Player Management Menus
@@ -6564,8 +6839,24 @@ def _format_regional_datetime(dt):
 
 def _get_last_cloud_import_datetime():
     """Devuelve (datetime_obj, total_count) de la última importación desde la nube.
-    Lee CLOUD_SYNC_FILE si existe, o busca el mtime de (1)MultiBusqueda.json en TMDB_PLAYERS_PATH.
+    Verifica primero 'last_sync' dentro de channels.json y como respaldo en CLOUD_SYNC_FILE.
+    Nunca usa mtime de archivo porque se actualiza en cada inicio o cambio de ajustes.
     """
+    ch_data = load_channels_data()
+    tot_channels = len(ch_data.get('channels', {}).get('alfa', {})) + len(ch_data.get('channels', {}).get('balandro', {}))
+
+    # 1. Prioridad: campo persistente 'last_sync' dentro de channels.json
+    sync_data = ch_data.get('last_sync')
+    if isinstance(sync_data, dict):
+        ts = sync_data.get('timestamp')
+        tot = sync_data.get('total', 0)
+        if ts:
+            try:
+                return datetime.datetime.fromtimestamp(ts), (tot or tot_channels)
+            except Exception:
+                pass
+
+    # 2. Respaldo: archivo cloud_sync_info.json
     if os.path.exists(CLOUD_SYNC_FILE):
         try:
             with open(CLOUD_SYNC_FILE, 'r', encoding='utf-8') as f:
@@ -6573,21 +6864,11 @@ def _get_last_cloud_import_datetime():
             ts = d.get('timestamp')
             tot = d.get('total', 0)
             if ts:
-                return datetime.datetime.fromtimestamp(ts), tot
+                return datetime.datetime.fromtimestamp(ts), (tot or tot_channels)
         except Exception:
             pass
 
-    # Fallback automático: fecha de modificación de los players en TMDB_PLAYERS_PATH
-    mb_file = os.path.join(TMDB_PLAYERS_PATH, '(1)MultiBusqueda.json')
-    if os.path.exists(mb_file):
-        try:
-            mtime = os.path.getmtime(mb_file)
-            tot = len([f for f in os.listdir(TMDB_PLAYERS_PATH) if f.endswith('.json')])
-            return datetime.datetime.fromtimestamp(mtime), tot
-        except Exception:
-            pass
-
-    return None, 0
+    return None, tot_channels
 
 def show_continue_watching():
     if handle < 0: return
@@ -6742,18 +7023,18 @@ def show_player_manager_home():
     balandro_icon = os.path.join(balandro_path, 'icon.png')
     if not os.path.exists(balandro_icon): balandro_icon = 'DefaultFolder.png'
 
-    last_dt, tot_players = _get_last_cloud_import_datetime()
+    last_dt, tot_channels = _get_last_cloud_import_datetime()
     if last_dt:
         dt_formatted = _format_regional_datetime(last_dt)
         cloud_plot = (
-            'Descargar y sincronizar todos los reproductores de Alfa y Balandro desde GitHub.\n\n'
+            'Descargar y sincronizar todos los canales de Alfa y Balandro desde GitHub.\n\n'
             '[COLOR lime][B]Última importación:[/B][/COLOR] %s' % dt_formatted
         )
-        if tot_players > 0:
-            cloud_plot += '\n[COLOR grey]Reproductores actualmente activos: %d[/COLOR]' % tot_players
+        if tot_channels > 0:
+            cloud_plot += '\n[COLOR grey]Canales configurados: %d[/COLOR]' % tot_channels
     else:
         cloud_plot = (
-            'Descargar y sincronizar todos los reproductores de Alfa y Balandro desde GitHub.\n\n'
+            'Descargar y sincronizar todos los canales de Alfa y Balandro desde GitHub.\n\n'
             '[COLOR orange][B]Última importación:[/B] Aún no se ha realizado ninguna importación.[/COLOR]'
         )
 
@@ -6765,16 +7046,21 @@ def show_player_manager_home():
         '[COLOR gold]Al seleccionarlo, TMDb Helper buscará de nuevo en los canales y continuará desde el punto exacto guardado.[/COLOR]'
     )
 
+    alfa_ok = _is_engine_installed('alfa')
+    bal_ok = _is_engine_installed('balandro')
+    alfa_title_str = 'Gestor de Canales de Alfa (Películas)' if alfa_ok else 'Gestor de Canales de Alfa [COLOR red](No instalado)[/COLOR]'
+    bal_title_str = 'Gestor de Canales de Balandro' if bal_ok else 'Gestor de Canales de Balandro [COLOR red](No instalado)[/COLOR]'
+
     items = [
         ('Continuar', 'Continuar viendo%s' % cw_badge, 'plugin://plugin.video.bridge.multi/?view=continue_watching', 'DefaultInProgressShows.png', True,
          cw_plot),
-        ('Alfa', 'Gestor de Players de Alfa (Películas)', 'plugin://plugin.video.bridge.multi/?view=list_players&engine=alfa', alfa_icon, True,
-         'Administrar, activar o desactivar reproductores de TMDb Helper para los canales de Alfa.'),
-        ('Balandro', 'Gestor de Players de Balandro', 'plugin://plugin.video.bridge.multi/?view=list_players&engine=balandro', balandro_icon, True,
-         'Administrar, activar o desactivar reproductores de TMDb Helper para los canales de Balandro (Películas y Series).'),
-        ('Crear', 'Crear nuevo Player (Asistente)', 'plugin://plugin.video.bridge.multi/?view=create_player', 'DefaultAddSource.png', False,
-         'Asistente guiado paso a paso para generar nuevos reproductores TMDb Helper a partir de canales disponibles.'),
-        ('Nube', 'Importar / Actualizar Players desde la Nube', 'plugin://plugin.video.bridge.multi/?view=update_cloud', 'DefaultNetwork.png', False,
+        ('Alfa', alfa_title_str, 'plugin://plugin.video.bridge.multi/?view=list_players&engine=alfa', alfa_icon, True,
+         'Administrar, activar o desactivar canales de Alfa para búsquedas en Multi Bridge.'),
+        ('Balandro', bal_title_str, 'plugin://plugin.video.bridge.multi/?view=list_players&engine=balandro', balandro_icon, True,
+         'Administrar, activar o desactivar canales de Balandro (Películas y Series).'),
+        ('Crear', 'Añadir Canal (Asistente)', 'plugin://plugin.video.bridge.multi/?view=create_player', 'DefaultAddSource.png', False,
+         'Asistente guiado paso a paso para añadir nuevos canales disponibles a Multi Bridge.'),
+        ('Nube', 'Importar / Actualizar Canales desde la Nube', 'plugin://plugin.video.bridge.multi/?view=update_cloud', 'DefaultNetwork.png', False,
          cloud_plot),
         ('Ajustes', 'Ajustes del Addon', 'plugin://plugin.video.bridge.multi/?view=settings', 'DefaultAddonProgram.png', False,
          'Configurar opciones del addon, orden de servidores, calidades, idiomas y repositorio de GitHub.'),
@@ -6798,76 +7084,13 @@ def show_player_manager_home():
     xbmcplugin.setContent(handle, 'videos')
     xbmcplugin.endOfDirectory(handle)
 
-def _get_counterpart_filename(player_filename):
-    """Devuelve el nombre del archivo contraparte (película <-> series) si existe en TMDB_PLAYERS_PATH."""
-    if not player_filename or not player_filename.endswith('.json'):
-        return None
-    base = player_filename[:-5]
-    if base.lower().endswith('-series'):
-        target = re.sub(r'-series$', '', base, flags=re.IGNORECASE) + '.json'
-    else:
-        target = base + '-Series.json'
-
-    if os.path.exists(TMDB_PLAYERS_PATH):
-        for f in os.listdir(TMDB_PLAYERS_PATH):
-            if f.lower() == target.lower():
-                return f
-    return None
-
 def _get_channel_group_data(engine='alfa'):
-    prefix = 'Alfa-' if engine == 'alfa' else 'Balandro-'
-    channels = {}
-    if not os.path.exists(TMDB_PLAYERS_PATH):
-        return channels
-    for fname in sorted(os.listdir(TMDB_PLAYERS_PATH)):
-        if fname.lower().startswith(prefix.lower()) and fname.endswith('.json'):
-            fpath = os.path.join(TMDB_PLAYERS_PATH, fname)
-            clean = fname[:-5]
-            if clean.lower().startswith(prefix.lower()):
-                clean = clean[len(prefix):]
-            is_series = False
-            if clean.lower().endswith('-series'):
-                clean = re.sub(r'-series$', '', clean, flags=re.IGNORECASE)
-                is_series = True
-            norm_key = clean.lower().strip()
-            if norm_key not in channels:
-                channels[norm_key] = {
-                    'name': clean.strip(),
-                    'movie_file': None,
-                    'series_file': None,
-                    'movie_disabled': False,
-                    'series_disabled': False
-                }
-            data = {}
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                dis = str(data.get('disabled', '')).lower() in ('true', '1') or data.get('disabled') is True
-            except:
-                dis = False
-            if is_series or 'play_episode' in data:
-                channels[norm_key]['series_file'] = fname
-                channels[norm_key]['series_disabled'] = dis
-            else:
-                channels[norm_key]['movie_file'] = fname
-                channels[norm_key]['movie_disabled'] = dis
-    return channels
+    ch_data = load_channels_data()
+    return ch_data.get('channels', {}).get(engine, {})
 
-def _set_player_disabled(filename, dis_str):
-    if not filename: return
-    fpath = os.path.join(TMDB_PLAYERS_PATH, filename)
-    if not os.path.exists(fpath): return
-    try:
-        with open(fpath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        data['disabled'] = dis_str
-        with open(fpath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except: pass
-
-def _get_channel_icon_and_info(channel_id, engine='alfa', player_file=None):
+def _get_channel_icon_and_info(channel_id, engine='alfa'):
     """Obtiene el icono original y la información de un canal directamente desde la ruta de su addon
-    (Alfa o Balandro), sin descargar ni almacenar ninguna imagen en Bridge Multi.
+    (Alfa o Balandro), sin descargar ni almacenar ninguna imagen en Multi Bridge.
     Soporta URLs remotas y rutas locales de forma nativa.
     """
     addon_path = alfa_path if engine == 'alfa' else balandro_path
@@ -6880,33 +7103,7 @@ def _get_channel_icon_and_info(channel_id, engine='alfa', player_file=None):
                 ch_json = os.path.join(ch_dir, f)
                 break
 
-    # Si no existe por nombre directo, intentar extraer el canal incrustado en el archivo player
-    if not os.path.exists(ch_json) and player_file:
-        pf_path = os.path.join(TMDB_PLAYERS_PATH, player_file)
-        if os.path.exists(pf_path):
-            try:
-                with open(pf_path, 'r', encoding='utf-8') as f:
-                    pdata = json.load(f)
-                pm = pdata.get('play_movie') or pdata.get('play_episode') or []
-                url = pm[0] if isinstance(pm, list) and pm else (pm if isinstance(pm, str) else '')
-                emb = None
-                if 'channel=' in url:
-                    m = re.search(r'channel=([^&]+)', url)
-                    if m: emb = m.group(1)
-                elif 'url=plugin://' in url:
-                    sub = url.split('url=plugin://')[1].split('&')[0]
-                    if '?' in sub:
-                        q = sub.split('?', 1)[1]
-                        dec = json.loads(urllib.parse.unquote(base64.b64decode(urllib.parse.unquote(q)).decode('utf-8')))
-                        emb = dec.get('channel')
-                if emb:
-                    cand = os.path.join(ch_dir, emb + '.json')
-                    if os.path.exists(cand):
-                        ch_json = cand
-            except:
-                pass
-
-    # Si aún no existe, buscar por coincidencia parcial en channels
+    # Si no existe por nombre directo, buscar por coincidencia parcial en channels
     if not os.path.exists(ch_json) and os.path.exists(ch_dir):
         for f in os.listdir(ch_dir):
             if f.endswith('.json') and (f.lower().startswith(channel_id.lower()) or channel_id.lower().startswith(f[:-5].lower())):
@@ -6967,24 +7164,18 @@ def _get_channel_icon_and_info(channel_id, engine='alfa', player_file=None):
 
 def show_players_list(engine='alfa'):
     if handle < 0: return
-    if not os.path.exists(TMDB_PLAYERS_PATH):
-        xbmcplugin.endOfDirectory(handle); return
-
     channels = _get_channel_group_data(engine=engine)
     if not channels:
         xbmcplugin.endOfDirectory(handle); return
 
-    for norm_key in sorted(channels.keys(), key=lambda x: channels[x]['name'].lower()):
+    for norm_key in sorted(channels.keys(), key=lambda x: channels[x].get('name', x).lower()):
         info = channels[norm_key]
-        name = info['name']
-        m_file = info['movie_file']
-        s_file = info['series_file']
-        m_dis = info['movie_disabled']
-        s_dis = info['series_disabled']
-
-        has_both = bool(m_file and s_file)
-        has_movie = bool(m_file)
-        has_series = bool(s_file)
+        name = info.get('name', norm_key)
+        has_movie = bool(info.get('movies'))
+        has_series = bool(info.get('series'))
+        has_both = has_movie and has_series
+        m_dis = bool(info.get('movie_disabled'))
+        s_dis = bool(info.get('series_disabled'))
 
         if has_both:
             if not m_dis and not s_dis:
@@ -7018,8 +7209,8 @@ def show_players_list(engine='alfa'):
         opt_url = 'plugin://plugin.video.bridge.multi/?view=player_options&channel=%s&engine=%s' % (norm_key, engine)
         li = xbmcgui.ListItem(label=lbl)
 
-        sample_file = m_file or s_file
-        icon, ch_title, ch_plot = _get_channel_icon_and_info(norm_key, engine=engine, player_file=sample_file)
+        actual_ch = str(info.get('channel') or norm_key).strip().lower()
+        icon, ch_title, ch_plot = _get_channel_icon_and_info(actual_ch, engine=engine)
 
         li.setArt({
             'thumb': icon,
@@ -7049,88 +7240,76 @@ def show_players_list(engine='alfa'):
     xbmcplugin.setContent(handle, 'videos')
     xbmcplugin.endOfDirectory(handle)
 
-def show_player_options(player_filename, engine='alfa'):
-    if not player_filename: return
+def show_player_options(channel_key, engine='alfa'):
+    if not channel_key: return
     dialog = xbmcgui.Dialog()
 
-    channels = _get_channel_group_data(engine=engine)
-    clean_key = player_filename.lower().replace('.json', '')
+    ch_data = load_channels_data()
+    engine_channels = ch_data.setdefault('channels', {}).setdefault(engine, {})
+
+    clean_key = str(channel_key).lower().replace('.json', '')
     prefix = 'alfa-' if engine == 'alfa' else 'balandro-'
     if clean_key.startswith(prefix):
         clean_key = clean_key[len(prefix):]
     clean_key = re.sub(r'-series$', '', clean_key, flags=re.IGNORECASE).strip()
 
-    info = channels.get(clean_key)
+    info = engine_channels.get(clean_key)
     if not info:
-        for k, v in channels.items():
-            if v['name'].lower() == clean_key:
+        for k, v in engine_channels.items():
+            if str(v.get('name', '')).lower() == clean_key or str(v.get('channel', '')).lower() == clean_key:
+                clean_key = k
                 info = v
                 break
 
     if not info:
-        fpath = os.path.join(TMDB_PLAYERS_PATH, player_filename)
-        if not os.path.exists(fpath): return
-        try:
-            with open(fpath, 'r', encoding='utf-8') as f: data = json.load(f)
-            dis = str(data.get('disabled', '')).lower() in ('true', '1') or data.get('disabled') is True
-            new_dis = 'false' if dis else 'true'
-            data['disabled'] = new_dis
-            with open(fpath, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-            dialog.notification('Bridge Multi', 'Player actualizado', '', 2000)
-            xbmc.executebuiltin('Container.Refresh')
-        except: pass
         return
 
-    name = info['name']
-    m_file = info['movie_file']
-    s_file = info['series_file']
-    m_dis = info['movie_disabled']
-    s_dis = info['series_disabled']
-
-    has_both = bool(m_file and s_file)
+    name = info.get('name', clean_key)
+    has_movie = bool(info.get('movies'))
+    has_series = bool(info.get('series'))
+    has_both = has_movie and has_series
+    m_dis = bool(info.get('movie_disabled'))
+    s_dis = bool(info.get('series_disabled'))
 
     if has_both:
         opt_movie = ('[COLOR red]Desactivar[/COLOR] Películas' if not m_dis else '[COLOR lime]Activar[/COLOR] Películas')
         opt_series = ('[COLOR red]Desactivar[/COLOR] Series' if not s_dis else '[COLOR lime]Activar[/COLOR] Series')
         both_active = (not m_dis and not s_dis)
         opt_all = ('[COLOR red]Desactivar Todo[/COLOR] (Películas y Series)' if both_active else '[COLOR lime]Activar Todo[/COLOR] (Películas y Series)')
-        opt_delete = '[COLOR red]Eliminar Canal[/COLOR] (ambos reproductores)'
+        opt_delete = '[COLOR red]Eliminar Canal[/COLOR]'
         opt_back = 'Volver'
 
         options = [opt_movie, opt_series, opt_all, opt_delete, opt_back]
         sel = dialog.select('Canal: %s' % name, options)
 
         if sel == 0:
-            new_val = 'true' if not m_dis else 'false'
-            _set_player_disabled(m_file, new_val)
-            dialog.notification('Bridge Multi', 'Películas de %s %s' % (name, 'desactivadas' if new_val == 'true' else 'activadas'), '', 2000)
+            info['movie_disabled'] = not m_dis
+            save_channels_data(ch_data)
+            dialog.notification('Multi Bridge', 'Películas de %s %s' % (name, 'desactivadas' if not m_dis else 'activadas'), '', 2000)
             xbmc.executebuiltin('Container.Refresh')
         elif sel == 1:
-            new_val = 'true' if not s_dis else 'false'
-            _set_player_disabled(s_file, new_val)
-            dialog.notification('Bridge Multi', 'Series de %s %s' % (name, 'desactivadas' if new_val == 'true' else 'activadas'), '', 2000)
+            info['series_disabled'] = not s_dis
+            save_channels_data(ch_data)
+            dialog.notification('Multi Bridge', 'Series de %s %s' % (name, 'desactivadas' if not s_dis else 'activadas'), '', 2000)
             xbmc.executebuiltin('Container.Refresh')
         elif sel == 2:
-            new_val = 'true' if both_active else 'false'
-            _set_player_disabled(m_file, new_val)
-            _set_player_disabled(s_file, new_val)
-            dialog.notification('Bridge Multi', '%s %s' % (name, 'desactivado' if new_val == 'true' else 'activado'), '', 2000)
+            new_val = both_active
+            info['movie_disabled'] = new_val
+            info['series_disabled'] = new_val
+            save_channels_data(ch_data)
+            dialog.notification('Multi Bridge', '%s %s' % (name, 'desactivado' if new_val else 'activado'), '', 2000)
             xbmc.executebuiltin('Container.Refresh')
         elif sel == 3:
-            if dialog.yesno('Eliminar Canal', '¿Seguro que deseas eliminar el canal %s y todos sus reproductores?' % name):
-                if m_file:
-                    try: os.remove(os.path.join(TMDB_PLAYERS_PATH, m_file))
-                    except: pass
-                if s_file:
-                    try: os.remove(os.path.join(TMDB_PLAYERS_PATH, s_file))
-                    except: pass
-                dialog.notification('Bridge Multi', '%s eliminado' % name, '', 2000)
+            if dialog.yesno('Eliminar Canal', '¿Seguro que deseas eliminar el canal %s?' % name):
+                if clean_key in engine_channels:
+                    del engine_channels[clean_key]
+                save_channels_data(ch_data)
+                dialog.notification('Multi Bridge', '%s eliminado' % name, '', 2000)
                 xbmc.executebuiltin('Container.Refresh')
 
     else:
-        target_file = m_file or s_file
-        target_type = 'Películas' if m_file else 'Series'
-        is_dis = m_dis if m_file else s_dis
+        target_type = 'Películas' if has_movie else 'Series'
+        is_dis = m_dis if has_movie else s_dis
 
         opt_toggle = ('[COLOR red]Desactivar[/COLOR] %s' % target_type if not is_dis else '[COLOR lime]Activar[/COLOR] %s' % target_type)
         opt_delete = '[COLOR red]Eliminar Canal[/COLOR]'
@@ -7140,15 +7319,19 @@ def show_player_options(player_filename, engine='alfa'):
         sel = dialog.select('Canal: %s (%s)' % (name, target_type), options)
 
         if sel == 0:
-            new_val = 'true' if not is_dis else 'false'
-            _set_player_disabled(target_file, new_val)
-            dialog.notification('Bridge Multi', '%s (%s) %s' % (name, target_type, 'desactivado' if new_val == 'true' else 'activado'), '', 2000)
+            if has_movie:
+                info['movie_disabled'] = not m_dis
+            else:
+                info['series_disabled'] = not s_dis
+            save_channels_data(ch_data)
+            dialog.notification('Multi Bridge', '%s (%s) %s' % (name, target_type, 'desactivado' if not is_dis else 'activado'), '', 2000)
             xbmc.executebuiltin('Container.Refresh')
         elif sel == 1:
             if dialog.yesno('Eliminar Canal', '¿Seguro que deseas eliminar el canal %s?' % name):
-                try: os.remove(os.path.join(TMDB_PLAYERS_PATH, target_file))
-                except: pass
-                dialog.notification('Bridge Multi', '%s eliminado' % name, '', 2000)
+                if clean_key in engine_channels:
+                    del engine_channels[clean_key]
+                save_channels_data(ch_data)
+                dialog.notification('Multi Bridge', '%s eliminado' % name, '', 2000)
                 xbmc.executebuiltin('Container.Refresh')
 
 def _detect_channel_capabilities(engine, channel_id, mods_path):
@@ -7175,45 +7358,67 @@ def _detect_channel_capabilities(engine, channel_id, mods_path):
             except: pass
     return supports_movies, supports_series
 
-def _write_single_player(engine, channel_id, is_series):
-    ch_clean = channel_id.capitalize()
-    fn = '%s-%s-Series.json' % (engine.capitalize(), ch_clean) if is_series else '%s-%s.json' % (engine.capitalize(), ch_clean)
-    p_name = '%s-%s%s' % (engine.capitalize(), ch_clean, ' (Series)' if is_series else '')
+def _add_channel_to_json(engine, channel_id, is_series=False, also_movies=False):
+    ch_data = load_channels_data()
+    engine_channels = ch_data.setdefault('channels', {}).setdefault(engine, {})
+    ch_clean = channel_id.lower().strip()
 
-    match_regex = '(?i)^({es-ES_title}|{es-MX_title}|{en_title}|{originaltitle}|.+)'
-    ep_regex = '(?i)^({es-ES_showname}|{es-MX_showname}|{en_showname}|{original_name}|.+)'
-    play_url = 'plugin://plugin.video.bridge.multi/?url=plugin://plugin.video.%s/?channel=%s' % (engine, channel_id)
-    play_url += '&title={title}&title_es={es-ES_title}&title_lat={es-MX_title}&title_en={en_title}&title_orig={originaltitle}&tmdb={tmdb}&imdb={imdb}&year={year}'
-    play_ep_url = 'plugin://plugin.video.bridge.multi/?url=plugin://plugin.video.%s/?channel=%s' % (engine, channel_id)
-    play_ep_url += '&showname={showname}&showyear={showyear}&season={season}&episode={episode}&title={showname}&tmdb={tmdb}&imdb={imdb}'
+    addon_path = alfa_path if engine == 'alfa' else balandro_path
+    display_name = _channel_display_name(addon_path, ch_clean)
+    if not display_name or display_name == ch_clean:
+        display_name = channel_id.capitalize()
 
-    player_data = {
-        "name": p_name,
-        "plugin": "plugin.video.bridge.multi",
-        "priority": 200,
-        "is_resolvable": "true",
-        "assert": {"play_episode": ["showname", "season", "episode"]} if is_series else {"play_movie": ["title", "year"]},
-        "play_episode" if is_series else "play_movie": [
-            play_ep_url if is_series else play_url,
-            {"title": ep_regex, "season": "{season}", "episode": "{episode}"} if is_series else {"title": match_regex, "year": "{year}"}
-        ],
-        "is_folder": "false"
-    }
+    if ch_clean not in engine_channels:
+        engine_channels[ch_clean] = {
+            'id': ch_clean,
+            'name': display_name,
+            'channel': ch_clean,
+            'engine': engine,
+            'movies': False,
+            'series': False,
+            'movie_disabled': False,
+            'series_disabled': False,
+            'play_movie': None,
+            'play_episode': None
+        }
 
-    dest = os.path.join(TMDB_PLAYERS_PATH, fn)
-    with open(dest, 'w', encoding='utf-8') as f:
-        json.dump(player_data, f, indent=4, ensure_ascii=False)
-    return fn
+    entry = engine_channels[ch_clean]
+    if also_movies:
+        entry['movies'] = True
+        entry['movie_disabled'] = False
+        entry['series'] = True
+        entry['series_disabled'] = False
+    elif is_series:
+        entry['series'] = True
+        entry['series_disabled'] = False
+    else:
+        entry['movies'] = True
+        entry['movie_disabled'] = False
+
+    save_channels_data(ch_data)
+    return display_name
 
 def create_player_wizard():
+    alfa_ok = _is_engine_installed('alfa')
+    bal_ok = _is_engine_installed('balandro')
+
+    if not alfa_ok and not bal_ok:
+        xbmcgui.Dialog().ok('Multi Bridge', 'No se encontró ni Alfa ni Balandro instalado.')
+        return
+
     dialog = xbmcgui.Dialog()
-    engine_choice = dialog.select('¿Para qué addon deseas crear el player?', ['Alfa (Solo Películas)', 'Balandro'])
-    if engine_choice < 0: return
-    engine = 'alfa' if engine_choice == 0 else 'balandro'
+    if alfa_ok and not bal_ok:
+        engine = 'alfa'
+    elif bal_ok and not alfa_ok:
+        engine = 'balandro'
+    else:
+        engine_choice = dialog.select('¿Para qué addon deseas añadir el canal?', ['Alfa (Solo Películas)', 'Balandro'])
+        if engine_choice < 0: return
+        engine = 'alfa' if engine_choice == 0 else 'balandro'
 
     mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
     if not mods:
-        dialog.ok('Bridge Multi', 'El addon %s no está instalado o disponible.' % engine.capitalize())
+        dialog.ok('Multi Bridge', 'El addon %s no está instalado o disponible.' % engine.capitalize())
         return
 
     channels_dir = os.path.join(mods['path'], 'channels')
@@ -7231,61 +7436,55 @@ def create_player_wizard():
 
     supports_movies, supports_series = _detect_channel_capabilities(engine, chosen_id, mods['path'])
 
-    created_files = []
+    created_name = ''
     if engine == 'balandro' and supports_series:
         if supports_movies:
             opts = [
-                'Crear Ambos (Películas y Series)',
+                'Habilitar Ambos (Películas y Series)',
                 'Solo Películas',
                 'Solo Series',
                 'Cancelar'
             ]
             choice = dialog.select('El canal %s también soporta Series' % ch_clean, opts)
             if choice == 0:
-                created_files.append(_write_single_player(engine, chosen_id, is_series=False))
-                created_files.append(_write_single_player(engine, chosen_id, is_series=True))
+                created_name = _add_channel_to_json(engine, chosen_id, is_series=True, also_movies=True)
             elif choice == 1:
-                created_files.append(_write_single_player(engine, chosen_id, is_series=False))
+                created_name = _add_channel_to_json(engine, chosen_id, is_series=False)
             elif choice == 2:
-                created_files.append(_write_single_player(engine, chosen_id, is_series=True))
+                created_name = _add_channel_to_json(engine, chosen_id, is_series=True)
             else:
                 return
         else:
-            created_files.append(_write_single_player(engine, chosen_id, is_series=True))
+            created_name = _add_channel_to_json(engine, chosen_id, is_series=True)
     else:
-        created_files.append(_write_single_player(engine, chosen_id, is_series=False))
+        created_name = _add_channel_to_json(engine, chosen_id, is_series=False)
 
-    if created_files:
-        files_str = '\n'.join(['• %s' % fn for fn in created_files])
-        dialog.ok('Bridge Multi', '¡Player(s) creado(s) con éxito!\n\n%s' % files_str)
+    if created_name:
+        dialog.ok('Multi Bridge', '¡Canal %s añadido con éxito a Multi Bridge!' % created_name)
 
 def update_players_from_cloud():
-    """Descarga e importa todos los players desde el repositorio de GitHub (01xKeven/Players-Multi),
-    extrayendo los archivos JSON de las carpetas 'players alfa' y 'players balandro', y reemplazando
-    siempre de forma limpia y completa todos los players correspondientes en la carpeta de TMDb Helper.
+    """Descarga e importa el archivo channels.json desde el repositorio de GitHub (01xKeven/Players-Multi),
+    realiza un merge inteligente respetando canales desactivados por el usuario, y asegura que TMDb Helper
+    contenga únicamente (1)MultiBusqueda.json.
     """
-    import zipfile
-    import io
-
     dialog = xbmcgui.Dialog()
     repo_url = _bridge_addon.getSetting('cloud_repo_url') if _bridge_addon else ''
     if not repo_url or not repo_url.strip():
         repo_url = 'https://github.com/01xKeven/Players-Multi'
 
     confirm = dialog.yesno(
-        'Bridge Multi — Nube',
-        '¿Deseas descargar y reemplazar todos los players de TMDb Helper con la versión más reciente de la Nube (GitHub)?\n\n'
+        'Multi Bridge — Nube',
+        '¿Deseas descargar y actualizar los canales desde la Nube (GitHub)?\n\n'
         '[COLOR deepskyblue]Repositorio:[/COLOR] %s\n'
-        '[COLOR gold]Aviso:[/COLOR] Se reemplazarán todos los reproductores de Alfa y Balandro.' % repo_url
+        '[COLOR gold]Aviso:[/COLOR] Se actualizará la lista de canales interna (channels.json).' % repo_url
     )
     if not confirm:
         return
 
     p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create('Bridge Multi — Nube', 'Conectando con GitHub...')
-    p_dialog.update(10, 'Descargando repositorio de players desde GitHub...')
+    p_dialog.create('Multi Bridge — Nube', 'Conectando con GitHub...')
+    p_dialog.update(10, 'Descargando channels.json desde GitHub...')
 
-    # Limpiar URL del repo para formar URLs de descarga
     clean_repo = repo_url.strip().rstrip('/')
     if clean_repo.startswith('https://github.com/'):
         clean_repo = clean_repo[len('https://github.com/'):]
@@ -7293,108 +7492,121 @@ def update_players_from_cloud():
         clean_repo = clean_repo[len('http://github.com/'):]
 
     token = _bridge_addon.getSetting('github_token').strip() if _bridge_addon else ''
-
-    zip_candidates = [
-        'https://github.com/%s/archive/refs/heads/master.zip' % clean_repo,
-        'https://github.com/%s/archive/refs/heads/main.zip' % clean_repo,
-        'https://codeload.github.com/%s/zip/refs/heads/master' % clean_repo,
-        'https://codeload.github.com/%s/zip/refs/heads/main' % clean_repo
-    ]
-
-    zip_data = None
     headers = {'User-Agent': 'Mozilla/5.0'}
     if token:
         headers['Authorization'] = 'token %s' % token
 
+    raw_candidates = [
+        'https://raw.githubusercontent.com/%s/master/channels.json' % clean_repo,
+        'https://raw.githubusercontent.com/%s/main/channels.json' % clean_repo,
+    ]
+
+    remote_json_bytes = None
     download_error = ''
-    for u in zip_candidates:
+
+    for u in raw_candidates:
         if p_dialog.iscanceled():
             p_dialog.close()
             return
         try:
-            xbmc.log('Bridge Multi Nube: intentando descargar ' + u, xbmc.LOGINFO)
+            xbmc.log('Multi Bridge Nube: intentando descargar ' + u, xbmc.LOGINFO)
             req = urllib.request.Request(u, headers=headers)
             with urllib.request.urlopen(req, timeout=20) as resp:
                 if resp.status == 200:
-                    zip_data = resp.read()
+                    remote_json_bytes = resp.read()
                     break
         except Exception as e:
             download_error = str(e)
-            xbmc.log('Bridge Multi Nube: error descargando ' + u + ': ' + str(e), xbmc.LOGWARNING)
+            xbmc.log('Multi Bridge Nube: error descargando ' + u + ': ' + str(e), xbmc.LOGWARNING)
 
-    if not zip_data:
+    # Fallback to ZIP if raw fails
+    if not remote_json_bytes:
+        import zipfile, io
+        zip_candidates = [
+            'https://github.com/%s/archive/refs/heads/master.zip' % clean_repo,
+            'https://github.com/%s/archive/refs/heads/main.zip' % clean_repo,
+            'https://codeload.github.com/%s/zip/refs/heads/master' % clean_repo,
+        ]
+        for u in zip_candidates:
+            if p_dialog.iscanceled():
+                p_dialog.close()
+                return
+            try:
+                xbmc.log('Multi Bridge Nube: intentando descargar zip ' + u, xbmc.LOGINFO)
+                req = urllib.request.Request(u, headers=headers)
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    if resp.status == 200:
+                        zf = zipfile.ZipFile(io.BytesIO(resp.read()))
+                        for zi in zf.infolist():
+                            if zi.filename.endswith('channels.json'):
+                                remote_json_bytes = zf.read(zi.filename)
+                                break
+                        if remote_json_bytes:
+                            break
+            except Exception as e:
+                download_error = str(e)
+                xbmc.log('Multi Bridge Nube: error en fallback zip: ' + str(e), xbmc.LOGWARNING)
+
+    if not remote_json_bytes:
         try: p_dialog.close()
         except: pass
         dialog.ok(
-            'Bridge Multi — Error en Nube',
-            'No se pudo descargar el archivo ZIP desde GitHub.\n\n'
+            'Multi Bridge — Error en Nube',
+            'No se pudo descargar channels.json desde GitHub.\n\n'
             '[COLOR red]Detalle:[/COLOR] %s\n'
-            'Verifica tu conexión a internet o el repositorio: %s' % (download_error or 'Descarga fallida', repo_url)
+            'Verifica tu conexión o el repositorio: %s' % (download_error or 'Descarga fallida', repo_url)
         )
         return
 
-    p_dialog.update(50, 'Procesando archivo ZIP descargado...')
+    p_dialog.update(60, 'Procesando y sincronizando canales...')
 
     try:
-        zf = zipfile.ZipFile(io.BytesIO(zip_data))
+        remote_data = json.loads(remote_json_bytes.decode('utf-8'))
     except Exception as e:
         try: p_dialog.close()
         except: pass
-        dialog.ok('Bridge Multi — Error', 'El archivo descargado no es un archivo ZIP válido: ' + str(e))
+        dialog.ok('Multi Bridge — Error', 'El archivo channels.json remoto no es JSON válido: ' + str(e))
         return
 
-    if not os.path.exists(TMDB_PLAYERS_PATH):
-        try: os.makedirs(TMDB_PLAYERS_PATH)
-        except: pass
-
-    p_dialog.update(70, 'Limpiando y reemplazando reproductores en TMDb Helper...')
-
-    # Eliminar players anteriores de Alfa, Balandro y MultiBusqueda para reemplazo completo
-    try:
-        for existing_fn in os.listdir(TMDB_PLAYERS_PATH):
-            if not existing_fn.endswith('.json'): continue
-            fn_low = existing_fn.lower()
-            if fn_low.startswith('alfa-') or fn_low.startswith('balandro-') or fn_low.startswith('(1)multibusqueda'):
-                try: os.remove(os.path.join(TMDB_PLAYERS_PATH, existing_fn))
-                except: pass
-    except Exception as e:
-        xbmc.log('Bridge Multi Nube: error limpiando players anteriores: ' + str(e), xbmc.LOGWARNING)
-
-    p_dialog.update(80, 'Extrayendo nuevos players de Alfa y Balandro...')
+    local_data = load_channels_data()
+    local_channels = local_data.setdefault('channels', {})
+    remote_channels = remote_data.get('channels', {})
 
     alfa_count = 0
     balandro_count = 0
-    other_count = 0
+
+    for eng in ('alfa', 'balandro'):
+        rem_eng = remote_channels.get(eng, {})
+        loc_eng = local_channels.setdefault(eng, {})
+        for ch_id, r_info in rem_eng.items():
+            if ch_id in loc_eng:
+                # Conservar preferencias locales de desactivado
+                r_info['movie_disabled'] = loc_eng[ch_id].get('movie_disabled', False)
+                r_info['series_disabled'] = loc_eng[ch_id].get('series_disabled', False)
+            loc_eng[ch_id] = r_info
+            if eng == 'alfa':
+                alfa_count += 1
+            else:
+                balandro_count += 1
+
+    total_count = alfa_count + balandro_count
+    sync_payload = {
+        'timestamp': int(datetime.datetime.now().timestamp()),
+        'iso': datetime.datetime.now().isoformat(),
+        'total_alfa': alfa_count,
+        'total_balandro': balandro_count,
+        'total': total_count
+    }
+    local_data['last_sync'] = sync_payload
+    save_channels_data(local_data)
 
     try:
-        for item in zf.infolist():
-            if item.is_dir(): continue
-            fname = os.path.basename(item.filename)
-            if not fname.endswith('.json'): continue
-
-            norm_path = item.filename.replace('\\', '/').lower()
-            is_alfa = '/players alfa/' in norm_path or norm_path.startswith('players alfa/') or norm_path.startswith('alfa/')
-            is_balandro = '/players balandro/' in norm_path or norm_path.startswith('players balandro/') or norm_path.startswith('balandro/')
-
-            if is_alfa or is_balandro:
-                dest_path = os.path.join(TMDB_PLAYERS_PATH, fname)
-                content = zf.read(item.filename)
-                with open(dest_path, 'wb') as out_f:
-                    out_f.write(content)
-
-                if is_alfa:
-                    alfa_count += 1
-                elif is_balandro:
-                    balandro_count += 1
-                else:
-                    other_count += 1
+        with open(CLOUD_SYNC_FILE, 'w', encoding='utf-8') as _cf:
+            json.dump(sync_payload, _cf, indent=4)
     except Exception as e:
-        try: p_dialog.close()
-        except: pass
-        dialog.ok('Bridge Multi — Error', 'Error al extraer players del archivo ZIP: ' + str(e))
-        return
+        xbmc.log('Multi Bridge Nube: error guardando sync_info: ' + str(e), xbmc.LOGWARNING)
 
-    p_dialog.update(95, 'Finalizando sincronización y verificando...')
+    p_dialog.update(90, 'Verificando y limpiando carpeta de TMDb Helper...')
     try:
         check_and_run_migration()
     except Exception:
@@ -7403,29 +7615,18 @@ def update_players_from_cloud():
     try: p_dialog.close()
     except: pass
 
-    total_count = alfa_count + balandro_count + other_count
-
-    try:
-        sync_payload = {
-            'timestamp': int(datetime.datetime.now().timestamp()),
-            'iso': datetime.datetime.now().isoformat(),
-            'total_alfa': alfa_count,
-            'total_balandro': balandro_count,
-            'total': total_count
-        }
-        with open(CLOUD_SYNC_FILE, 'w', encoding='utf-8') as _cf:
-            json.dump(sync_payload, _cf, indent=4)
-    except Exception as e:
-        xbmc.log('Bridge Multi Nube: error guardando sync_info: ' + str(e), xbmc.LOGWARNING)
-
     dialog.ok(
-        'Bridge Multi — Nube',
+        'Multi Bridge — Nube',
         '¡Sincronización de la Nube completada!\n\n'
-        '• [B][COLOR deepskyblue]Players Alfa:[/COLOR][/B] %d importados\n'
-        '• [B][COLOR gold]Players Balandro:[/COLOR][/B] %d importados\n'
-        '• [B][COLOR lime]Total actualizados:[/COLOR][/B] %d reproductores\n\n'
-        'Todos los players de TMDb Helper han sido reemplazados y actualizados con éxito.' % (alfa_count, balandro_count, total_count)
+        '• [B][COLOR deepskyblue]Canales Alfa:[/COLOR][/B] %d sincronizados\n'
+        '• [B][COLOR gold]Canales Balandro:[/COLOR][/B] %d sincronizados\n'
+        '• [B][COLOR lime]Total actualizados:[/COLOR][/B] %d canales\n\n'
+        'Los canales internos de Multi Bridge han sido actualizados con éxito y TMDb Helper se mantiene limpio.' % (alfa_count, balandro_count, total_count)
     )
+    try:
+        xbmc.executebuiltin('Container.Refresh')
+    except Exception:
+        pass
 
 # ---------------------------------------------------------
 # Custom Engine Picker Dialog (ventana personalizada)
@@ -7597,6 +7798,19 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
 def _show_engine_picker():
     """Muestra la ventana personalizada de seleccion de motor.
     Devuelve 'alfa', 'balandro' o None si se cancela."""
+    alfa_ok = _is_engine_installed('alfa')
+    bal_ok  = _is_engine_installed('balandro')
+
+    if not alfa_ok and not bal_ok:
+        xbmcgui.Dialog().ok('Multi Bridge', 'No se encontró ni Alfa ni Balandro instalados.\nInstala al menos uno de ellos para buscar contenido.')
+        return None
+
+    if alfa_ok and not bal_ok:
+        return 'alfa'
+
+    if bal_ok and not alfa_ok:
+        return 'balandro'
+
     try:
         alfa_addon = xbmcaddon.Addon('plugin.video.alfa')
         alfa_icon  = os.path.join(alfa_addon.getAddonInfo('path'), 'resources', 'icon.png')
@@ -7722,7 +7936,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         # Titulo
         self.addControl(xbmcgui.ControlLabel(
             dx, dy+10, dw, 32,
-            '[B]Bridge Multi — Autoplay[/B]',
+            '[B]Multi Bridge — Autoplay[/B]',
             font='font13', textColor=GOLD, alignment=6))
 
         # Linea separadora dorada
@@ -7863,7 +8077,7 @@ def _show_autoplay_stop_dialog(server_label):
         xbmc.log('BridgeMulti _show_autoplay_stop_dialog error, fallback a select: ' + str(e), xbmc.LOGWARNING)
         try:
             return xbmcgui.Dialog().select(
-                'Bridge Multi — Autoplay: [B]%s[/B] se detuvo' % (server_label or ''),
+                'Multi Bridge — Autoplay: [B]%s[/B] se detuvo' % (server_label or ''),
                 ['Sí, siguiente enlace', 'No, volver', 'Ver enlaces'])
         except Exception:
             return -1
@@ -7920,7 +8134,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         # Título
         self.addControl(xbmcgui.ControlLabel(
             dx+24, dy+16, dw-48, 30,
-            '[B][COLOR #CFA82C]BRIDGE MULTI[/COLOR][/B]  [COLOR #E0E0E0]—  Reproducción Pausada[/COLOR]',
+            '[B][COLOR #CFA82C]MULTI BRIDGE[/COLOR][/B]  [COLOR #E0E0E0]—  Reproducción Pausada[/COLOR]',
             font='font13'))
 
         # Separador dorado
@@ -8271,7 +8485,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         sub_head = '¿Deseas cambiar de servidor?' if self.is_playback else 'Servidores Disponibles'
         self.addControl(xbmcgui.ControlLabel(
             dx+28, dy+16, 620, 28,
-            '[B][COLOR #CFA82C]BRIDGE MULTI[/COLOR][/B]  [COLOR #E0E0E0]—  %s[/COLOR]' % sub_head,
+            '[B][COLOR #CFA82C]MULTI BRIDGE[/COLOR][/B]  [COLOR #E0E0E0]—  %s[/COLOR]' % sub_head,
             font='font13'))
 
         # Línea separadora dorada superior
@@ -8660,7 +8874,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
             try:
                 ans = _KODI_ORIG_DIALOG().yesno(
-                    'Bridge Multi',
+                    'Multi Bridge',
                     '¿Deseas buscar enlaces en [B]%s[/B]?' % other_eng_name,
                     nolabel='Cancelar',
                     yeslabel='Buscar en %s' % other_eng_name
@@ -8779,7 +8993,7 @@ def _load_cached_links_for_dialog():
 
         return c_links, c_matched, c_meta, c_engine
     except Exception as e:
-        xbmc.log('Bridge Multi: _load_cached_links_for_dialog error: ' + str(e), xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: _load_cached_links_for_dialog error: ' + str(e), xbmc.LOGINFO)
         return [], None, {}, 'alfa'
 
 
@@ -8801,7 +9015,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         cur_time = float(force_cur_time)
 
     srv_name = _get_link_server_name(chosen)
-    xbmc.log("Bridge Multi: cambio en caliente a enlace %d/%d (%s) en %.1fs" % (
+    xbmc.log("Multi Bridge: cambio en caliente a enlace %d/%d (%s) en %.1fs" % (
         chosen_idx + 1, len(links), srv_name, cur_time), xbmc.LOGINFO)
 
     media_key = _get_media_key(meta, chosen)
@@ -8824,7 +9038,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
     sync_tmdbhelper_playerstring(meta)
 
     try:
-        xbmcgui.Dialog().notification('Bridge Multi', 'Cambiando a [B]%s[/B]...' % srv_name, '', 2500)
+        xbmcgui.Dialog().notification('Multi Bridge', 'Cambiando a [B]%s[/B]...' % srv_name, '', 2500)
     except Exception:
         pass
 
@@ -8908,7 +9122,7 @@ def _verify_playback_started(is_torrent=False, timeout=None):
         min_wait = 15.0 if is_torrent else 10.0
         if elapsed > min_wait:
             if not is_buffering and not is_busy and not has_media and not is_playing and not has_playlist:
-                xbmc.log("Bridge Multi: _verify_playback_started detecta fin de intento tras %.1fs (sin actividad ni medio)" % elapsed, xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: _verify_playback_started detecta fin de intento tras %.1fs (sin actividad ni medio)" % elapsed, xbmc.LOGINFO)
                 return False
 
         if mon.waitForAbort(0.25):
@@ -8919,7 +9133,7 @@ def _verify_playback_started(is_torrent=False, timeout=None):
 
 def show_floating_links_dialog():
     if _is_dialog_active_global():
-        xbmc.log("Bridge Multi: show_floating_links_dialog omitido porque ya hay un diálogo activo", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: show_floating_links_dialog omitido porque ya hay un diálogo activo", xbmc.LOGINFO)
         return False
     _set_dialog_active_global(True)
     try:
@@ -8944,7 +9158,7 @@ def _show_floating_links_dialog_impl():
 
     c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
     if not c_links:
-        xbmcgui.Dialog().notification('Bridge Multi', 'No hay enlaces disponibles', '', 3000)
+        xbmcgui.Dialog().notification('Multi Bridge', 'No hay enlaces disponibles', '', 3000)
         return False
 
     failed_links = set()
@@ -8959,7 +9173,7 @@ def _show_floating_links_dialog_impl():
     while True:
         # Si todos los enlaces disponibles han fallado, notificar y salir
         if len(failed_indices) >= len(c_links) and len(c_links) > 0:
-            xbmcgui.Dialog().notification('Bridge Multi', 'Todos los enlaces probados han fallado', '', 3500)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Todos los enlaces probados han fallado', '', 3500)
             if was_playback and xbmc.getCondVisibility("Player.Paused") and p.isPlayingVideo():
                 try: p.pause()
                 except: pass
@@ -9018,8 +9232,8 @@ def _show_floating_links_dialog_impl():
         failed_links.add(chosen_link)
         failed_indices.add(chosen_idx)
 
-        xbmc.log("Bridge Multi: enlace %d (%s) falló al reproducir. Reabriendo ventana..." % (chosen_idx + 1, srv_name), xbmc.LOGWARNING)
-        xbmcgui.Dialog().notification('Bridge Multi', 'Fallo en [B]%s[/B]. Reabriendo lista...' % srv_name, '', 3000)
+        xbmc.log("Multi Bridge: enlace %d (%s) falló al reproducir. Reabriendo ventana..." % (chosen_idx + 1, srv_name), xbmc.LOGWARNING)
+        xbmcgui.Dialog().notification('Multi Bridge', 'Fallo en [B]%s[/B]. Reabriendo lista...' % srv_name, '', 3000)
 
         # Buscar el siguiente enlace no fallido en la pestaña activa
         active_list = []
@@ -9054,7 +9268,7 @@ def _open_links_view(win_url=""):
         if not win_url:
             _ts = int(time.time())
             win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&t=%s' % _ts
-        xbmc.log("Bridge Multi: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
         xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % win_url)
     else:
         show_floating_links_dialog()
@@ -9082,14 +9296,14 @@ def main():
         mk = get_param('media_key')
         if mk:
             remove_continue_watching_record(mk)
-            xbmcgui.Dialog().notification('Bridge Multi', 'Elemento quitado', '', 2500)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Elemento quitado', '', 2500)
             xbmc.executebuiltin('Container.Refresh')
         return
 
     if action == 'clear_all_continue_watching':
         if xbmcgui.Dialog().yesno('Continuar viendo', '¿Seguro que deseas vaciar toda la lista de Continuar viendo?'):
             clear_all_continue_watching()
-            xbmcgui.Dialog().notification('Bridge Multi', 'Lista vaciada', '', 2500)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Lista vaciada', '', 2500)
             xbmc.executebuiltin('Container.Refresh')
         return
 
@@ -9130,7 +9344,7 @@ def main():
 
         _se_is_series = bool(season or get_param('season') or (_se_meta.get('season') and _se_meta.get('episode')))
         if _se_is_series and _se_engine == 'alfa':
-            xbmcgui.Dialog().notification('Bridge Multi', 'Alfa solo está disponible para películas', '', 3500)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Alfa solo está disponible para películas', '', 3500)
             xbmcplugin.endOfDirectory(handle, succeeded=False)
             return
 
@@ -9151,7 +9365,7 @@ def main():
         tvdb_id    = _g('tvdb')       or tvdb_id
         trakt_id   = _g('trakt')      or trakt_id
 
-        xbmc.log('Bridge Multi: search_other_engine=%s title=%s tmdb=%s' % (_se_engine, title, tmdb_id), xbmc.LOGINFO)
+        xbmc.log('Multi Bridge: search_other_engine=%s title=%s tmdb=%s' % (_se_engine, title, tmdb_id), xbmc.LOGINFO)
 
         _se_links, _se_matched = run_parallel_search(engine=_se_engine)
 
@@ -9159,7 +9373,7 @@ def main():
         _auto_v = _bridge_addon.getSetting('auto_verify_links') == 'true'
         if _se_links and _auto_v:
             _pv = xbmcgui.DialogProgress()
-            _pv.create('Bridge Multi', 'Comprobando disponibilidad...')
+            _pv.create('Multi Bridge', 'Comprobando disponibilidad...')
             _vl = _verify_links_headless(_se_links, engine=_se_engine, p_dialog=_pv)
             try: _pv.close()
             except: pass
@@ -9189,7 +9403,7 @@ def main():
 
         if not _se_links:
             _eng_name = 'Alfa' if _se_engine == 'alfa' else 'Balandro'
-            xbmcgui.Dialog().notification('Bridge Multi', 'No se encontraron enlaces en %s' % _eng_name, '', 4000)
+            xbmcgui.Dialog().notification('Multi Bridge', 'No se encontraron enlaces en %s' % _eng_name, '', 4000)
             xbmcplugin.endOfDirectory(handle, succeeded=False)
             return
 
@@ -9232,7 +9446,7 @@ def main():
         if links and 0 <= idx < len(links):
             chosen = links[idx]
             try:
-                xbmc.log("Bridge Multi: play click idx=%d/%d canal=%s server=%s url=%s data_url=%s" % (
+                xbmc.log("Multi Bridge: play click idx=%d/%d canal=%s server=%s url=%s data_url=%s" % (
                     idx, len(links), _safe_str(getattr(chosen, 'channel', '')),
                     _safe_str(getattr(chosen, 'server', '')),
                     _safe_str(getattr(chosen, 'url', '') or '')[:60],
@@ -9263,7 +9477,7 @@ def main():
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta)
         else:
-            xbmcgui.Dialog().notification('Bridge Multi', 'Enlace no disponible', '', 3000)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Enlace no disponible', '', 3000)
         return
 
     if action == 'play':
@@ -9349,7 +9563,7 @@ def main():
                             if _cached_engine == 'balandro':
                                 _use_cache = True
                                 _cached_payload = _c
-                                xbmc.log(f"Bridge Multi: cache reciente {_age:.1f}s para episodio serie ({_get_media_key(_init_meta)}), reutilizando sin nueva búsqueda", xbmc.LOGINFO)
+                                xbmc.log(f"Multi Bridge: cache reciente {_age:.1f}s para episodio serie ({_get_media_key(_init_meta)}), reutilizando sin nueva búsqueda", xbmc.LOGINFO)
                             else:
                                 _use_cache = False
                         elif _cur_def_eng == 1 and _cached_engine != 'alfa':
@@ -9361,11 +9575,11 @@ def main():
                         else:
                             _use_cache = True
                             _cached_payload = _c
-                            xbmc.log(f"Bridge Multi: cache reciente {_age:.1f}s para {_get_media_key(_init_meta)}, reutilizando sin nueva búsqueda", xbmc.LOGINFO)
+                            xbmc.log(f"Multi Bridge: cache reciente {_age:.1f}s para {_get_media_key(_init_meta)}, reutilizando sin nueva búsqueda", xbmc.LOGINFO)
                     elif _c_links:
-                        xbmc.log(f"Bridge Multi: cache descartada (pertenece a otro contenido: cache={_get_media_key(_c_meta)} vs actual={_get_media_key(_init_meta)}), buscando fresco", xbmc.LOGINFO)
+                        xbmc.log(f"Multi Bridge: cache descartada (pertenece a otro contenido: cache={_get_media_key(_c_meta)} vs actual={_get_media_key(_init_meta)}), buscando fresco", xbmc.LOGINFO)
         except Exception as _ce:
-            xbmc.log(f"Bridge Multi: cache reciente error: {_ce}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: cache reciente error: {_ce}", xbmc.LOGINFO)
             _use_cache = False
 
         if _use_cache and _cached_payload:
@@ -9380,7 +9594,7 @@ def main():
                 _autoplay_cache = _bridge_addon.getSetting('autoplay_enabled') == 'true'
 
                 if _autoplay_cache and _cached_links:
-                    xbmc.log('Bridge Multi: cache reciente → autoplay con %d enlaces' % len(_cached_links), xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge: cache reciente → autoplay con %d enlaces' % len(_cached_links), xbmc.LOGINFO)
                     _enrich_link_metadata(_cached_links[0], _cached_meta, _cached_item)
                     _mk = _get_media_key(_cached_meta, _cached_links[0])
                     _is_s = bool(_cached_meta.get('season') and _cached_meta.get('episode'))
@@ -9406,7 +9620,7 @@ def main():
 
                 else:
                     # Autoplay desactivado → abrir lista de enlaces
-                    xbmc.log('Bridge Multi: cache reciente → abriendo list_links', xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge: cache reciente → abriendo list_links', xbmc.LOGINFO)
                     _ts3 = int(time.time())
                     _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cached_tmdb_v, _ts3)
                     if _cached_meta.get('season') and _cached_meta.get('episode'):
@@ -9414,33 +9628,53 @@ def main():
                     _open_links_view(_win_url)
                     return
             except Exception as _ce:
-                xbmc.log('Bridge Multi: cache reciente error: ' + str(_ce), xbmc.LOGINFO)
+                xbmc.log('Multi Bridge: cache reciente error: ' + str(_ce), xbmc.LOGINFO)
                 pass  # Si falla, continua con búsqueda normal
 
         if True:  # forzar fresco, no usar cache (si no es caso de doble busqueda)
             eng = 'alfa'
             def_engine = _get_int_setting('default_engine', 0)
+            alfa_ok = _is_engine_installed('alfa')
+            bal_ok  = _is_engine_installed('balandro')
+
             if _is_s_play:
                 # Las series son exclusivas de Balandro (Alfa es solo para películas)
+                if not bal_ok:
+                    xbmcgui.Dialog().ok('Multi Bridge', 'Para reproducir series se requiere tener instalado el addon Balandro.')
+                    return
                 eng = 'balandro'
-                xbmc.log("Bridge Multi: Contenido es serie/episodio y Alfa solo soporta películas. Usando Balandro automáticamente.", xbmc.LOGINFO)
-            elif def_engine == 0:
+                xbmc.log("Multi Bridge: Contenido es serie/episodio y Alfa solo soporta películas. Usando Balandro automáticamente.", xbmc.LOGINFO)
+            elif def_engine == 1:
+                if alfa_ok:
+                    eng = 'alfa'
+                elif bal_ok:
+                    xbmc.log("Multi Bridge: Motor Alfa no está instalado. Usando Balandro automáticamente.", xbmc.LOGINFO)
+                    eng = 'balandro'
+                else:
+                    xbmcgui.Dialog().ok('Multi Bridge', 'El addon Alfa no está instalado.')
+                    return
+            elif def_engine == 2:
+                if bal_ok:
+                    eng = 'balandro'
+                elif alfa_ok:
+                    xbmc.log("Multi Bridge: Motor Balandro no está instalado. Usando Alfa automáticamente.", xbmc.LOGINFO)
+                    eng = 'alfa'
+                else:
+                    xbmcgui.Dialog().ok('Multi Bridge', 'El addon Balandro no está instalado.')
+                    return
+            else:
                 _picked = _show_engine_picker()
                 if _picked is None:
                     return
                 eng = _picked
-            elif def_engine == 1:
-                eng = 'alfa'
-            elif def_engine == 2:
-                eng = 'balandro'
 
             links, matched_item = run_parallel_search(engine=eng)
             verified_flag = False
             _auto_verify = _bridge_addon.getSetting('auto_verify_links') == 'true'
-            xbmc.log(f"Bridge Multi: auto_verify_links={_auto_verify} engine={eng} links={len(links) if links else 0}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: auto_verify_links={_auto_verify} engine={eng} links={len(links) if links else 0}", xbmc.LOGINFO)
             if links and _auto_verify:
                 p_diag = xbmcgui.DialogProgress()
-                p_diag.create('Bridge Multi', 'Comprobando disponibilidad de servidores...')
+                p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores...')
                 v_links = _verify_links_headless(links, engine=eng, p_dialog=p_diag)
                 try: p_diag.close()
                 except: pass
@@ -9493,7 +9727,7 @@ def main():
                 if res:
                     seek_to_time = r_time
 
-            xbmc.log('Bridge Multi: autoplay con fallback, %d enlaces disponibles, motor=%s' % (
+            xbmc.log('Multi Bridge: autoplay con fallback, %d enlaces disponibles, motor=%s' % (
                 len(links), meta.get('engine', 'alfa')), xbmc.LOGINFO)
 
             # Intenta TODOS los enlaces no-torrent con monitoreo de 3 min cada uno
@@ -9525,7 +9759,7 @@ def main():
             _is_s_url = bool((season or get_param('season')) and (episode or get_param('episode')))
             if _is_s_url:
                 eng = 'balandro'
-                xbmc.log("Bridge Multi: Búsqueda para serie en URL -> Balandro asignado automáticamente", xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: Búsqueda para serie en URL -> Balandro asignado automáticamente", xbmc.LOGINFO)
             else:
                 eng = 'alfa'
                 def_engine = _get_int_setting('default_engine', 0)
@@ -9543,7 +9777,7 @@ def main():
             is_alfa = 'alfa' in url.lower()
             is_series = bool((season or get_param('season')) and (episode or get_param('episode')))
             if is_alfa and is_series:
-                xbmcgui.Dialog().notification('Bridge Multi', 'Alfa solo soporta películas', '', 3000)
+                xbmcgui.Dialog().notification('Multi Bridge', 'Alfa solo soporta películas', '', 3000)
                 xbmcplugin.endOfDirectory(handle, succeeded=False)
                 return
 
@@ -9584,7 +9818,7 @@ def main():
             alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en'), showname or get_param('showname'), title or get_param('title')] if t and t != target_title]
             if target_channel and target_channel != 'search':
                 p_dialog = xbmcgui.DialogProgress()
-                p_dialog.create('Bridge Multi', 'Buscando en %s...' % target_channel.capitalize())
+                p_dialog.create('Multi Bridge', 'Buscando en %s...' % target_channel.capitalize())
                 if is_alfa:
                     matched_item, links = _search_channel_alfa(target_channel, target_title, target_year, is_series, season or get_param('season'), episode or get_param('episode'), all_names, base_item=search_item, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
                 else:
@@ -9596,10 +9830,10 @@ def main():
         if links and matched_item:
             verified_flag = False
             _auto_verify2 = _bridge_addon.getSetting('auto_verify_links') == 'true'
-            xbmc.log(f"Bridge Multi: auto_verify_links={_auto_verify2} engine={eng} links={len(links) if links else 0}", xbmc.LOGINFO)
+            xbmc.log(f"Multi Bridge: auto_verify_links={_auto_verify2} engine={eng} links={len(links) if links else 0}", xbmc.LOGINFO)
             if _auto_verify2:
                 p_diag = xbmcgui.DialogProgress()
-                p_diag.create('Bridge Multi', 'Comprobando disponibilidad de servidores...')
+                p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores...')
                 v_links = _verify_links_headless(links, engine=eng, p_dialog=p_diag)
                 try: p_diag.close()
                 except: pass

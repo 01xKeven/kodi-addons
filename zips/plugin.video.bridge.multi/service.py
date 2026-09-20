@@ -11,7 +11,7 @@ def run_service():
         if hasattr(default, 'check_orphan_players'):
             default.check_orphan_players()
     except Exception as e:
-        xbmc.log("Bridge Multi Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
+        xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
 
 if __name__ == '__main__':
     run_service()
