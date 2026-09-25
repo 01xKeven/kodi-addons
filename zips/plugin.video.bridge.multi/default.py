@@ -1372,6 +1372,7 @@ poster = get_param('poster')
 fanart = get_param('fanart')
 thumbnail = get_param('thumbnail')
 clearlogo = get_param('clearlogo')
+genre = get_param('genre')
 
 def decode_base64_item(b64_str, ItemClass):
     try:
@@ -5239,6 +5240,16 @@ def _enrich_link_metadata(link, meta, matched_item=None):
             if is_series:
                 target.infoLabels['tvshow.clearlogo'] = clearlogo_val
                 target.infoLabels['tvshow.logo'] = clearlogo_val
+        genre_val = meta.get('genre') or ''
+        if not genre_val and t_id:
+            try:
+                _g_list = _get_genres(t_id, is_series)
+                if _g_list:
+                    genre_val = " / ".join(_g_list)
+            except Exception: pass
+        if genre_val:
+            target.genre = genre_val
+            target.infoLabels['genre'] = genre_val
 
 def sync_tmdbhelper_playerstring(meta=None):
     """Sincroniza la propiedad de ventana TMDbHelper.PlayerInfoString para que
@@ -5693,6 +5704,83 @@ def _get_clearlogo(tmdb_id, is_series=False):
 
     _clearlogo_cache[_cache_key] = logo_url
     return logo_url
+
+_genres_cache = {}
+
+def _get_genres(tmdb_id, is_series=False):
+    """Obtiene de forma instantánea la lista de géneros en español de la base de datos local de TMDb Helper o caché en RAM."""
+    if not tmdb_id:
+        return []
+    _id_str = str(tmdb_id).strip()
+    if not _id_str.isdigit():
+        return []
+
+    _cache_key = f"{'tv' if is_series else 'movie'}.{_id_str}"
+    if _cache_key in _genres_cache:
+        return list(_genres_cache[_cache_key])
+
+    genres_list = []
+    # 1. Búsqueda instantánea en SQLite local de TMDb Helper (ItemDetails.db)
+    try:
+        tmdb_base = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/')
+        db_files = []
+        if os.path.exists(tmdb_base):
+            for root, _, files in os.walk(tmdb_base):
+                for fn in files:
+                    if fn.lower() == 'itemdetails.db':
+                        db_files.append(os.path.join(root, fn))
+
+        pref_id = f"tv.{_id_str}" if is_series else f"movie.{_id_str}"
+        alt_id  = f"movie.{_id_str}" if is_series else f"tv.{_id_str}"
+
+        for db_path in db_files:
+            try:
+                conn = sqlite3.connect(db_path, timeout=1.0)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT name FROM genre WHERE parent_id = ? OR parent_id = ? "
+                    "ORDER BY (CASE WHEN parent_id = ? THEN 1 ELSE 0 END) DESC, rowid ASC;",
+                    (pref_id, alt_id, pref_id)
+                )
+                rows = cur.fetchall()
+                conn.close()
+                if rows:
+                    for r in rows:
+                        if r and r[0] and r[0].strip() and r[0].strip() not in genres_list:
+                            genres_list.append(r[0].strip())
+                    if genres_list:
+                        break
+            except Exception:
+                pass
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: _get_genres db error: {e}", xbmc.LOGDEBUG)
+
+    # 2. Fallback opcional a API TMDb si la base local aún no lo tiene
+    if not genres_list:
+        try:
+            import urllib.request, ssl
+            media_endpoint = 'tv' if is_series else 'movie'
+            api_url = f"https://api.themoviedb.org/3/{media_endpoint}/{_id_str}?api_key=a07324c669cac4d96789197134ce272b&language=es-MX"
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                raw_genres = data.get('genres', [])
+                if not raw_genres:
+                    api_url_es = f"https://api.themoviedb.org/3/{media_endpoint}/{_id_str}?api_key=a07324c669cac4d96789197134ce272b&language=es-ES"
+                    req_es = urllib.request.Request(api_url_es, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req_es, timeout=1.5, context=ctx) as resp_es:
+                        data_es = json.loads(resp_es.read().decode('utf-8'))
+                        raw_genres = data_es.get('genres', [])
+                for g in raw_genres:
+                    gn = g.get('name')
+                    if gn and gn.strip() and gn.strip() not in genres_list:
+                        genres_list.append(gn.strip())
+        except Exception:
+            pass
+
+    _genres_cache[_cache_key] = list(genres_list)
+    return genres_list
 
 def show_links_as_directory():
     global _search_in_progress, _links_view_active
