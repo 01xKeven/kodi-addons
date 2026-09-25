@@ -614,6 +614,22 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
+        _logo_val = _m_dict.get('clearlogo') or ''
+        if not _logo_val and _m_dict.get('tmdb'):
+            try:
+                _logo_val = _get_clearlogo(_m_dict.get('tmdb'), bool(_m_dict.get('season') and _m_dict.get('episode')))
+            except Exception:
+                pass
+        if _logo_val:
+            _m_dict['clearlogo'] = _logo_val
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', _logo_val)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', _logo_val)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', _logo_val)
+                xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', _logo_val)
+                xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', _logo_val)
+            except Exception:
+                pass
         session_record = {
             'media_key': media_key,
             'status': 'playing',
@@ -746,7 +762,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         if _get_global_monitor_token() == my_token:
             _set_global_monitor_token('')
-            try: xbmcgui.Window(10000).clearProperty('BridgeMulti.CurrentMediaKey')
+            try:
+                xbmcgui.Window(10000).clearProperty('BridgeMulti.CurrentMediaKey')
+                xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.ClearLogo')
+                xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.CropImage')
+                xbmcgui.Window(10000).clearProperty('TMDbHelper.Player.ClearLogo')
+                xbmcgui.Window(10000).clearProperty('Player.Art(clearlogo)')
+                xbmcgui.Window(10000).clearProperty('MultiBridge.ClearLogo')
             except Exception: pass
 
         if last_saved_time > 0 or tot_time > 0:
@@ -5207,6 +5229,16 @@ def _enrich_link_metadata(link, meta, matched_item=None):
         if fanart_val:
             target.fanart = fanart_val
             target.infoLabels['fanart'] = fanart_val
+        clearlogo_val = meta.get('clearlogo') or ''
+        if not clearlogo_val and t_id:
+            clearlogo_val = _get_clearlogo(t_id, is_series)
+        if clearlogo_val:
+            target.clearlogo = clearlogo_val
+            target.infoLabels['clearlogo'] = clearlogo_val
+            target.infoLabels['logo'] = clearlogo_val
+            if is_series:
+                target.infoLabels['tvshow.clearlogo'] = clearlogo_val
+                target.infoLabels['tvshow.logo'] = clearlogo_val
 
 def sync_tmdbhelper_playerstring(meta=None):
     """Sincroniza la propiedad de ventana TMDbHelper.PlayerInfoString para que
@@ -5246,6 +5278,20 @@ def sync_tmdbhelper_playerstring(meta=None):
         p_str = json.dumps(p_dict)
         xbmcgui.Window(10000).setProperty('TMDbHelper.PlayerInfoString', p_str)
         xbmc.log(f"Multi Bridge: TMDbHelper.PlayerInfoString sincronizado -> {p_str}", xbmc.LOGINFO)
+
+        _c_logo = meta.get('clearlogo') or ''
+        if not _c_logo and t_id:
+            try:
+                _c_logo = _get_clearlogo(t_id, is_series)
+            except Exception: pass
+        if _c_logo:
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', _c_logo)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', _c_logo)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', _c_logo)
+                xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', _c_logo)
+                xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', _c_logo)
+            except Exception: pass
     except Exception as ex:
         xbmc.log(f"Multi Bridge: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
 
@@ -5298,6 +5344,12 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
     if trakt_payload:
         listitem.setProperty('script.trakt.ids', json.dumps(trakt_payload))
 
+    clearlogo_val = str(info.get('clearlogo') or meta.get('clearlogo') or get_param('clearlogo') or '')
+    if clearlogo_val in ('_', 'None', 'none') or len(_safe_str(clearlogo_val)) > 1000:
+        clearlogo_val = ''
+    if not clearlogo_val and tmdb_id:
+        clearlogo_val = _get_clearlogo(tmdb_id, is_series)
+
     art_dict = {}
     if not skip_art:
         if poster_val:
@@ -5306,9 +5358,32 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
             art_dict['icon'] = poster_val
         if fanart_val:
             art_dict['fanart'] = fanart_val
+        if clearlogo_val:
+            art_dict['clearlogo'] = clearlogo_val
+            art_dict['logo'] = clearlogo_val
+            if is_series:
+                art_dict['tvshow.clearlogo'] = clearlogo_val
+                art_dict['tvshow.logo'] = clearlogo_val
     if art_dict:
         try: listitem.setArt(art_dict)
         except: pass
+
+    if clearlogo_val:
+        listitem.setProperty('clearlogo', clearlogo_val)
+        listitem.setProperty('Art(clearlogo)', clearlogo_val)
+        listitem.setProperty('logo', clearlogo_val)
+        listitem.setProperty('Art(logo)', clearlogo_val)
+        if is_series:
+            listitem.setProperty('tvshow.clearlogo', clearlogo_val)
+            listitem.setProperty('Art(tvshow.clearlogo)', clearlogo_val)
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', clearlogo_val)
+        except Exception:
+            pass
 
     media_type = info.get('mediatype') or ('episode' if is_series else 'movie')
     try:
