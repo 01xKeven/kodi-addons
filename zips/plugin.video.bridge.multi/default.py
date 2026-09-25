@@ -630,6 +630,40 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', _logo_val)
             except Exception:
                 pass
+
+        _genre_val = _m_dict.get('genre') or ''
+        if not _genre_val and _m_dict.get('tmdb'):
+            try:
+                _g_list = _get_genres(_m_dict.get('tmdb'), bool(_m_dict.get('season') and _m_dict.get('episode')))
+                if _g_list:
+                    _genre_val = " / ".join(_g_list)
+            except Exception:
+                pass
+        if _genre_val:
+            _m_dict['genre'] = _genre_val
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Genre', _genre_val)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Genre', _genre_val)
+                xbmcgui.Window(10000).setProperty('MultiBridge.Genre', _genre_val)
+            except Exception:
+                pass
+
+        _director_val = _m_dict.get('director') or ''
+        if not _director_val and _m_dict.get('tmdb'):
+            try:
+                _d_list = _get_directors(_m_dict.get('tmdb'), bool(_m_dict.get('season') and _m_dict.get('episode')))
+                if _d_list:
+                    _director_val = " / ".join(_d_list)
+            except Exception:
+                pass
+        if _director_val:
+            _m_dict['director'] = _director_val
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', _director_val)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Director', _director_val)
+                xbmcgui.Window(10000).setProperty('MultiBridge.Director', _director_val)
+            except Exception:
+                pass
         session_record = {
             'media_key': media_key,
             'status': 'playing',
@@ -648,6 +682,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             'poster': _m_dict.get('poster') or _m_dict.get('thumbnail') or '',
             'fanart': _m_dict.get('fanart') or '',
             'clearlogo': _m_dict.get('clearlogo') or '',
+            'genre': _m_dict.get('genre') or '',
+            'director': _m_dict.get('director') or '',
             'thumbnail': _m_dict.get('thumbnail') or '',
             'resume_time': float(seek_to_time or 0),
             'total_time': 0,
@@ -769,6 +805,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmcgui.Window(10000).clearProperty('TMDbHelper.Player.ClearLogo')
                 xbmcgui.Window(10000).clearProperty('Player.Art(clearlogo)')
                 xbmcgui.Window(10000).clearProperty('MultiBridge.ClearLogo')
+                xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.Genre')
+                xbmcgui.Window(10000).clearProperty('VideoPlayer.Genre')
+                xbmcgui.Window(10000).clearProperty('MultiBridge.Genre')
+                xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.Director')
+                xbmcgui.Window(10000).clearProperty('VideoPlayer.Director')
+                xbmcgui.Window(10000).clearProperty('MultiBridge.Director')
             except Exception: pass
 
         if last_saved_time > 0 or tot_time > 0:
@@ -5250,6 +5292,17 @@ def _enrich_link_metadata(link, meta, matched_item=None):
         if genre_val:
             target.genre = genre_val
             target.infoLabels['genre'] = genre_val
+        director_val = meta.get('director') or ''
+        if not director_val and t_id:
+            try:
+                _d_list = _get_directors(t_id, is_series)
+                if _d_list:
+                    director_val = " / ".join(_d_list)
+            except Exception: pass
+        if director_val:
+            target.director = director_val
+            target.infoLabels['director'] = director_val
+            target.infoLabels['directors'] = [d.strip() for d in director_val.split('/') if d.strip()]
 
 def sync_tmdbhelper_playerstring(meta=None):
     """Sincroniza la propiedad de ventana TMDbHelper.PlayerInfoString para que
@@ -5302,6 +5355,34 @@ def sync_tmdbhelper_playerstring(meta=None):
                 xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', _c_logo)
                 xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', _c_logo)
                 xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', _c_logo)
+            except Exception: pass
+
+        _c_genres = meta.get('genre') or ''
+        if not _c_genres and t_id:
+            try:
+                _g_list = _get_genres(t_id, is_series)
+                if _g_list:
+                    _c_genres = " / ".join(_g_list)
+            except Exception: pass
+        if _c_genres:
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Genre', _c_genres)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Genre', _c_genres)
+                xbmcgui.Window(10000).setProperty('MultiBridge.Genre', _c_genres)
+            except Exception: pass
+
+        _c_director = meta.get('director') or ''
+        if not _c_director and t_id:
+            try:
+                _d_list = _get_directors(t_id, is_series)
+                if _d_list:
+                    _c_director = " / ".join(_d_list)
+            except Exception: pass
+        if _c_director:
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', _c_director)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Director', _c_director)
+                xbmcgui.Window(10000).setProperty('MultiBridge.Director', _c_director)
             except Exception: pass
     except Exception as ex:
         xbmc.log(f"Multi Bridge: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
@@ -5396,6 +5477,62 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
         except Exception:
             pass
 
+    genre_list = []
+    genre_raw = info.get('genre') or meta.get('genre') or get_param('genre') or ''
+    if isinstance(genre_raw, list):
+        genre_list = [str(g).strip() for g in genre_raw if str(g).strip() and str(g).strip() not in ('_', 'None')]
+    elif isinstance(genre_raw, str) and genre_raw.strip() and genre_raw.strip() not in ('_', 'None'):
+        if '/' in genre_raw:
+            genre_list = [g.strip() for g in genre_raw.split('/') if g.strip()]
+        elif ',' in genre_raw:
+            genre_list = [g.strip() for g in genre_raw.split(',') if g.strip()]
+        else:
+            genre_list = [genre_raw.strip()]
+    if not genre_list and tmdb_id:
+        try:
+            genre_list = _get_genres(tmdb_id, is_series)
+        except Exception:
+            genre_list = []
+
+    genre_str = " / ".join(genre_list) if genre_list else ""
+    if genre_str:
+        listitem.setProperty('genre', genre_str)
+        listitem.setProperty('Genre', genre_str)
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Genre', genre_str)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Genre', genre_str)
+            xbmcgui.Window(10000).setProperty('MultiBridge.Genre', genre_str)
+        except Exception:
+            pass
+
+    director_list = []
+    director_raw = info.get('director') or meta.get('director') or get_param('director') or ''
+    if isinstance(director_raw, list):
+        director_list = [str(d).strip() for d in director_raw if str(d).strip() and str(d).strip() not in ('_', 'None')]
+    elif isinstance(director_raw, str) and director_raw.strip() and director_raw.strip() not in ('_', 'None'):
+        if '/' in director_raw:
+            director_list = [d.strip() for d in director_raw.split('/') if d.strip()]
+        elif ',' in director_raw:
+            director_list = [d.strip() for d in director_raw.split(',') if d.strip()]
+        else:
+            director_list = [director_raw.strip()]
+    if not director_list and tmdb_id:
+        try:
+            director_list = _get_directors(tmdb_id, is_series)
+        except Exception:
+            director_list = []
+
+    director_str = " / ".join(director_list) if director_list else ""
+    if director_str:
+        listitem.setProperty('director', director_str)
+        listitem.setProperty('Director', director_str)
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', director_str)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Director', director_str)
+            xbmcgui.Window(10000).setProperty('MultiBridge.Director', director_str)
+        except Exception:
+            pass
+
     media_type = info.get('mediatype') or ('episode' if is_series else 'movie')
     try:
         vt = listitem.getVideoInfoTag()
@@ -5428,6 +5565,18 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
             if year_val:
                 try: vt.setYear(int(year_val))
                 except: pass
+            if genre_list:
+                try: vt.setGenres(genre_list)
+                except: pass
+            if director_list:
+                try: vt.setDirectors(director_list)
+                except: pass
+            try:
+                _sec_info = {}
+                if genre_str: _sec_info['genre'] = genre_str
+                if director_str: _sec_info['director'] = director_str
+                if _sec_info: listitem.setInfo('video', _sec_info)
+            except: pass
             return
     except: pass
 
@@ -5456,6 +5605,10 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
         legacy_info['plot'] = plot_val
     if tagline_val and 'tagline' not in legacy_info:
         legacy_info['tagline'] = tagline_val
+    if genre_str and 'genre' not in legacy_info:
+        legacy_info['genre'] = genre_str
+    if director_str and 'director' not in legacy_info:
+        legacy_info['director'] = director_str
     try: listitem.setInfo('video', legacy_info)
     except: pass
 
@@ -5782,6 +5935,86 @@ def _get_genres(tmdb_id, is_series=False):
     _genres_cache[_cache_key] = list(genres_list)
     return genres_list
 
+_directors_cache = {}
+
+def _get_directors(tmdb_id, is_series=False):
+    """Obtiene de forma instantánea la lista de directores/creadores de la base de datos local de TMDb Helper o caché en RAM."""
+    if not tmdb_id:
+        return []
+    _id_str = str(tmdb_id).strip()
+    if not _id_str.isdigit():
+        return []
+
+    _cache_key = f"{'tv' if is_series else 'movie'}.{_id_str}"
+    if _cache_key in _directors_cache:
+        return list(_directors_cache[_cache_key])
+
+    directors_list = []
+    # 1. Búsqueda instantánea en SQLite local de TMDb Helper (ItemDetails.db)
+    try:
+        tmdb_base = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/')
+        db_files = []
+        if os.path.exists(tmdb_base):
+            for root, _, files in os.walk(tmdb_base):
+                for fn in files:
+                    if fn.lower() == 'itemdetails.db':
+                        db_files.append(os.path.join(root, fn))
+
+        pref_id = f"tv.{_id_str}" if is_series else f"movie.{_id_str}"
+        alt_id  = f"movie.{_id_str}" if is_series else f"tv.{_id_str}"
+
+        for db_path in db_files:
+            try:
+                conn = sqlite3.connect(db_path, timeout=1.0)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT p.name, c.role FROM crewmember c JOIN person p ON c.tmdb_id = p.tmdb_id "
+                    "WHERE (c.parent_id = ? OR c.parent_id = ?) AND (c.role = 'Director' OR c.role = 'Creator' OR c.department = 'Directing') "
+                    "ORDER BY (CASE WHEN c.parent_id = ? THEN 1 ELSE 0 END) DESC, "
+                    "(CASE WHEN c.role = 'Director' THEN 2 WHEN c.role = 'Creator' THEN 1 ELSE 0 END) DESC, "
+                    "c.rowid ASC;",
+                    (pref_id, alt_id, pref_id)
+                )
+                rows = cur.fetchall()
+                conn.close()
+                if rows:
+                    for r in rows:
+                        if r and r[0] and r[0].strip() and r[0].strip() not in directors_list:
+                            directors_list.append(r[0].strip())
+                    if directors_list:
+                        break
+            except Exception:
+                pass
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: _get_directors db error: {e}", xbmc.LOGDEBUG)
+
+    # 2. Fallback opcional a API TMDb si la base local aún no lo tiene
+    if not directors_list:
+        try:
+            import urllib.request, ssl
+            media_endpoint = 'tv' if is_series else 'movie'
+            api_url = f"https://api.themoviedb.org/3/{media_endpoint}/{_id_str}?api_key=a07324c669cac4d96789197134ce272b&append_to_response=credits"
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                if is_series:
+                    for c in data.get('created_by', []):
+                        cn = c.get('name')
+                        if cn and cn.strip() and cn.strip() not in directors_list:
+                            directors_list.append(cn.strip())
+                raw_crew = data.get('credits', {}).get('crew', []) or data.get('crew', [])
+                for cr in raw_crew:
+                    if cr.get('job') == 'Director' or (not is_series and cr.get('department') == 'Directing'):
+                        dn = cr.get('name')
+                        if dn and dn.strip() and dn.strip() not in directors_list:
+                            directors_list.append(dn.strip())
+        except Exception:
+            pass
+
+    _directors_cache[_cache_key] = list(directors_list)
+    return directors_list
+
 def show_links_as_directory():
     global _search_in_progress, _links_view_active
     _search_in_progress = False
@@ -5881,6 +6114,42 @@ def show_links_as_directory():
     if not clearlogo_val and tmdb_val:
         clearlogo_val = _get_clearlogo(tmdb_val, is_s)
 
+    genres_val = meta.get('genre') or get_param('genre') or getattr(matched_item, 'genre', '') or ''
+    genres_list = []
+    if isinstance(genres_val, list):
+        genres_list = [str(g).strip() for g in genres_val if str(g).strip() and str(g).strip() not in ('_', 'None')]
+    elif isinstance(genres_val, str) and genres_val.strip() and genres_val.strip() not in ('_', 'None'):
+        if '/' in genres_val:
+            genres_list = [g.strip() for g in genres_val.split('/') if g.strip()]
+        elif ',' in genres_val:
+            genres_list = [g.strip() for g in genres_val.split(',') if g.strip()]
+        else:
+            genres_list = [genres_val.strip()]
+    if not genres_list and tmdb_val:
+        try:
+            genres_list = _get_genres(tmdb_val, is_s)
+        except Exception:
+            genres_list = []
+    genres_str = " / ".join(genres_list) if genres_list else ""
+
+    director_val = meta.get('director') or get_param('director') or getattr(matched_item, 'director', '') or ''
+    director_list = []
+    if isinstance(director_val, list):
+        director_list = [str(d).strip() for d in director_val if str(d).strip() and str(d).strip() not in ('_', 'None')]
+    elif isinstance(director_val, str) and director_val.strip() and director_val.strip() not in ('_', 'None'):
+        if '/' in director_val:
+            director_list = [d.strip() for d in director_val.split('/') if d.strip()]
+        elif ',' in director_val:
+            director_list = [d.strip() for d in director_val.split(',') if d.strip()]
+        else:
+            director_list = [director_val.strip()]
+    if not director_list and tmdb_val:
+        try:
+            director_list = _get_directors(tmdb_val, is_s)
+        except Exception:
+            director_list = []
+    director_str = " / ".join(director_list) if director_list else ""
+
     base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
     if clearlogo_val:
         base_art['clearlogo'] = clearlogo_val
@@ -5974,6 +6243,12 @@ def show_links_as_directory():
                 if is_s:
                     li.setProperty('tvshow.clearlogo', clearlogo_val)
                     li.setProperty('Art(tvshow.clearlogo)', clearlogo_val)
+            if genres_str:
+                li.setProperty('genre', genres_str)
+                li.setProperty('Genre', genres_str)
+            if director_str:
+                li.setProperty('director', director_str)
+                li.setProperty('Director', director_str)
             if header_title:
                 li.setProperty('TvShowTitle', header_title)
                 li.setProperty('tvshowtitle', header_title)
@@ -6001,6 +6276,12 @@ def show_links_as_directory():
                         if header_title: vt.setTvShowTitle(header_title)
                     if base_unique:
                         vt.setUniqueIDs(base_unique, 'tmdb' if tmdb_val else 'imdb')
+                    if genres_list:
+                        try: vt.setGenres(genres_list)
+                        except Exception: pass
+                    if director_list:
+                        try: vt.setDirectors(director_list)
+                        except Exception: pass
             except Exception:
                 pass
 
@@ -6012,6 +6293,20 @@ def show_links_as_directory():
         try:
             xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
             xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
+        except Exception:
+            pass
+    if genres_str:
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Genre', genres_str)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Genre', genres_str)
+            xbmcgui.Window(10000).setProperty('MultiBridge.Genre', genres_str)
+        except Exception:
+            pass
+    if director_str:
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', director_str)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Director', director_str)
+            xbmcgui.Window(10000).setProperty('MultiBridge.Director', director_str)
         except Exception:
             pass
 
@@ -7347,6 +7642,28 @@ def show_continue_watching():
 
         display_plot = f"[COLOR gold][B]▶ Interrumpido en {time_str}[/B][/COLOR]"
 
+        genre_val = rec.get('genre') or ''
+        if not genre_val and tmdb_id_val:
+            try:
+                _g_list = _get_genres(tmdb_id_val, is_series)
+                if _g_list:
+                    genre_val = " / ".join(_g_list)
+            except Exception: pass
+        if genre_val:
+            li.setProperty('genre', genre_val)
+            li.setProperty('Genre', genre_val)
+
+        director_val = rec.get('director') or ''
+        if not director_val and tmdb_id_val:
+            try:
+                _d_list = _get_directors(tmdb_id_val, is_series)
+                if _d_list:
+                    director_val = " / ".join(_d_list)
+            except Exception: pass
+        if director_val:
+            li.setProperty('director', director_val)
+            li.setProperty('Director', director_val)
+
         try:
             vt = li.getVideoInfoTag()
             if vt:
@@ -7368,6 +7685,14 @@ def show_continue_watching():
                 if rec.get('trakt'): uids['trakt'] = str(rec['trakt'])
                 if uids:
                     vt.setUniqueIDs(uids)
+                if genre_val:
+                    try:
+                        vt.setGenres([g.strip() for g in genre_val.split('/') if g.strip()])
+                    except Exception: pass
+                if director_val:
+                    try:
+                        vt.setDirectors([d.strip() for d in director_val.split('/') if d.strip()])
+                    except Exception: pass
         except Exception:
             pass
 
@@ -7376,6 +7701,8 @@ def show_continue_watching():
             'plot': display_plot,
             'mediatype': 'episode' if is_series else 'movie'
         }
+        if director_val:
+            info_video['director'] = director_val
         if is_series and showname_val:
             info_video['tvshowtitle'] = showname_val
         if is_series and season_val is not None:
@@ -10108,7 +10435,9 @@ def main():
             'poster': poster or get_param('poster'),
             'fanart': fanart or get_param('fanart'),
             'thumbnail': thumbnail or get_param('thumbnail'),
-            'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))
+            'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
+            'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
+            'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))))
         }
         sync_tmdbhelper_playerstring(_init_meta)
 
@@ -10263,9 +10592,12 @@ def main():
                 'title': title or get_param('title') or get_param('title_es') or get_param('title_lat') or ((showname if (season and episode) else '') or ''),
                 'year': (showyear or get_param('showyear')) if (season and episode) else (year or get_param('year')),
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
-                'plot': plot or get_param('plot'), 'director': director or get_param('director'), 'tagline': tagline or get_param('tagline'),
+                'plot': plot or get_param('plot'),
+                'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
+                'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
+                'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
                 'verified_only': verified_flag, 'engine': eng
             }
             if matched_item:
@@ -10426,9 +10758,12 @@ def main():
                 'title': title or get_param('title') or get_param('title_es') or get_param('title_lat') or ((showname if (season and episode) else '') or ''),
                 'year': (showyear or get_param('showyear')) if (season and episode) else (year or get_param('year')),
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
-                'plot': plot or get_param('plot'), 'director': director or get_param('director'), 'tagline': tagline or get_param('tagline'),
+                'plot': plot or get_param('plot'),
+                'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
+                'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
+                'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
                 'verified_only': verified_flag, 'engine': eng
             }
             if matched_item:
