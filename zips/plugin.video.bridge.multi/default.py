@@ -648,12 +648,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             except Exception:
                 pass
 
-        _director_val = _m_dict.get('director') or ''
+        _director_val = _clean_single_director(_m_dict.get('director'))
         if not _director_val and _m_dict.get('tmdb'):
             try:
                 _d_list = _get_directors(_m_dict.get('tmdb'), bool(_m_dict.get('season') and _m_dict.get('episode')))
                 if _d_list:
-                    _director_val = " / ".join(_d_list)
+                    _director_val = _clean_single_director(_d_list[0])
             except Exception:
                 pass
         if _director_val:
@@ -5292,17 +5292,17 @@ def _enrich_link_metadata(link, meta, matched_item=None):
         if genre_val:
             target.genre = genre_val
             target.infoLabels['genre'] = genre_val
-        director_val = meta.get('director') or ''
+        director_val = _clean_single_director(meta.get('director'))
         if not director_val and t_id:
             try:
                 _d_list = _get_directors(t_id, is_series)
                 if _d_list:
-                    director_val = " / ".join(_d_list)
+                    director_val = _clean_single_director(_d_list[0])
             except Exception: pass
         if director_val:
             target.director = director_val
             target.infoLabels['director'] = director_val
-            target.infoLabels['directors'] = [d.strip() for d in director_val.split('/') if d.strip()]
+            target.infoLabels['directors'] = [director_val]
 
 def sync_tmdbhelper_playerstring(meta=None):
     """Sincroniza la propiedad de ventana TMDbHelper.PlayerInfoString para que
@@ -5371,12 +5371,12 @@ def sync_tmdbhelper_playerstring(meta=None):
                 xbmcgui.Window(10000).setProperty('MultiBridge.Genre', _c_genres)
             except Exception: pass
 
-        _c_director = meta.get('director') or ''
+        _c_director = _clean_single_director(meta.get('director'))
         if not _c_director and t_id:
             try:
                 _d_list = _get_directors(t_id, is_series)
                 if _d_list:
-                    _c_director = " / ".join(_d_list)
+                    _c_director = _clean_single_director(_d_list[0])
             except Exception: pass
         if _c_director:
             try:
@@ -5505,24 +5505,17 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
         except Exception:
             pass
 
-    director_list = []
-    director_raw = info.get('director') or meta.get('director') or get_param('director') or ''
-    if isinstance(director_raw, list):
-        director_list = [str(d).strip() for d in director_raw if str(d).strip() and str(d).strip() not in ('_', 'None')]
-    elif isinstance(director_raw, str) and director_raw.strip() and director_raw.strip() not in ('_', 'None'):
-        if '/' in director_raw:
-            director_list = [d.strip() for d in director_raw.split('/') if d.strip()]
-        elif ',' in director_raw:
-            director_list = [d.strip() for d in director_raw.split(',') if d.strip()]
-        else:
-            director_list = [director_raw.strip()]
-    if not director_list and tmdb_id:
+    director_val = _clean_single_director(info.get('director') or meta.get('director') or get_param('director'))
+    if not director_val and tmdb_id:
         try:
-            director_list = _get_directors(tmdb_id, is_series)
+            _d_list = _get_directors(tmdb_id, is_series)
+            if _d_list:
+                director_val = _clean_single_director(_d_list[0])
         except Exception:
-            director_list = []
+            director_val = ""
 
-    director_str = " / ".join(director_list) if director_list else ""
+    director_str = director_val or ""
+    director_list = [director_str] if director_str else []
     if director_str:
         listitem.setProperty('director', director_str)
         listitem.setProperty('Director', director_str)
@@ -5937,8 +5930,32 @@ def _get_genres(tmdb_id, is_series=False):
 
 _directors_cache = {}
 
+def _clean_single_director(director_val):
+    """Limpia y extrae estrictamente un solo nombre (el director o creador principal),
+    descartando directores adicionales si vienen concatenados con / o ,."""
+    if not director_val:
+        return ''
+    if isinstance(director_val, (list, tuple, set)):
+        for item in director_val:
+            cleaned = _clean_single_director(item)
+            if cleaned:
+                return cleaned
+        return ''
+    if isinstance(director_val, str):
+        val = director_val.strip()
+        if not val or val.lower() in ('_', 'none', 'unknown', 'null', 'n/a'):
+            return ''
+        if '/' in val:
+            val = val.split('/')[0].strip()
+        if ',' in val:
+            val = val.split(',')[0].strip()
+        if not val or val.lower() in ('_', 'none', 'unknown', 'null', 'n/a'):
+            return ''
+        return val
+    return ''
+
 def _get_directors(tmdb_id, is_series=False):
-    """Obtiene de forma instantánea la lista de directores/creadores de la base de datos local de TMDb Helper o caché en RAM."""
+    """Obtiene de forma instantánea el director o creador principal de la base de datos local de TMDb Helper o caché en RAM."""
     if not tmdb_id:
         return []
     _id_str = str(tmdb_id).strip()
@@ -5972,15 +5989,17 @@ def _get_directors(tmdb_id, is_series=False):
                     "WHERE (c.parent_id = ? OR c.parent_id = ?) AND (c.role = 'Director' OR c.role = 'Creator' OR c.department = 'Directing') "
                     "ORDER BY (CASE WHEN c.parent_id = ? THEN 1 ELSE 0 END) DESC, "
                     "(CASE WHEN c.role = 'Director' THEN 2 WHEN c.role = 'Creator' THEN 1 ELSE 0 END) DESC, "
-                    "c.rowid ASC;",
+                    "c.rowid ASC LIMIT 1;",
                     (pref_id, alt_id, pref_id)
                 )
                 rows = cur.fetchall()
                 conn.close()
                 if rows:
                     for r in rows:
-                        if r and r[0] and r[0].strip() and r[0].strip() not in directors_list:
-                            directors_list.append(r[0].strip())
+                        d_name = _clean_single_director(r[0])
+                        if d_name:
+                            directors_list.append(d_name)
+                            break
                     if directors_list:
                         break
             except Exception:
@@ -6000,18 +6019,24 @@ def _get_directors(tmdb_id, is_series=False):
                 data = json.loads(resp.read().decode('utf-8'))
                 if is_series:
                     for c in data.get('created_by', []):
-                        cn = c.get('name')
-                        if cn and cn.strip() and cn.strip() not in directors_list:
-                            directors_list.append(cn.strip())
-                raw_crew = data.get('credits', {}).get('crew', []) or data.get('crew', [])
-                for cr in raw_crew:
-                    if cr.get('job') == 'Director' or (not is_series and cr.get('department') == 'Directing'):
-                        dn = cr.get('name')
-                        if dn and dn.strip() and dn.strip() not in directors_list:
-                            directors_list.append(dn.strip())
+                        cn = _clean_single_director(c.get('name'))
+                        if cn:
+                            directors_list.append(cn)
+                            break
+                if not directors_list:
+                    raw_crew = data.get('credits', {}).get('crew', []) or data.get('crew', [])
+                    for cr in raw_crew:
+                        if cr.get('job') == 'Director' or (not is_series and cr.get('department') == 'Directing'):
+                            dn = _clean_single_director(cr.get('name'))
+                            if dn:
+                                directors_list.append(dn)
+                                break
         except Exception:
             pass
 
+    if directors_list:
+        directors_list = [_clean_single_director(directors_list[0])]
+    directors_list = [d for d in directors_list if d]
     _directors_cache[_cache_key] = list(directors_list)
     return directors_list
 
@@ -6132,23 +6157,16 @@ def show_links_as_directory():
             genres_list = []
     genres_str = " / ".join(genres_list) if genres_list else ""
 
-    director_val = meta.get('director') or get_param('director') or getattr(matched_item, 'director', '') or ''
-    director_list = []
-    if isinstance(director_val, list):
-        director_list = [str(d).strip() for d in director_val if str(d).strip() and str(d).strip() not in ('_', 'None')]
-    elif isinstance(director_val, str) and director_val.strip() and director_val.strip() not in ('_', 'None'):
-        if '/' in director_val:
-            director_list = [d.strip() for d in director_val.split('/') if d.strip()]
-        elif ',' in director_val:
-            director_list = [d.strip() for d in director_val.split(',') if d.strip()]
-        else:
-            director_list = [director_val.strip()]
-    if not director_list and tmdb_val:
+    director_val = _clean_single_director(meta.get('director') or get_param('director') or getattr(matched_item, 'director', ''))
+    if not director_val and tmdb_val:
         try:
-            director_list = _get_directors(tmdb_val, is_s)
+            _d_list = _get_directors(tmdb_val, is_s)
+            if _d_list:
+                director_val = _clean_single_director(_d_list[0])
         except Exception:
-            director_list = []
-    director_str = " / ".join(director_list) if director_list else ""
+            director_val = ""
+    director_str = director_val or ""
+    director_list = [director_str] if director_str else []
 
     base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
     if clearlogo_val:
@@ -7653,12 +7671,12 @@ def show_continue_watching():
             li.setProperty('genre', genre_val)
             li.setProperty('Genre', genre_val)
 
-        director_val = rec.get('director') or ''
+        director_val = _clean_single_director(rec.get('director'))
         if not director_val and tmdb_id_val:
             try:
                 _d_list = _get_directors(tmdb_id_val, is_series)
                 if _d_list:
-                    director_val = " / ".join(_d_list)
+                    director_val = _clean_single_director(_d_list[0])
             except Exception: pass
         if director_val:
             li.setProperty('director', director_val)
@@ -7691,7 +7709,7 @@ def show_continue_watching():
                     except Exception: pass
                 if director_val:
                     try:
-                        vt.setDirectors([d.strip() for d in director_val.split('/') if d.strip()])
+                        vt.setDirectors([director_val])
                     except Exception: pass
         except Exception:
             pass
@@ -10437,7 +10455,7 @@ def main():
             'thumbnail': thumbnail or get_param('thumbnail'),
             'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
             'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
-            'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))))
+            'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0]
         }
         sync_tmdbhelper_playerstring(_init_meta)
 
@@ -10593,7 +10611,7 @@ def main():
                 'year': (showyear or get_param('showyear')) if (season and episode) else (year or get_param('year')),
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
                 'plot': plot or get_param('plot'),
-                'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
+                'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0],
                 'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
@@ -10759,7 +10777,7 @@ def main():
                 'year': (showyear or get_param('showyear')) if (season and episode) else (year or get_param('year')),
                 'season': season or get_param('season'), 'episode': episode or get_param('episode'), 'showname': showname or get_param('showname'), 'showyear': showyear or get_param('showyear'),
                 'plot': plot or get_param('plot'),
-                'director': (director if director and director not in ('_', 'None') else '') or (get_param('director') if get_param('director') not in ('_', 'None', None) else '') or " / ".join(_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
+                'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0],
                 'tagline': tagline or get_param('tagline'),
                 'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
