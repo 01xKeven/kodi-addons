@@ -2012,6 +2012,24 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
                 best_title_score = max(best_title_score, 300)
                 break
 
+    # Si el titulo de la web es una variacion local distinta (ej. "El Elegido" en Cuevana2
+    # para la serie con slug "/serie/the-chosen"), verificar si el slug de la URL coincide exactamente con alguno de los titulos
+    if best_title_score == 0 and url_str:
+        clean_url = re.sub(r'https?://[^/]+', '', url_str).split('?')[0].strip('/')
+        # Extraer segmentos de ruta (ej. 'the-chosen', 'el-elegido')
+        slug_candidates = [re.sub(r'^\d+-', '', s) for s in clean_url.split('/') if s and s not in ('serie', 'series', 'pelicula', 'peliculas', 'tv', 'movie', 'ver')]
+        for sc in slug_candidates:
+            clean_sc = clean_title(sc.replace('-', ' ').replace('_', ' '))
+            if not clean_sc or len(clean_sc) < 3:
+                continue
+            for name in (all_names or []):
+                clean_target = clean_title(name)
+                if clean_target and (clean_sc == clean_target or clean_sc.replace(' ', '') == clean_target.replace(' ', '')):
+                    best_title_score = 900
+                    break
+            if best_title_score > 0:
+                break
+
     # El titulo es obligatorio: los resultados de canal heredan los IDs del
     # item de busqueda via Item.clone() (ej. allcalidad clona it_search con
     # tmdb_id/imdb_id inyectados), asi que IDs coincidentes sin similitud de
@@ -2868,6 +2886,22 @@ def _build_bridge_terms(target_title, alt_terms, all_names):
             return
         seen_raw.add(low)
         candidates.append(t_str)
+        # Extraer variantes entre parentesis: "The Chosen (Los elegidos)" -> "The Chosen", "Los elegidos"
+        if '(' in t_str and ')' in t_str:
+            for inside in re.findall(r'\((.*?)\)', t_str):
+                inside_clean = inside.strip()
+                if inside_clean and not re.match(r'^\d{4}$', inside_clean):
+                    add_cand(inside_clean)
+            outside = re.sub(r'\(.*?\)', '', t_str).strip()
+            if outside:
+                add_cand(outside)
+        # Extraer variantes separadas por ':' o '-'
+        if ':' in t_str or ' - ' in t_str or '–' in t_str:
+            for part in re.split(r'[:\-–—]', t_str):
+                part_clean = part.strip()
+                if part_clean and len(part_clean) >= 3:
+                    add_cand(part_clean)
+
     add_cand(target_title)
     if alt_terms:
         for t in alt_terms:
@@ -2888,7 +2922,7 @@ def _build_bridge_terms(target_title, alt_terms, all_names):
             if core_clean and core_clean.lower() not in seen_clean:
                 seen_clean.add(core_clean.lower())
                 terms.append(core_clean)
-    return terms[:4]
+    return terms[:5]
 
 
 _tmdb_translations_cache = {}
@@ -3281,7 +3315,8 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         import re as _re2
         years_re = r'\b(19\d\d|20[0-3]\d)\b'
 
-        # 0.5. Verificación por IMDb ID (100% inequívoca)
+        # 0.5. Verificación por IMDb ID (100% inequívoca si coincide)
+        imdb_mismatch = False
         if target_imdb:
             t_imdb = str(target_imdb).strip().lower()
             if t_imdb.startswith('tt'):
@@ -3291,11 +3326,12 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                         _mark_confirmed()
                         return True
                     else:
-                        # Si la web muestra un IMDb explícito y no coincide con el buscado, descartar
+                        # IMDb diferente en la web (ej: HdFull pone el IMDb del piloto tt9471404 en The Chosen).
+                        # No descartar inmediatamente si el año o reparto en la web coincide.
+                        imdb_mismatch = True
                         try:
-                            xbmc.log("Multi Bridge: %s '%s' descartado por IMDb diferente en web (%s != %s)" % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
+                            xbmc.log("Multi Bridge: %s '%s' IMDb en web no coincide (%s != %s), verificando por año/reparto..." % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
                         except: pass
-                        return False
 
         if not year_t:
             # Si no hay año objetivo pero sí target_tmdb, verificar actores antes de salir
@@ -3492,6 +3528,12 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             if len(_uniq) == 1 and len(_all) >= 3 and abs(list(_uniq)[0] - year_t) > 1:
                 return False
 
+        if imdb_mismatch:
+            try:
+                xbmc.log("Multi Bridge: %s '%s' descartado por IMDb diferente en web sin confirmación de año/reparto" % (channel_id, _u), xbmc.LOGINFO)
+            except: pass
+            return False
+
         return True
     except Exception:
         return True
@@ -3649,6 +3691,12 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
         tmdb_type = "tv" if is_series else "movie"
         import json as _json
         import urllib.request as _ureq
+        import ssl as _ssl
+        ctx = None
+        try:
+            ctx = _ssl._create_unverified_context()
+        except Exception:
+            pass
         langs = ["es-MX", "es-ES", "en"]
         results = {}
         def _fetch_lang(lang):
@@ -3657,7 +3705,9 @@ def _fetch_tmdb_titles(tmdb_id, is_series=False):
                 # Intento con urllib (5s) sin pasar por httptools para no bloquear lock; 1 reintento
                 for _att in range(2):
                     try:
-                        with _ureq.urlopen(url, timeout=5) as resp2:
+                        kwargs = {'timeout': 5}
+                        if ctx: kwargs['context'] = ctx
+                        with _ureq.urlopen(url, **kwargs) as resp2:
                             raw = resp2.read().decode('utf-8', errors='ignore')
                             data = _json.loads(raw)
                             if data:
@@ -3815,11 +3865,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
     if not mods:
         return None, None
     Item = mods['Item']
-    if is_series:
-        cleaned_target = _clean_search_term(target_title)
-        terms_to_try = [cleaned_target] if cleaned_target else []
-    else:
-        terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
+    terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
     if not terms_to_try:
         cleaned = _clean_search_term(target_title)
         if cleaned:
@@ -4226,12 +4272,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
     mods = _get_balandro_modules()
     if not mods:
         return None, None
-    Item = mods['Item']
-    if is_series:
-        cleaned_target = _clean_search_term(target_title)
-        terms_to_try = [cleaned_target] if cleaned_target else []
-    else:
-        terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
+    terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
     if not terms_to_try:
         cleaned = _clean_search_term(target_title)
         if cleaned:
@@ -4361,7 +4402,8 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
         try:
             with silenced_dialogs():
                 mainlist_items = canal.mainlist(Item(channel=channel_id))
-                search_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
+                filtered_actions = [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search' and getattr(elem, 'search_type', '') in ('all', 'tvshow' if is_series else 'movie') and not getattr(elem, 'target_action', '') and not getattr(elem, 'group', '')]
+                search_actions = filtered_actions if filtered_actions else [elem for elem in (mainlist_items or []) if getattr(elem, 'action', '') == 'search']
         except Exception as e:
             xbmc.log("Multi Bridge [Balandro]: %s mainlist error: %s" % (channel_id, str(e)), xbmc.LOGINFO)
             search_actions = []
@@ -4763,7 +4805,17 @@ def _run_parallel_search_impl(engine='alfa'):
     if is_series:
         target_title = (p_showname or p_title or '').strip()
         target_year = p_showyear or p_year
-        all_names = [t for t in [target_title, p_showname] if t]
+        all_names = [t for t in [target_title, p_showname, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig')] if t]
+        # Extraer variantes entre parentesis para series (ej. "The Chosen (Los elegidos)" -> "The Chosen", "Los elegidos")
+        for _n in list(all_names):
+            if '(' in _n and ')' in _n:
+                for inside in re.findall(r'\((.*?)\)', _n):
+                    inside_clean = inside.strip()
+                    if inside_clean and not re.match(r'^\d{4}$', inside_clean) and inside_clean not in all_names:
+                        all_names.append(inside_clean)
+                outside = re.sub(r'\(.*?\)', '', _n).strip()
+                if outside and outside not in all_names:
+                    all_names.append(outside)
         alt_terms = [t for t in all_names if t != target_title]
     else:
         target_title = (p_title or '').strip()
@@ -4818,7 +4870,7 @@ def _run_parallel_search_impl(engine='alfa'):
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
         _distinct = len(set([_safe_str(x).lower().strip() for x in all_names if x]))
-        if target_tmdb and not is_series and _distinct < 3:
+        if target_tmdb and _distinct < 3:
             p_dialog.update(5, 'Obteniendo titulos TMDB...')
             fetched = _fetch_tmdb_titles(target_tmdb, is_series)
             xbmc.log(f"Multi Bridge: fetched TMDB titles for {target_tmdb}: {fetched}", xbmc.LOGINFO)
