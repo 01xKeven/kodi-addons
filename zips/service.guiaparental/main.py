@@ -28,6 +28,7 @@ STRING_MAPPING = {
     'ALCOHOL_DRUGS': 30003,
     'FRIGHTENING_INTENSE_SCENES': 30004,
     'none': 30005,
+    'no_data': 30030,
     'mild': 30006,
     'moderate': 30007,
     'severe': 30008,
@@ -42,7 +43,6 @@ STRING_MAPPING = {
     'error_connect': 30017,
     'keyboard_prompt': 30018,
     'post_credits': 30021,
-    'audio_only': 30022,
 }
 
 FALLBACK_STRINGS = {
@@ -52,7 +52,8 @@ FALLBACK_STRINGS = {
         'PROFANITY': "Groserias",
         'ALCOHOL_DRUGS': "Alcohol y Drogas",
         'FRIGHTENING_INTENSE_SCENES': "Escenas intensas",
-        'none': "Ninguno",
+        'none': "Ninguna",
+        'no_data': "Sin datos",
         'mild': "Leve",
         'moderate': "Moderada",
         'severe': "Severa",
@@ -67,7 +68,6 @@ FALLBACK_STRINGS = {
         'error_connect': "No se pudo obtener la guía parental: {error}",
         'keyboard_prompt': "Introduce el ID de IMDb (ttxxxxxxx)",
         'post_credits': "Post-Créditos",
-        'audio_only': "Solo audio"
     },
     'en': {
         'SEXUAL_CONTENT': "Nudity",
@@ -76,6 +76,7 @@ FALLBACK_STRINGS = {
         'ALCOHOL_DRUGS': "Alcohol & Drugs",
         'FRIGHTENING_INTENSE_SCENES': "Intense Scenes",
         'none': "None",
+        'no_data': "No data",
         'mild': "Mild",
         'moderate': "Moderate",
         'severe': "Severe",
@@ -90,7 +91,6 @@ FALLBACK_STRINGS = {
         'error_connect': "Could not retrieve parental guide: {error}",
         'keyboard_prompt': "Enter IMDb ID (ttxxxxxxx)",
         'post_credits': "Post-Credits",
-        'audio_only': "Audio only"
     }
 }
 
@@ -131,6 +131,87 @@ def get_string(key):
 def log(msg, level=xbmc.LOGINFO):
     """Función para escribir en el log de Kodi."""
     xbmc.log(f"[{_addon_name}] {msg}", level=level)
+
+# Keywords de TMDB para escenas durante/post créditos (dato estructurado, sin parsear comentarios)
+TMDB_KEYWORD_POST = 179430  # "post-credit scene"
+TMDB_KEYWORD_MID = 179431   # "during-credits stinger"
+
+# Caché en memoria por sesión: imdb_id -> conteo (0-2) o None si no se pudo resolver
+_tmdb_stinger_cache = {}
+
+
+def get_tmdb_api_key():
+    """Devuelve la API key de TMDB configurada en los ajustes (o cadena vacía)."""
+    try:
+        return (ADDON.getSetting('tmdb_api_key') or '').strip()
+    except Exception:
+        return ''
+
+
+def get_tmdb_movie_id(imdb_id, api_key):
+    """Mapea un IMDb ID a su TMDB ID usando /find. Devuelve int o None."""
+    try:
+        r = requests.get(
+            f'https://api.themoviedb.org/3/find/{imdb_id}',
+            params={'api_key': api_key, 'external_source': 'imdb_id'},
+            timeout=10
+        )
+        if r.status_code != 200:
+            log(f"TMDb /find devolvió código {r.status_code} para {imdb_id}", level=xbmc.LOGWARNING)
+            return None
+        results = r.json().get('movie_results', [])
+        if results and results[0].get('id'):
+            return int(results[0]['id'])
+        log(f"TMDb no encontró película para {imdb_id}", level=xbmc.LOGWARNING)
+    except Exception as e:
+        log(f"Error mapeando IMDb ID en TMDb: {e}", level=xbmc.LOGWARNING)
+    return None
+
+
+def get_tmdb_stinger_count(imdb_id):
+    """
+    Cuenta los tramos con stinger según TMDB (0-2): mitad (179431) y/o final (179430).
+    Devuelve None si no hay API key o no se pudo resolver (la fila se oculta).
+    """
+    api_key = get_tmdb_api_key()
+    if not api_key:
+        return None
+    if imdb_id in _tmdb_stinger_cache:
+        return _tmdb_stinger_cache[imdb_id]
+    count = None
+    try:
+        tmdb_id = get_tmdb_movie_id(imdb_id, api_key)
+        if tmdb_id:
+            r = requests.get(
+                f'https://api.themoviedb.org/3/movie/{tmdb_id}/keywords',
+                params={'api_key': api_key},
+                timeout=10
+            )
+            if r.status_code == 200:
+                kw_ids = {k.get('id') for k in r.json().get('keywords', [])}
+                count = (TMDB_KEYWORD_MID in kw_ids) + (TMDB_KEYWORD_POST in kw_ids)
+            else:
+                log(f"TMDb keywords devolvió código {r.status_code} para {tmdb_id}", level=xbmc.LOGWARNING)
+    except Exception as e:
+        log(f"Error consultando keywords de TMDb: {e}", level=xbmc.LOGWARNING)
+    _tmdb_stinger_cache[imdb_id] = count
+    return count
+
+
+def get_tmdb_stinger_info(imdb_id):
+    """
+    Construye el dict stinger_info para el overlay desde TMDB.
+    Solo devuelve datos si hay al menos un tramo con stinger; si no hay
+    (o no hay API key / falló la consulta) devuelve None y la fila se oculta.
+    """
+    count = get_tmdb_stinger_count(imdb_id)
+    if not count:
+        return None
+    return {
+        'has_stinger': True,
+        'stinger_text': str(count),
+        'stinger_color': "FF00E5FF"
+    }
 
 def severity_to_class(level):
     """Convierte el nivel de severidad de IMDb a la clase visual interna."""
@@ -198,134 +279,22 @@ def get_episode_imdb_id(series_id, season, episode):
         log(f"Error buscando ID de episodio en GraphQL: {e}", level=xbmc.LOGWARNING)
     return None
 
-def parse_crazy_credits(crazy_credits_edges):
-    """
-    Analiza las entradas de crazyCredits para extraer la información de post-créditos.
-    Retorna un diccionario con:
-      - 'has_stinger': bool
-      - 'stinger_text': str
-      - 'stinger_color': str (formato hex Kodi AARRGGBB)
-    """
-    if not crazy_credits_edges:
-        return {
-            'has_stinger': False,
-            'stinger_text': get_string("none"),
-            'stinger_color': "FF7F8C8D"
-        }
+def empty_guide():
+    """Guía de 5 filas marcadas como sin información (distinto de votado 'ninguna')."""
+    return [{
+        'category': get_string(cat_key),
+        'raw_category': cat_key,
+        'severity_text': get_string('no_data'),
+        'severity_class': 'noneVotes',
+        'item_list': [],
+        'is_default': True
+    } for cat_key in CATEGORY_ORDER]
 
-    def clean_stinger_text(t):
-        t = re.sub(r'<[^>]+>', ' ', t)
-        t = t.replace('&#39;', "'").replace('&quot;', '"').replace('&amp;', '&')
-        t = re.sub(r'^(spoiler\s*:\s*|in\s+a\s+|there\s+is\s+a\s+)', '', t, flags=re.IGNORECASE)
-        return t.strip()
 
-    def are_duplicate_scenes(t1, t2):
-        w1 = set(re.findall(r'\b[a-z]{4,}\b', t1.lower()))
-        w2 = set(re.findall(r'\b[a-z]{4,}\b', t2.lower()))
-        stop_words = {
-            'credits', 'scene', 'after', 'during', 'closing', 'ending', 'appears', 
-            'there', 'shows', 'movie', 'scenes', 'credit', 'beginning', 'first',
-            'another', 'extra', 'final', 'mid-credit', 'post-credit', 'leads',
-            'spoilers', 'spoiler'
-        }
-        w1 -= stop_words
-        w2 -= stop_words
-        if w1 and w2:
-            overlap = len(w1 & w2)
-            jaccard = overlap / len(w1 | w2)
-            if overlap >= 3:
-                return True
-            if overlap >= 2 and jaccard > 0.25:
-                return True
-        return False
+def is_empty_guide(guide):
+    """True si la guía no trae información real (todas las filas por defecto)."""
+    return not guide or all(item.get('is_default') for item in guide)
 
-    mid_scenes = []
-    after_scenes = []
-    audio_only = 0
-
-    for edge in crazy_credits_edges:
-        raw_text = edge.get('node', {}).get('text', {}).get('plaidHtml', '')
-        text = raw_text.lower()
-        
-        # 1. Filtro para ignorar notas de trivia general/resumen entre episodios
-        if re.search(r'\b(only\s+\d+\s+episodes|episodes\s+have\s+post|episodes\s+got|there\s+are\s+\w+\s+extra\s+scenes|two\s+extra\s+scenes|last\s+episode,\s+there\s+are)\b', text):
-            continue
-
-        # 2. Ignorar menciones de dibujos, tipografías, disclaimer o logos que NO sean escenas narrativas
-        if any(x in text for x in ['animated sequence featuring', 'illustrated drawings', 'drawings of', 'disclaimer in the closing', 'logo in the opening', 'costume designers', 'statement at the start', 'style and font of', 'concept art paintings']):
-            continue
-
-        # 3. Filtros clásicos de exclusión (dedicatorias, logos, etc.)
-        if any(x in text for x in ['dedicated to', 'in memory of', 'aspect ratio', 'soundtrack', 'tribute', 'filmed in', 'special thanks']):
-            if not any(x in text for x in ['scene', 'dialogue', 'audio', 'appears after', 'after the closing credits', 'hammer hitting']):
-                continue
-
-        # 4. Listas múltiples en HTML (ej. Guardians of the Galaxy Vol. 2)
-        if '<ul>' in raw_text:
-            li_items = re.findall(r'<li>(.*?)</li>', raw_text, flags=re.IGNORECASE)
-            if len(li_items) >= 2:
-                for li in li_items:
-                    c_li = clean_stinger_text(li)
-                    if not any(are_duplicate_scenes(c_li, s) for s in after_scenes):
-                        after_scenes.append(c_li)
-                continue
-
-        # 5. Detección de audio exclusivo (ej. martilleo en Endgame)
-        is_audio = any(x in text for x in ['sound of a hammer', 'sound of', 'voice of', 'heard after', 'hammering']) and not any(x in text for x in ['scene', 'video', 'footage', 'epilogue', 'post-credit'])
-        is_scene = any(x in text for x in ['scene', 'epilogue', 'post-credits epilogue', 'mid-credits', 'post-credits', 'after the credits', 'after the closing credits', 'trailer for'])
-
-        if is_audio and not is_scene:
-            audio_only += 1
-            continue
-
-        # 6. Ignorar menciones explícitas de que NO hay escena
-        if 'does not have a scene' in text or 'no scene' in text:
-            continue
-
-        # 7. Ignorar acciones menores de música / créditos
-        if 'walks off with the music' in text or 'picks up his walkman' in text:
-            continue
-
-        # 8. Clasificación de tipo
-        is_mid = any(x in text for x in ['mid-credit', 'mid credit', 'during the credit', 'during the closing credit', 'during the end credit', 'throughout the credit', 'beginning of the credits'])
-        is_after = any(x in text for x in ['after the credit', 'after the closing credit', 'after the end credit', 'at the end of the closing credit', 'end of the credits', 'after the main credits', 'scene in the closing credits', 'scene at the end of the closing credits', 'post-credits epilogue', 'trailer for'])
-
-        cleaned = clean_stinger_text(raw_text)
-
-        if not is_mid and not is_after and is_scene:
-            is_after = True
-
-        if is_mid and not is_after:
-            if not any(are_duplicate_scenes(cleaned, s) for s in mid_scenes):
-                mid_scenes.append(cleaned)
-        elif is_after and not is_mid:
-            if not any(are_duplicate_scenes(cleaned, s) for s in after_scenes):
-                after_scenes.append(cleaned)
-        elif is_mid and is_after:
-            if not any(are_duplicate_scenes(cleaned, s) for s in mid_scenes) and not any(are_duplicate_scenes(cleaned, s) for s in after_scenes):
-                after_scenes.append(cleaned)
-
-    total_scenes = len(mid_scenes) + len(after_scenes)
-
-    if total_scenes == 0 and audio_only > 0:
-        return {
-            'has_stinger': True,
-            'stinger_text': get_string("audio_only"),
-            'stinger_color': "FFF1C40F"
-        }
-
-    if total_scenes == 0:
-        return {
-            'has_stinger': False,
-            'stinger_text': get_string("none"),
-            'stinger_color': "FF7F8C8D"
-        }
-
-    return {
-        'has_stinger': True,
-        'stinger_text': str(total_scenes),
-        'stinger_color': "FF00E5FF"
-    }
 
 def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=None):
     """
@@ -361,15 +330,6 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
                 }
               }
             }
-            crazyCredits(first: 10) {
-              edges {
-                node {
-                  text {
-                    plaidHtml
-                  }
-                }
-              }
-            }
           }
         }
         """ % imdb_id
@@ -399,18 +359,17 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
         movie_title = title_data.get("titleText", {}).get("text", imdb_id)
         parents_guide = title_data.get("parentsGuide")
         
-        # Procesar post-créditos
-        crazy_credits_edges = title_data.get("crazyCredits", {}).get("edges", [])
-        stinger_info = parse_crazy_credits(crazy_credits_edges)
+        # Post-créditos: solo desde TMDB (número de tramos 0-2). Sin key -> None (sin fila).
+        stinger_info = get_tmdb_stinger_info(imdb_id)
         
         if not parents_guide:
             log(f"No hay guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, {}, stinger_info
+            return movie_title, empty_guide(), stinger_info
 
         categories = parents_guide.get("categories", [])
         if not categories:
             log(f"No hay categorías de guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, {}, stinger_info
+            return movie_title, empty_guide(), stinger_info
 
     except Exception as err:
         log(f"Error al conectar con IMDb GraphQL: {err}", level=xbmc.LOGERROR)
@@ -451,14 +410,16 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
             level = sev_id.replace("Votes", "")
             sev_text, sev_class = severity_to_class(level)
         else:
-            sev_text, sev_class = get_string("none"), "noneVotes"
+            # Sin entrada o sin severidad: no hay información (distinto de votado "ninguna")
+            sev_text, sev_class = get_string("no_data"), "noneVotes"
 
         parental_guide.append({
             'category':      cat_label,
             'raw_category':  cat_key,
             'severity_text': sev_text,
             'severity_class': sev_class,
-            'item_list':     []
+            'item_list':     [],
+            'is_default':    False
         })
 
     if progress_dialog:
@@ -496,13 +457,8 @@ def process_id(imdb_id):
                 text += f"{visual_info['char']} [B]{item['category']}:[/B] [COLOR={color}]{item['severity_text']}[/COLOR]\n\n"
 
             if stinger_info and stinger_info.get('stinger_text'):
-                color_map = {
-                    "FF00E5FF": "cyan",
-                    "FFF1C40F": "yellow",
-                    "FF7F8C8D": "grey"
-                }
-                c_name = color_map.get(stinger_info.get('stinger_color', ''), 'white')
-                text += f"🎬 [B]{get_string('post_credits')}:[/B] [COLOR={c_name}]{stinger_info['stinger_text']}[/COLOR]\n"
+                c_name = 'cyan' if stinger_info.get('has_stinger') else 'grey'
+                text += f"[B]{get_string('post_credits')}:[/B] [COLOR={c_name}]{stinger_info['stinger_text']}[/COLOR]\n"
 
             xbmcgui.Dialog().textviewer(f"{get_string('title')}: {movie_title}", text)
         else:

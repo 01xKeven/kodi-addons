@@ -83,19 +83,27 @@ class ParentalGuideOverlay(object):
         categories_keys = ["SEXUAL_CONTENT", "VIOLENCE", "PROFANITY", "ALCOHOL_DRUGS", "FRIGHTENING_INTENSE_SCENES"]
         texture = os.path.join(ADDON_PATH, 'resources', 'skins', 'Default', '720p', 'rounded_bar.png')
 
+        # ── Posición del overlay (0=arriba, 1=abajo, lado izquierdo) ──
+        try:
+            bottom_side = int(ADDON.getSetting('overlay_position') or 0) == 1
+        except Exception:
+            bottom_side = False
+
         bar_height = 226 if stinger_info else 175
+        bar_x, lbl_x, sep_x, lbl_w = 50, 70, 70, 390
+        y = (1080 - 55 - bar_height) if bottom_side else 55  # la ventana de video va en 1920x1080
+        lbl_align = 0
 
         # ── Barra lateral (ControlImage) ─────────────────────────────
         try:
-            self.bar = xbmcgui.ControlImage(-1000, 55, 4, bar_height, texture)
+            self.bar = xbmcgui.ControlImage(-1000, y, 4, bar_height, texture)
             self.window.addControl(self.bar)
             self.bar.setColorDiffuse("00FFFFFF")   # transparente antes de moverse
-            self.bar.setPosition(50, 55)           # mover a posición correcta (ya invisible)
+            self.bar.setPosition(bar_x, y)         # mover a posición correcta (ya invisible)
         except Exception as e:
             log(f"Error barra: {e}", level=xbmc.LOGWARNING)
 
         # ── Etiquetas (ControlLabel) ──────────────────────────────────
-        y = 55
         for cat_key in categories_keys:
             data = normalized.get(cat_key)
             if not data:
@@ -109,7 +117,7 @@ class ParentalGuideOverlay(object):
                 data = normalized.get(spanish_fallback)
 
             cat_label = main.get_string(cat_key)
-            sev_t     = main.get_string("none")
+            sev_t     = main.get_string("no_data")
             col_h     = severity_colors["none"]
 
             if data:
@@ -124,12 +132,13 @@ class ParentalGuideOverlay(object):
                     if   lt in ['leve', 'mild']: col_h = severity_colors["mild"]
                     elif lt in ['moderada', 'moderate']: col_h = severity_colors["moderate"]
                     elif lt in ['severa', 'severe']: col_h = severity_colors["severe"]
-                    elif lt in ['ninguno', 'none']: col_h = severity_colors["none"]
+                    elif lt in ['sin datos', 'no data', 'ninguna', 'ninguno', 'none']: col_h = severity_colors["none"]
 
             ld = LabelData(cat_label, sev_t, col_h)
             try:
-                lbl = xbmcgui.ControlLabel(70, y, 390, 30, ld.make_text(0x00),
-                                           font='font12', textColor='0x00000000')
+                lbl = xbmcgui.ControlLabel(lbl_x, y, lbl_w, 30, ld.make_text(0x00),
+                                           font='font12', textColor='0x00000000',
+                                           alignment=lbl_align)
                 self.window.addControl(lbl)
                 self.labels.append((lbl, ld))
             except Exception as e:
@@ -145,7 +154,7 @@ class ParentalGuideOverlay(object):
                 self.separator = xbmcgui.ControlImage(-1000, y_sep, 230, 1, texture)
                 self.window.addControl(self.separator)
                 self.separator.setColorDiffuse("00FFFFFF")
-                self.separator.setPosition(70, y_sep)
+                self.separator.setPosition(sep_x, y_sep)
             except Exception as e:
                 log(f"Error separador: {e}", level=xbmc.LOGWARNING)
 
@@ -155,8 +164,9 @@ class ParentalGuideOverlay(object):
 
             ld_st = LabelData(st_label, st_text, st_color)
             try:
-                lbl_st = xbmcgui.ControlLabel(70, y_lbl, 390, 30, ld_st.make_text(0x00),
-                                             font='font12', textColor='0x00000000')
+                lbl_st = xbmcgui.ControlLabel(lbl_x, y_lbl, lbl_w, 30, ld_st.make_text(0x00),
+                                             font='font12', textColor='0x00000000',
+                                             alignment=lbl_align)
                 self.window.addControl(lbl_st)
                 self.labels.append((lbl_st, ld_st))
             except Exception as e:
@@ -291,10 +301,19 @@ class ParentalPlayer(xbmc.Player):
                 log(f"Error cerrando el overlay: {e}", level=xbmc.LOGWARNING)
             self.active_overlay = None
 
+    def _get_seconds(self, setting_id, default):
+        """Lee un ajuste de segundos limitándolo al rango 0-30."""
+        try:
+            value = int(ADDON.getSetting(setting_id) or default)
+        except Exception:
+            value = default
+        return min(max(value, 0), 30)
+
     def _process_playback(self):
         try:
-            # 1. Esperar 1 segundo antes de iniciar el procesamiento
-            for _ in range(10):
+            # 1. Esperar los segundos configurados antes de iniciar el procesamiento
+            wait_steps = self._get_seconds('overlay_delay', 1) * 10
+            for _ in range(wait_steps):
                 if self.stop_event.is_set() or not self.isPlayingVideo():
                     return
                 time.sleep(0.1)
@@ -356,7 +375,7 @@ class ParentalPlayer(xbmc.Player):
                     movie_title, guide, stinger_info = None, None, None
 
                 # Si es un episodio y no tiene guía propia en IMDb, heredar la guía general de la serie
-                if media_type == 'show' and not guide and show_imdb_id and show_imdb_id != imdb_id:
+                if media_type == 'show' and main.is_empty_guide(guide) and show_imdb_id and show_imdb_id != imdb_id:
                     log(f"El episodio no tiene guía propia en IMDb, obteniendo guía de la serie: {show_imdb_id}")
                     s_res = main.get_parental_guide(show_imdb_id, progress_dialog=None, silent=True, media_type='show')
                     if s_res and len(s_res) >= 2 and s_res[1]:
@@ -367,8 +386,8 @@ class ParentalPlayer(xbmc.Player):
                 log(f"Error al descargar la guía parental: {e}", level=xbmc.LOGERROR)
                 return
 
-            if not guide and not stinger_info:
-                log(f"No se encontró información para el ID: {imdb_id}.")
+            if movie_title is None:
+                log(f"No se pudo resolver información para el ID: {imdb_id}.")
                 return
 
             # 4. Crear y mostrar la ventana superpuesta en la pantalla
@@ -380,8 +399,9 @@ class ParentalPlayer(xbmc.Player):
                 self.active_overlay = ParentalGuideOverlay()
                 self.active_overlay.show_guide(guide, stinger_info=stinger_info)
                 
-                # 5. Mantener en pantalla por exactamente 8 segundos
-                for _ in range(80):
+                # 5. Mantener en pantalla los segundos configurados
+                show_steps = self._get_seconds('overlay_duration', 8) * 10
+                for _ in range(show_steps):
                     if self.stop_event.is_set() or not self.isPlayingVideo():
                         break
                     time.sleep(0.1)
