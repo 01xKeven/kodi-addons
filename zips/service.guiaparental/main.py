@@ -7,7 +7,37 @@ import requests
 
 # Configuración del Addon
 _addon_name = "Control Parental IMDb"
-ADDON = xbmcaddon.Addon('service.guiaparental')
+ADDON_ID = "service.guiaparental"
+
+
+def create_addon(addon_id=ADDON_ID, attempts=20, wait_ms=250):
+    """Devuelve el objeto del addon aunque Kodi lo esté actualizando en ese momento.
+
+    Si Kodi instala una versión nueva del addon justo mientras se inicia el
+    servicio, durante unos instantes el addon todavía no está registrado y
+    xbmcaddon.Addon(id) lanza «Unknown addon id». Reintentamos unos segundos
+    para que el arranque no falle ni muestre un error al usuario.
+    """
+    try:
+        # Sin id: Kodi lo deduce de la carpeta del script en ejecución.
+        return xbmcaddon.Addon()
+    except Exception:
+        pass
+
+    for _ in range(attempts):
+        try:
+            return xbmcaddon.Addon(addon_id)
+        except Exception:
+            try:
+                xbmc.sleep(wait_ms)
+            except Exception:
+                pass
+
+    # Último intento: si falla, que el error quede visible en el log.
+    return xbmcaddon.Addon(addon_id)
+
+
+ADDON = create_addon()
 
 # Diccionario para los colores y símbolos de severidad
 SEVERITY_VISUALS = {

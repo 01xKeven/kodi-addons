@@ -8,13 +8,19 @@ import xbmcaddon
 
 # Configuración y rutas del addon
 ADDON_ID = 'service.guiaparental'
-ADDON = xbmcaddon.Addon(ADDON_ID)
+
+# La carpeta del script ya está en sys.path (Kodi la añade), pero nos aseguramos
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.append(_HERE)
+
+# main.py crea el objeto del addon de forma tolerante a que Kodi lo esté
+# actualizando en ese momento (ver create_addon en main.py).
+import main
+
+ADDON = main.ADDON
 ADDON_PATH = ADDON.getAddonInfo('path')
 ADDON_NAME = ADDON.getAddonInfo('name')
-
-# Añadir el directorio raíz al path para poder importar main.py
-sys.path.append(ADDON_PATH)
-import main
 
 
 def log(msg, level=xbmc.LOGINFO):
@@ -33,6 +39,39 @@ def get_int(setting_id, default=0):
         return int(ADDON.getSetting(setting_id) or default)
     except Exception:
         return default
+
+
+def log_active_settings():
+    """Registra en el log los ajustes activos (útil para diagnosticar problemas)."""
+    try:
+        duration = get_int('overlay_duration', 8)
+        api_key = (ADDON.getSetting('tmdb_api_key') or '').strip()
+        log(
+            "Ajustes activos: "
+            f"mostrar HUD={get_bool('show_overlay', True)}, "
+            f"posición={get_int('overlay_position', 0)}, "
+            f"diseño={get_int('overlay_layout', 0)}, "
+            f"animación={get_int('overlay_animation', 0)}, "
+            f"retardo={get_int('overlay_delay', 1)} s, "
+            f"duración visible={duration} s, "
+            f"valoración={get_bool('show_rating', False)}, "
+            f"clasificación={get_bool('show_certificate', False)}, "
+            f"post-créditos={get_bool('show_post_credits', False)}, "
+            f"global={get_bool('show_overall', False)}, "
+            f"datos extra={get_bool('show_extra_meta', False)}, "
+            f"ID IMDb={get_bool('show_imdb_id', False)}, "
+            f"cuenta atrás={get_bool('show_countdown', False)}, "
+            f"clave TMDb={'sí' if api_key else 'no'}"
+        )
+        if duration <= 0:
+            log(
+                "AVISO: «Duración visible» está en 0 s, así que el HUD se cerrará "
+                "en cuanto aparezca. Ponlo entre 1 y 30 s en los ajustes del addon "
+                "(pestaña General → Duración visible).",
+                level=xbmc.LOGWARNING,
+            )
+    except Exception as e:
+        log(f"No se pudieron leer los ajustes activos: {e}", level=xbmc.LOGWARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +765,8 @@ class ParentalPlayer(xbmc.Player):
             try:
                 overlay.show_guide(
                     guide, stinger_info=stinger_info, meta=meta,
-                    hold_seconds=self._get_seconds('overlay_duration', 8),
+                    # La duración mínima es 1 s: así el HUD nunca se cierra de golpe.
+                    hold_seconds=max(1, self._get_seconds('overlay_duration', 8)),
                     should_abort=lambda: self.stop_event.is_set() or not self.isPlayingVideo(),
                     imdb_id=imdb_id)
             finally:
@@ -786,6 +826,7 @@ def main_loop():
     player = ParentalPlayer()
 
     log("Servicio de Control Parental IMDb iniciado.")
+    log_active_settings()
 
     while not monitor.abortRequested():
         if monitor.waitForAbort(1):

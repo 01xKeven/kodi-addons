@@ -59,7 +59,7 @@
                     <level>0</level>
                     <default>8</default>
                     <constraints>
-                        <minimum>0</minimum>
+                        <minimum>1</minimum>
                         <maximum>30</maximum>
                         <step>1</step>
                     </constraints>
