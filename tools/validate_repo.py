@@ -272,6 +272,31 @@ def check_net(repo, content, digest, problems, warnings, retries, wait, pin=None
                     problems.append("el zip que Kodi descargaria no esta: %s (%s)" % (url, exc))
 
 
+def check_workflows(repo, problems, warnings):
+    """Los ficheros de .github/workflows deben ser YAML valido.
+
+    Si uno no lo es, GitHub rechaza el workflow entero sin ejecutarlo (y manda un
+    correo de "workflow file issue"), asi que conviene detectarlo antes de publicar.
+    """
+    folder = os.path.join(repo, ".github", "workflows")
+    if not os.path.isdir(folder):
+        return
+    try:
+        import yaml
+    except ImportError:
+        warnings.append("no compruebo .github/workflows (falta pyyaml)")
+        return
+    for name in sorted(os.listdir(folder)):
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                yaml.safe_load(handle)
+        except yaml.YAMLError as exc:
+            problems.append("workflow invalido .github/workflows/%s: %s" % (name, exc))
+
+
 def find_repo_root(start):
     folder = os.path.abspath(start)
     while True:
@@ -301,6 +326,7 @@ def main(argv=None):
 
     problems, warnings = [], []
     content, digest = check_local(repo, problems, warnings)
+    check_workflows(repo, problems, warnings)
     if args.net and content:
         check_net(repo, content, digest, problems, warnings, args.retries, args.wait, args.pin)
 

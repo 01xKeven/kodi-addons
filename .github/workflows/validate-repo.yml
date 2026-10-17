@@ -22,6 +22,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install validator dependencies
+        run: python -m pip install --quiet pyyaml
+
       - name: Validate addons.xml, checksum and zips
         run: python tools/validate_repo.py --root .
 
@@ -32,7 +35,7 @@ jobs:
       # Informativo: mira lo que sirve ahora la rama main. Si otro push acaba de
       # publicar algo mas nuevo, la cache de la CDN puede ir por detras; eso no es
       # un fallo de este commit, asi que no bloquea (evita correos en falso).
-      - name: Info: what the Kodi URL (main) serves right now
+      - name: "Info - what the Kodi URL (main) serves right now"
         if: github.event_name != 'pull_request'
         continue-on-error: true
         run: python tools/validate_repo.py --root . --net --retries 2 --wait 15
