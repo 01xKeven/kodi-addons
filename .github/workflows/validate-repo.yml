@@ -1,0 +1,30 @@
+name: Validate repository
+
+# Kodi lee un solo fichero (addons.xml) para listar todo el repositorio: si deja
+# de ser XML valido, en Kodi sale "no se pudo conectar al repositorio".
+# Esta workflow valida cada push para que un repo roto no pase desapercibido.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate addons.xml, checksum and zips
+        run: python tools/validate_repo.py --root .
+
+      - name: Check what Kodi actually downloads (repository URL + CDN)
+        if: github.event_name != 'pull_request'
+        run: python tools/validate_repo.py --root . --net --retries 10 --wait 30
