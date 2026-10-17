@@ -39,6 +39,66 @@ def default_source(addon_id):
     return os.path.join(appdata, "Kodi", "addons", addon_id)
 
 
+def source_files(source):
+    """Ficheros que se publicarian, por ruta relativa (sin basura de python)."""
+    found = {}
+    for root, folders, names in os.walk(source):
+        folders[:] = [f for f in folders if f != "__pycache__"]
+        for name in names:
+            if name.lower().endswith(SKIP_FILES) or name.endswith(".pyc"):
+                continue
+            path = os.path.join(root, name)
+            found[os.path.relpath(path, source).replace("\\", "/")] = path
+    return found
+
+
+def ensure_identity(repo):
+    """Sin identidad de git el commit falla; la pongo local a este clon."""
+    name = git(repo, "config", "user.name", check=False)
+    email = git(repo, "config", "user.email", check=False)
+    if name and email and "@" in email and "(none)" not in email:
+        return
+    owner = "01xKeven"
+    url = git(repo, "remote", "get-url", "origin", check=False)
+    match = re.search(r"github\.com[:/]([^/]+)/", url or "")
+    if match:
+        owner = match.group(1)
+    name, email = owner, "%s@users.noreply.github.com" % owner
+    print("este clon no tiene identidad de git valida: la configuro como %s <%s> (solo en este clon)" % (name, email))
+    git(repo, "config", "user.name", name)
+    git(repo, "config", "user.email", email)
+
+
+def check_version_bump(target, addon_id, version, source):
+    """Contenido distinto con la MISMA version = Kodi no actualiza. Se corta aqui."""
+    zip_path = os.path.join(target, "%s-%s.zip" % (addon_id, version))
+    if not os.path.isfile(zip_path):
+        return
+    files = source_files(source)
+    changed = []
+    with zipfile.ZipFile(zip_path) as archive:
+        published = set(archive.namelist())
+        for rel, path in sorted(files.items()):
+            entry = "%s/%s" % (addon_id, rel)
+            if entry not in published:
+                changed.append("%s (nuevo)" % rel)
+            elif archive.read(entry) != open(path, "rb").read():
+                changed.append(rel)
+        for entry in sorted(published):
+            if entry.endswith("/"):
+                continue
+            rel = entry[len(addon_id) + 1:] if entry.startswith(addon_id + "/") else entry
+            if rel not in files:
+                changed.append("%s (borrado)" % rel)
+    if changed:
+        raise SystemExit(
+            "el contenido del addon ha cambiado pero la version sigue siendo %s:\n  - %s\n"
+            "Sube la version en addon.xml antes de publicar (si no, Kodi cree que ya tiene "
+            "la ultima y no actualiza)." % (version, "\n  - ".join(changed[:10]))
+        )
+    print("contenido identico al ya publicado para la version %s (no hace falta subir version)" % version)
+
+
 def mirror_addon(source, target, addon_id):
     if os.path.isdir(target):
         shutil.rmtree(target)
@@ -87,6 +147,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     repo = validate_repo.find_repo_root(args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ensure_identity(repo)
     source = args.source or default_source(args.id)
     if not os.path.isfile(os.path.join(source, "addon.xml")):
         raise SystemExit("no encuentro %s/addon.xml (usa --source)" % source)
@@ -108,6 +169,7 @@ def main(argv=None):
     if not os.path.isdir(target):
         raise SystemExit("el addon %s no vive en este repo (%s no existe)" % (args.id, target))
 
+    check_version_bump(target, args.id, version, source)
     mirror_addon(source, target, args.id)
     build_zip(target, args.id, version)
 
@@ -132,6 +194,10 @@ def main(argv=None):
     message = "%s: %s" % (prefix, args.message) if args.message else prefix
     relative = [os.path.relpath(target, repo), "addons.xml", "addons.xml.md5"]
     git(repo, "add", "--", *relative)
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet", "--"] + relative, cwd=repo)
+    if staged.returncode == 0:
+        print("nada que publicar: addons.xml, el md5 y el zip ya estan exactamente igual (sin commit)")
+        return 0
     git(repo, "commit", "-m", message)
     print("commit: %s" % git(repo, "log", "-1", "--oneline"))
 
