@@ -1,0 +1,42 @@
+#!/bin/sh
+# Hook pre-commit versionado del repo 01xKeven: impide un commit que deje el
+# repositorio invalido para Kodi (es lo que provoco "no se pudo conectar al
+# repositorio": una declaracion <?xml ...?> en mitad de addons.xml).
+#
+# Se instala con:  python tools/install_hooks.py
+# Se puede saltar con:  git commit --no-verify   (no lo hagas con addons.xml)
+
+root=$(git rev-parse --show-toplevel)
+
+find_python() {
+  if [ -n "$REPO_PYTHON" ]; then
+    if [ -x "$REPO_PYTHON" ] || command -v "$REPO_PYTHON" >/dev/null 2>&1; then
+      echo "$REPO_PYTHON"
+      return
+    fi
+  fi
+  for candidate in python python3 py; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      echo "$candidate"
+      return
+    fi
+  done
+}
+
+python_bin=$(find_python)
+if [ -z "$python_bin" ]; then
+  echo "[pre-commit] no encuentro python: validacion OMITIDA (define REPO_PYTHON o instala python)"
+  exit 0
+fi
+
+py_extra=""
+[ "$python_bin" = "py" ] && py_extra="-3"
+
+"$python_bin" $py_extra "$root/tools/validate_repo.py" --root "$root" --quiet
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] COMMIT BLOQUEADO: el repositorio quedaria invalido para Kodi."
+  echo "             Publica con 'python tools/publish_addon.py --id <addon>'"
+  echo "             o arregla addons.xml / addons.xml.md5 / los zips."
+  exit 1
+fi
