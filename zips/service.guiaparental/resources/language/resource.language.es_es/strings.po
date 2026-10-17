@@ -129,8 +129,8 @@ msgid "TMDb API Key"
 msgstr "Clave API de TMDb"
 
 msgctxt "#30024"
-msgid "Enter your TMDb API key to enable post-credits scene detection."
-msgstr "Introduce tu clave API de TMDb para activar la detección de escenas post-créditos."
+msgid "TMDb API key for the post-credits scenes."
+msgstr "Clave API de TMDb para las escenas post-créditos."
 
 msgctxt "#30025"
 msgid "Overlay position"
@@ -143,3 +143,168 @@ msgstr "Arriba"
 msgctxt "#30027"
 msgid "Bottom"
 msgstr "Abajo"
+
+msgctxt "#30035"
+msgid "Rating"
+msgstr "Valoración"
+
+msgctxt "#30036"
+msgid "Rated"
+msgstr "Clasificación"
+
+msgctxt "#30037"
+msgid "votes"
+msgstr "votos"
+
+msgctxt "#30038"
+msgid "Show overlay"
+msgstr "Mostrar overlay"
+
+msgctxt "#30039"
+msgid "Show rating and votes"
+msgstr "Mostrar valoración y votos"
+
+msgctxt "#30040"
+msgid "Show age rating"
+msgstr "Mostrar clasificación por edades"
+
+msgctxt "#30041"
+msgid "Show post-credits scenes (TMDb API required)"
+msgstr "Mostrar escenas post-créditos (requiere API de TMDb)"
+
+msgctxt "#30042"
+msgid "Overlay design"
+msgstr "Diseño del overlay"
+
+msgctxt "#30043"
+msgid "Sidebar"
+msgstr "Barra lateral"
+
+msgctxt "#30046"
+msgid "Minimal"
+msgstr "Minimalista"
+
+msgctxt "#30048"
+msgid "Overlay animation"
+msgstr "Animación del overlay"
+
+msgctxt "#30049"
+msgid "Fade"
+msgstr "Fundido"
+
+msgctxt "#30050"
+msgid "Slide side"
+msgstr "Deslizar lateral"
+
+msgctxt "#30051"
+msgid "Slide vertical"
+msgstr "Deslizar vertical"
+
+msgctxt "#30052"
+msgid "Staggered"
+msgstr "Escalonada"
+
+msgctxt "#30053"
+msgid "No animation"
+msgstr "Sin animación"
+
+msgctxt "#30054"
+msgid "Show overall level"
+msgstr "Mostrar nivel general"
+
+msgctxt "#30055"
+msgid "Overall level"
+msgstr "Nivel general"
+
+msgctxt "#30056"
+msgid "Show year, runtime and genres"
+msgstr "Mostrar año, duración y géneros"
+
+msgctxt "#30057"
+msgid "Show IMDb ID"
+msgstr "Mostrar ID de IMDb"
+
+msgctxt "#30058"
+msgid "Show duration bar"
+msgstr "Mostrar barra de duración"
+
+msgctxt "#30059"
+msgid "Year"
+msgstr "Año"
+
+msgctxt "#30060"
+msgid "Runtime"
+msgstr "Duración"
+
+msgctxt "#30061"
+msgid "Genres"
+msgstr "Géneros"
+
+msgctxt "#30062"
+msgid "IMDb ID"
+msgstr "ID IMDb"
+
+msgctxt "#30063"
+msgid "Classic (original)"
+msgstr "Clásica (original)"
+
+msgctxt "#30064"
+msgid "Warns if there is a scene after the credits. Needs a TMDb API key (API tab)."
+msgstr "Avisa si hay escena tras los créditos. Necesita clave API de TMDb (pestaña API)."
+
+msgctxt "#30065"
+msgid "Note: some changes require restarting Kodi"
+msgstr "Nota: algunos cambios requieren reiniciar Kodi"
+
+msgctxt "#30066"
+msgid "Settings are applied to the next video you play. If you update or reinstall the addon (or edit its files), restart Kodi for the changes to take effect."
+msgstr "Los ajustes se aplican en el siguiente vídeo que reproduzcas. Si actualizas o reinstalas el addon (o editas sus archivos), reinicia Kodi para que los cambios se apliquen."
+
+msgctxt "#30067"
+msgid "Shows or hides the whole content notice."
+msgstr "Muestra u oculta todo el aviso de contenido."
+
+msgctxt "#30068"
+msgid "Where it appears: top or bottom of the screen."
+msgstr "Dónde aparece: arriba o abajo de la pantalla."
+
+msgctxt "#30069"
+msgid "Shape of the notice: side bar or minimal."
+msgstr "Forma del aviso: barra lateral o minimalista."
+
+msgctxt "#30070"
+msgid "How it appears and disappears."
+msgstr "Cómo aparece y desaparece el aviso."
+
+msgctxt "#30071"
+msgid "Seconds of playback before showing it (0-30)."
+msgstr "Segundos de reproducción antes de mostrarlo (0-30)."
+
+msgctxt "#30072"
+msgid "Seconds it stays on screen (0-30)."
+msgstr "Segundos que se queda en pantalla (0-30)."
+
+msgctxt "#30073"
+msgid "IMDb score and number of votes."
+msgstr "Nota de IMDb y número de votos."
+
+msgctxt "#30074"
+msgid "Recommended age rating (for example, PG-13)."
+msgstr "Clasificación por edades (por ejemplo, +13)."
+
+msgctxt "#30075"
+msgid "Overall content level, from mild to severe."
+msgstr "Nivel general del contenido, de leve a severo."
+
+msgctxt "#30076"
+msgid "Release year, runtime and genres."
+msgstr "Año de estreno, duración y géneros."
+
+msgctxt "#30077"
+msgid "The ttxxxxxxx code of the title on IMDb."
+msgstr "El código ttxxxxxxx del título en IMDb."
+
+msgctxt "#30078"
+msgid "Bar with the video progress."
+msgstr "Barra con el avance del vídeo."
+

@@ -7,7 +7,7 @@ import requests
 
 # Configuración del Addon
 _addon_name = "Control Parental IMDb"
-ADDON = xbmcaddon.Addon()
+ADDON = xbmcaddon.Addon('service.guiaparental')
 
 # Diccionario para los colores y símbolos de severidad
 SEVERITY_VISUALS = {
@@ -43,6 +43,32 @@ STRING_MAPPING = {
     'error_connect': 30017,
     'keyboard_prompt': 30018,
     'post_credits': 30021,
+    'rating': 30035,
+    'rated': 30036,
+    'votes': 30037,
+    'show_overlay': 30038,
+    'show_rating': 30039,
+    'show_certificate': 30040,
+    'show_post_credits': 30041,
+    'layout': 30042,
+    'layout_sidebar': 30043,
+    'layout_minimal': 30046,
+    'animation': 30048,
+    'anim_fade': 30049,
+    'anim_slide': 30050,
+    'anim_slide_v': 30051,
+    'anim_stagger': 30052,
+    'anim_none': 30053,
+    'anim_classic': 30063,
+    'show_overall': 30054,
+    'overall': 30055,
+    'show_extra_meta': 30056,
+    'show_imdb_id': 30057,
+    'show_countdown': 30058,
+    'year': 30059,
+    'runtime': 30060,
+    'genres': 30061,
+    'imdb_id': 30062,
 }
 
 FALLBACK_STRINGS = {
@@ -68,6 +94,32 @@ FALLBACK_STRINGS = {
         'error_connect': "No se pudo obtener la guía parental: {error}",
         'keyboard_prompt': "Introduce el ID de IMDb (ttxxxxxxx)",
         'post_credits': "Post-Créditos",
+        'rating': "Valoración",
+        'rated': "Clasificación",
+        'votes': "votos",
+        'show_overlay': "Mostrar overlay",
+        'show_rating': "Mostrar valoración y votos",
+        'show_certificate': "Mostrar clasificación por edades",
+        'show_post_credits': "Mostrar escenas post-créditos (requiere API de TMDb)",
+        'layout': "Diseño del overlay",
+        'layout_sidebar': "Barra lateral",
+        'layout_minimal': "Minimalista",
+        'animation': "Animación del overlay",
+        'anim_classic': "Clásica (original)",
+        'anim_fade': "Fundido",
+        'anim_slide': "Deslizar lateral",
+        'anim_slide_v': "Deslizar vertical",
+        'anim_stagger': "Escalonada",
+        'anim_none': "Sin animación",
+        'show_overall': "Mostrar nivel general",
+        'overall': "Nivel general",
+        'show_extra_meta': "Mostrar año, duración y géneros",
+        'show_imdb_id': "Mostrar ID de IMDb",
+        'show_countdown': "Mostrar barra de duración",
+        'year': "Año",
+        'runtime': "Duración",
+        'genres': "Géneros",
+        'imdb_id': "ID IMDb",
     },
     'en': {
         'SEXUAL_CONTENT': "Nudity",
@@ -91,6 +143,32 @@ FALLBACK_STRINGS = {
         'error_connect': "Could not retrieve parental guide: {error}",
         'keyboard_prompt': "Enter IMDb ID (ttxxxxxxx)",
         'post_credits': "Post-Credits",
+        'rating': "Rating",
+        'rated': "Rated",
+        'votes': "votes",
+        'show_overlay': "Show overlay",
+        'show_rating': "Show rating and votes",
+        'show_certificate': "Show age rating",
+        'show_post_credits': "Show post-credits scenes (TMDb API required)",
+        'layout': "Overlay design",
+        'layout_sidebar': "Sidebar",
+        'layout_minimal': "Minimal",
+        'animation': "Overlay animation",
+        'anim_classic': "Classic (original)",
+        'anim_fade': "Fade",
+        'anim_slide': "Slide side",
+        'anim_slide_v': "Slide vertical",
+        'anim_stagger': "Staggered",
+        'anim_none': "No animation",
+        'show_overall': "Show overall level",
+        'overall': "Overall level",
+        'show_extra_meta': "Show year, runtime and genres",
+        'show_imdb_id': "Show IMDb ID",
+        'show_countdown': "Show duration bar",
+        'year': "Year",
+        'runtime': "Runtime",
+        'genres': "Genres",
+        'imdb_id': "IMDb ID",
     }
 }
 
@@ -175,6 +253,10 @@ def get_tmdb_stinger_count(imdb_id):
     """
     api_key = get_tmdb_api_key()
     if not api_key:
+        # Las escenas post-créditos dependen de TMDb: sin clave de API no hay dato.
+        log("Sin clave de API de TMDb: no se pueden consultar las escenas "
+            "post-créditos. Configúrala en los ajustes del addon, pestaña «API».",
+            level=xbmc.LOGWARNING)
         return None
     if imdb_id in _tmdb_stinger_cache:
         return _tmdb_stinger_cache[imdb_id]
@@ -222,6 +304,70 @@ def severity_to_class(level):
         "severe":   (get_string("severe"),   "severeVotes"),
     }
     return mapping.get(level, (get_string("none"), "noneVotes"))
+
+
+def format_votes(n):
+    """Formatea el número de votos de forma compacta: 1200 -> 1.2k, 3253614 -> 3.3M."""
+    try:
+        n = int(n)
+    except Exception:
+        return ""
+    if n >= 1_000_000:
+        return ("%.1fM" % (n / 1_000_000.0)).replace(".0M", "M")
+    if n >= 1_000:
+        return ("%.1fk" % (n / 1_000.0)).replace(".0k", "k")
+    return str(n)
+
+
+def format_runtime(seconds):
+    """Formatea la duración: 8160 -> '2h 16min'."""
+    try:
+        total = int(seconds)
+    except Exception:
+        return ""
+    if total <= 0:
+        return ""
+    minutes = total // 60
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}min"
+    return f"{minutes}min"
+
+
+# IMDb devuelve los géneros en inglés; los traducimos al español si el idioma de Kodi lo es.
+_GENRES_ES = {
+    "Action": "Acción", "Adult": "Adultos", "Adventure": "Aventura", "Animation": "Animación",
+    "Biography": "Biografía", "Comedy": "Comedia", "Crime": "Crimen", "Documentary": "Documental",
+    "Drama": "Drama", "Family": "Familia", "Fantasy": "Fantasía", "Film-Noir": "Cine negro",
+    "Game-Show": "Concurso", "History": "Historia", "Horror": "Terror", "Music": "Música",
+    "Musical": "Musical", "Mystery": "Misterio", "News": "Noticias", "Reality-TV": "Reality show",
+    "Romance": "Romance", "Sci-Fi": "Ciencia ficción", "Short": "Cortometraje", "Sport": "Deporte",
+    "Talk-Show": "Tertulia", "Thriller": "Suspense", "War": "Bélica", "Western": "Western",
+}
+
+
+def translate_genres(genres):
+    """Traduce la lista de géneros de IMDb al idioma actual de Kodi (español o inglés)."""
+    if not genres:
+        return []
+    try:
+        lang = (xbmc.getLanguage(xbmc.ISO_639_1) or 'en').lower()
+    except Exception:
+        lang = 'en'
+    if lang.startswith('es'):
+        return [_GENRES_ES.get(g, g) for g in genres]
+    return list(genres)
+
+
+def get_bool_setting(setting_id, default=True):
+    """Lee un ajuste booleano del addon ('true'/'false')."""
+    try:
+        val = ADDON.getSetting(setting_id)
+    except Exception:
+        return default
+    if val is None or val == '':
+        return default
+    return str(val).strip().lower() in ('true', '1', 'yes', 'on')
 
 def get_episode_imdb_id(series_id, season, episode):
     """Resuelve el IMDb ID específico de un episodio usando la API de GraphQL de IMDb."""
@@ -299,13 +445,14 @@ def is_empty_guide(guide):
 def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=None):
     """
     Obtiene la guía parental directamente de IMDb usando la API de GraphQL.
-    Devuelve (title, parental_guide_list, stinger_info) o (None, None, None) en caso de error.
+    Devuelve (title, parental_guide_list, stinger_info, meta) o (None, None, None, None) en caso de error.
+    meta = { 'rating': float|None, 'votes': int|None, 'certificate': str|None }
     """
     if not imdb_id or not imdb_id.startswith('tt') or not imdb_id[2:].isdigit():
         log(f"ID de IMDb inválido: {imdb_id}", level=xbmc.LOGERROR)
         if not silent:
             xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_format"))
-        return None, None, None
+        return None, None, None, None
 
     if progress_dialog:
         progress_dialog.update(20, get_string("connecting"))
@@ -318,6 +465,24 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
             id
             titleText {
               text
+            }
+            ratingsSummary {
+              aggregateRating
+              voteCount
+            }
+            certificate {
+              rating
+            }
+            releaseYear {
+              year
+            }
+            runtime {
+              seconds
+            }
+            genres {
+              genres {
+                text
+              }
             }
             parentsGuide {
               categories {
@@ -348,34 +513,52 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
 
         if r.status_code != 200:
             log(f"IMDb GraphQL respondió con código {r.status_code}", level=xbmc.LOGWARNING)
-            return imdb_id, None, None
+            return imdb_id, None, None, None
 
         data = r.json()
         title_data = data.get("data", {}).get("title")
         if not title_data:
             log(f"No hay datos de título en GraphQL para ID: {imdb_id}")
-            return imdb_id, None, None
-            
+            return imdb_id, None, None, None
+
         movie_title = title_data.get("titleText", {}).get("text", imdb_id)
         parents_guide = title_data.get("parentsGuide")
-        
+
+        # Rating + votos + clasificación por edades (certificado IMDb)
+        ratings_summary = title_data.get("ratingsSummary") or {}
+        genres = []
+        try:
+            for g in ((title_data.get("genres") or {}).get("genres") or []):
+                if g and g.get("text"):
+                    genres.append(g["text"])
+        except Exception:
+            genres = []
+        meta = {
+            'rating': ratings_summary.get("aggregateRating"),
+            'votes': ratings_summary.get("voteCount"),
+            'certificate': (title_data.get("certificate") or {}).get("rating"),
+            'year': (title_data.get("releaseYear") or {}).get("year"),
+            'runtime': (title_data.get("runtime") or {}).get("seconds"),
+            'genres': genres,
+        }
+
         # Post-créditos: solo desde TMDB (número de tramos 0-2). Sin key -> None (sin fila).
         stinger_info = get_tmdb_stinger_info(imdb_id)
-        
+
         if not parents_guide:
             log(f"No hay guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, empty_guide(), stinger_info
+            return movie_title, empty_guide(), stinger_info, meta
 
         categories = parents_guide.get("categories", [])
         if not categories:
             log(f"No hay categorías de guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, empty_guide(), stinger_info
+            return movie_title, empty_guide(), stinger_info, meta
 
     except Exception as err:
         log(f"Error al conectar con IMDb GraphQL: {err}", level=xbmc.LOGERROR)
         if not silent:
             xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_connect").format(error=err))
-        return None, None, None
+        return None, None, None, None
 
     if progress_dialog:
         progress_dialog.update(70, get_string("processing"))
@@ -425,7 +608,7 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
     if progress_dialog:
         progress_dialog.update(95, get_string("finalizing"))
 
-    return movie_title, parental_guide, stinger_info
+    return movie_title, parental_guide, stinger_info, meta
 
 
 def process_id(imdb_id):
@@ -436,13 +619,17 @@ def process_id(imdb_id):
     pDialog.create(get_string("title"), get_string("connecting"))
 
     res = get_parental_guide(imdb_id, pDialog)
-    if res and len(res) == 3:
+    if res and len(res) == 4:
+        movie_title, guide, stinger_info, meta = res
+    elif res and len(res) == 3:
         movie_title, guide, stinger_info = res
+        meta = {}
     elif res and len(res) == 2:
         movie_title, guide = res
         stinger_info = None
+        meta = {}
     else:
-        movie_title, guide, stinger_info = None, None, None
+        movie_title, guide, stinger_info, meta = None, None, None, {}
 
     if not pDialog.iscanceled():
         pDialog.update(100, get_string("finalizing"))
@@ -451,12 +638,20 @@ def process_id(imdb_id):
     if movie_title is not None and guide is not None:
         if guide:
             text = ""
+            if get_bool_setting('show_rating', True) and meta.get('rating'):
+                votes_txt = (" / " + format_votes(meta.get('votes'))) if meta.get('votes') else ""
+                text += f"[B]{get_string('rating')}:[/B] [COLOR=FFD24A]{meta['rating']}{votes_txt}[/COLOR]\n"
+            if get_bool_setting('show_certificate', True) and meta.get('certificate'):
+                text += f"[B]{get_string('rated')}:[/B] [COLOR=4AC1FF]{meta['certificate']}[/COLOR]\n"
+            if (get_bool_setting('show_rating', True) and meta.get('rating')) or (get_bool_setting('show_certificate', True) and meta.get('certificate')):
+                text += "\n"
+
             for item in guide:
                 visual_info = SEVERITY_VISUALS.get(item['severity_class'], {'color': 'white', 'char': ' '})
                 color = visual_info['color']
                 text += f"{visual_info['char']} [B]{item['category']}:[/B] [COLOR={color}]{item['severity_text']}[/COLOR]\n\n"
 
-            if stinger_info and stinger_info.get('stinger_text'):
+            if stinger_info and stinger_info.get('stinger_text') and get_bool_setting('show_post_credits', True):
                 c_name = 'cyan' if stinger_info.get('has_stinger') else 'grey'
                 text += f"[B]{get_string('post_credits')}:[/B] [COLOR={c_name}]{stinger_info['stinger_text']}[/COLOR]\n"
 

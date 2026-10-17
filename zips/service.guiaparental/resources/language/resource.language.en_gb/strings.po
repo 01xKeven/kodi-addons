@@ -129,8 +129,8 @@ msgid "TMDb API Key"
 msgstr "TMDb API Key"
 
 msgctxt "#30024"
-msgid "Enter your TMDb API key to enable post-credits scene detection."
-msgstr "Enter your TMDb API key to enable post-credits scene detection."
+msgid "TMDb API key for the post-credits scenes."
+msgstr "TMDb API key for the post-credits scenes."
 
 msgctxt "#30025"
 msgid "Overlay position"
@@ -143,3 +143,168 @@ msgstr "Top"
 msgctxt "#30027"
 msgid "Bottom"
 msgstr "Bottom"
+
+msgctxt "#30035"
+msgid "Rating"
+msgstr "Rating"
+
+msgctxt "#30036"
+msgid "Rated"
+msgstr "Rated"
+
+msgctxt "#30037"
+msgid "votes"
+msgstr "votes"
+
+msgctxt "#30038"
+msgid "Show overlay"
+msgstr "Show overlay"
+
+msgctxt "#30039"
+msgid "Show rating and votes"
+msgstr "Show rating and votes"
+
+msgctxt "#30040"
+msgid "Show age rating"
+msgstr "Show age rating"
+
+msgctxt "#30041"
+msgid "Show post-credits scenes (TMDb API required)"
+msgstr "Show post-credits scenes (TMDb API required)"
+
+msgctxt "#30042"
+msgid "Overlay design"
+msgstr "Overlay design"
+
+msgctxt "#30043"
+msgid "Sidebar"
+msgstr "Sidebar"
+
+msgctxt "#30046"
+msgid "Minimal"
+msgstr "Minimal"
+
+msgctxt "#30048"
+msgid "Overlay animation"
+msgstr "Overlay animation"
+
+msgctxt "#30049"
+msgid "Fade"
+msgstr "Fade"
+
+msgctxt "#30050"
+msgid "Slide side"
+msgstr "Slide side"
+
+msgctxt "#30051"
+msgid "Slide vertical"
+msgstr "Slide vertical"
+
+msgctxt "#30052"
+msgid "Staggered"
+msgstr "Staggered"
+
+msgctxt "#30053"
+msgid "No animation"
+msgstr "No animation"
+
+msgctxt "#30054"
+msgid "Show overall level"
+msgstr "Show overall level"
+
+msgctxt "#30055"
+msgid "Overall level"
+msgstr "Overall level"
+
+msgctxt "#30056"
+msgid "Show year, runtime and genres"
+msgstr "Show year, runtime and genres"
+
+msgctxt "#30057"
+msgid "Show IMDb ID"
+msgstr "Show IMDb ID"
+
+msgctxt "#30058"
+msgid "Show duration bar"
+msgstr "Show duration bar"
+
+msgctxt "#30059"
+msgid "Year"
+msgstr "Year"
+
+msgctxt "#30060"
+msgid "Runtime"
+msgstr "Runtime"
+
+msgctxt "#30061"
+msgid "Genres"
+msgstr "Genres"
+
+msgctxt "#30062"
+msgid "IMDb ID"
+msgstr "IMDb ID"
+
+msgctxt "#30063"
+msgid "Classic (original)"
+msgstr "Classic (original)"
+
+msgctxt "#30064"
+msgid "Warns if there is a scene after the credits. Needs a TMDb API key (API tab)."
+msgstr "Warns if there is a scene after the credits. Needs a TMDb API key (API tab)."
+
+msgctxt "#30065"
+msgid "Note: some changes require restarting Kodi"
+msgstr "Note: some changes require restarting Kodi"
+
+msgctxt "#30066"
+msgid "Settings are applied to the next video you play. If you update or reinstall the addon (or edit its files), restart Kodi for the changes to take effect."
+msgstr "Settings are applied to the next video you play. If you update or reinstall the addon (or edit its files), restart Kodi for the changes to take effect."
+
+msgctxt "#30067"
+msgid "Shows or hides the whole content notice."
+msgstr "Shows or hides the whole content notice."
+
+msgctxt "#30068"
+msgid "Where it appears: top or bottom of the screen."
+msgstr "Where it appears: top or bottom of the screen."
+
+msgctxt "#30069"
+msgid "Shape of the notice: side bar or minimal."
+msgstr "Shape of the notice: side bar or minimal."
+
+msgctxt "#30070"
+msgid "How it appears and disappears."
+msgstr "How it appears and disappears."
+
+msgctxt "#30071"
+msgid "Seconds of playback before showing it (0-30)."
+msgstr "Seconds of playback before showing it (0-30)."
+
+msgctxt "#30072"
+msgid "Seconds it stays on screen (0-30)."
+msgstr "Seconds it stays on screen (0-30)."
+
+msgctxt "#30073"
+msgid "IMDb score and number of votes."
+msgstr "IMDb score and number of votes."
+
+msgctxt "#30074"
+msgid "Recommended age rating (for example, PG-13)."
+msgstr "Recommended age rating (for example, PG-13)."
+
+msgctxt "#30075"
+msgid "Overall content level, from mild to severe."
+msgstr "Overall content level, from mild to severe."
+
+msgctxt "#30076"
+msgid "Release year, runtime and genres."
+msgstr "Release year, runtime and genres."
+
+msgctxt "#30077"
+msgid "The ttxxxxxxx code of the title on IMDb."
+msgstr "The ttxxxxxxx code of the title on IMDb."
+
+msgctxt "#30078"
+msgid "Bar with the video progress."
+msgstr "Bar with the video progress."
+
