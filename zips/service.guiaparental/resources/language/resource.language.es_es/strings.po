@@ -281,8 +281,8 @@ msgid "Seconds of playback before showing it (0-30)."
 msgstr "Segundos de reproducción antes de mostrarlo (0-30)."
 
 msgctxt "#30072"
-msgid "Seconds it stays on screen (0-30)."
-msgstr "Segundos que se queda en pantalla (0-30)."
+msgid "Seconds it stays on screen (1-30)."
+msgstr "Segundos que se queda en pantalla (1-30)."
 
 msgctxt "#30073"
 msgid "IMDb score and number of votes."
