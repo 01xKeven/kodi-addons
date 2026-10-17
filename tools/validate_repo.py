@@ -178,12 +178,31 @@ def fetch(url, timeout=30):
         return response.read()
 
 
-def check_net(repo, content, digest, problems, warnings, retries, wait):
+def pin_url(url, pin):
+    """Cambia la rama de las URLs de nuestro repo por el commit indicado (inmutable).
+
+    Sin esto, la comprobacion de red de un commit antiguo compara su addons.xml con
+    el que ya sirve main (mas nuevo) y falla en falso cuando se encadenan pushes.
+    """
+    if not pin or not url:
+        return url
+    prefix = "https://raw.githubusercontent.com/01xKeven/kodi-addons/"
+    if not url.startswith(prefix):
+        return url
+    rest = url[len(prefix):]
+    if "/" not in rest:
+        return url
+    return prefix + pin + "/" + rest.split("/", 1)[1]
+
+
+def check_net(repo, content, digest, problems, warnings, retries, wait, pin=None):
     """Comprueba lo que Kodi descarga de verdad (y la cache de la CDN)."""
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
         return
+    if pin:
+        print("  (URLs de nuestro repo comprobadas en el commit %s)" % pin[:7])
     targets = []
     for addon in root.findall("addon"):
         for extension in addon.findall("extension"):
@@ -200,6 +219,8 @@ def check_net(repo, content, digest, problems, warnings, retries, wait):
         if "01xKeven/kodi-addons" not in info:
             print("  (omito repo ajeno: %s -> %s)" % (addon_id, info))
             continue
+        info = pin_url(info, pin)
+        checksum = pin_url(checksum, pin)
         print("  comprobando %s" % info)
         try:
             served = fetch(info)
@@ -239,6 +260,7 @@ def check_net(repo, content, digest, problems, warnings, retries, wait):
                 problems.append("%s dice %s y el fichero es %s" % (checksum, online_md5, digest))
         if datadir and "01xKeven/kodi-addons" in datadir:
             base = datadir if datadir.endswith("/") else datadir + "/"
+            base = pin_url(base, pin)
             for addon in root.findall("addon"):
                 addon_id, version = addon.get("id"), addon.get("version")
                 url = "%s%s/%s-%s.zip" % (base, addon_id, addon_id, version)
@@ -267,6 +289,9 @@ def main(argv=None):
     parser.add_argument("--net", action="store_true", help="comprueba tambien lo que sirve la URL de Kodi")
     parser.add_argument("--retries", type=int, default=10, help="reintentos si la CDN sirve version vieja (10 = ~5 min)")
     parser.add_argument("--wait", type=int, default=30, help="segundos entre reintentos")
+    parser.add_argument("--pin", default=None,
+                        help="comprueba las URLs de nuestro repo en ese commit/rama "
+                             "(inmutable; en CI se pasa el SHA del propio commit)")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -277,7 +302,7 @@ def main(argv=None):
     problems, warnings = [], []
     content, digest = check_local(repo, problems, warnings)
     if args.net and content:
-        check_net(repo, content, digest, problems, warnings, args.retries, args.wait)
+        check_net(repo, content, digest, problems, warnings, args.retries, args.wait, args.pin)
 
     for warning in warnings:
         print("  aviso: %s" % warning)

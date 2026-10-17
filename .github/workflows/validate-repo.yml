@@ -25,6 +25,14 @@ jobs:
       - name: Validate addons.xml, checksum and zips
         run: python tools/validate_repo.py --root .
 
-      - name: Check what Kodi actually downloads (repository URL + CDN)
+      - name: Check what Kodi actually downloads (this commit, immutable URLs)
         if: github.event_name != 'pull_request'
-        run: python tools/validate_repo.py --root . --net --retries 10 --wait 30
+        run: python tools/validate_repo.py --root . --net --retries 10 --wait 30 --pin "${{ github.sha }}"
+
+      # Informativo: mira lo que sirve ahora la rama main. Si otro push acaba de
+      # publicar algo mas nuevo, la cache de la CDN puede ir por detras; eso no es
+      # un fallo de este commit, asi que no bloquea (evita correos en falso).
+      - name: Info: what the Kodi URL (main) serves right now
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: python tools/validate_repo.py --root . --net --retries 2 --wait 15
