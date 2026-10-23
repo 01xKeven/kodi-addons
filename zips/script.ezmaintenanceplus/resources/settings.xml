@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+	<category label="Mantenimiento">
+		<setting type="lsep" label="Limpieza automática al iniciar Kodi" />
+		<setting id="filesize_alert" type="slider" label="Tamaño máximo de la carpeta de paquetes (MB)" default="200" range="25,500" option="int" />
+		<setting id="packagenumbers_alert" type="slider" label="Número máximo de archivos zip en paquetes" default="50" range="5,200" option="int" />
+		<setting id="filesizethumb_alert" type="slider" label="Tamaño máximo de la carpeta de miniaturas (MB)" default="500" range="50,2000" option="int" />
+		<setting type="lsep" label="Otras opciones" />
+		<setting id="startup.cache" type="bool" label="Limpiar también la caché al iniciar Kodi" default="true" />
+		<setting id="notify_mode" type="bool" label="Mostrar estado (solo si no hubo limpieza)" default="false" />
+		<setting type="lsep" label="Limpieza programada" />
+		<setting id="autoCleanDays" type="slider" label="Limpiar caché cada X días (0 = nunca)" default="0" range="0,365" option="int" />
+		<setting id="autoCleanHour" type="slider" label="Hora de la limpieza (0-23)" default="4" range="0,23" option="int" enable="!eq(-1,0)" subsetting="true" />
+	</category>
+
+	<category label="Creador de Wizards">
+		<setting id="enable_wiz1" type="bool" label="Activar wizard" default="false"/>
+		<setting id="name1" type="text" label="Nombre" default="name" enable="!eq(-1,false)"/>
+		<setting id="url1" type="text" label="URL del zip" default="zip url" enable="!eq(-2,false)"/>
+		<setting id="img1" type="text" label="Imagen" default="special://home/addons/script.ezmaintenanceplus/fanart.jpg" enable="!eq(-3,false)"/>
+
+		<setting id="enable_wiz2" type="bool" label="Activar wizard" default="false"/>
+		<setting id="name2" type="text" label="Nombre" default="name" enable="!eq(-1,false)"/>
+		<setting id="url2" type="text" label="URL del zip" default="https://" enable="!eq(-2,false)"/>
+		<setting id="img2" type="text" label="Imagen" default="special://home/addons/script.ezmaintenanceplus/fanart.jpg" enable="!eq(-3,false)"/>
+
+		<setting id="enable_wiz3" type="bool" label="Activar wizard" default="false"/>
+		<setting id="name3" type="text" label="Nombre" default="name" enable="!eq(-1,false)"/>
+		<setting id="url3" type="text" label="URL del zip" default="https://" enable="!eq(-2,false)"/>
+		<setting id="img3" type="text" label="Imagen" default="special://home/addons/script.ezmaintenanceplus/fanart.jpg" enable="!eq(-3,false)"/>
+
+		<setting id="enable_wiz4" type="bool" label="Activar wizard" default="false"/>
+		<setting id="name4" type="text" label="Nombre" default="name" enable="!eq(-1,false)"/>
+		<setting id="url4" type="text" label="URL del zip" default="https://" enable="!eq(-2,false)"/>
+		<setting id="img4" type="text" label="Imagen" default="special://home/addons/script.ezmaintenanceplus/fanart.jpg" enable="!eq(-3,false)"/>
+
+		<setting id="enable_wiz5" type="bool" label="Activar wizard" default="false"/>
+		<setting id="name5" type="text" label="Nombre" default="" enable="!eq(-1,false)"/>
+		<setting id="url5" type="text" label="URL del zip" default="http://" enable="!eq(-2,false)"/>
+		<setting id="img5" type="text" label="Imagen" default="special://home/addons/script.ezmaintenanceplus/fanart.jpg" enable="!eq(-3,false)"/>
+    </category>
+	<category label="Copia de seguridad / Restaurar">
+		<setting id="BackupFixSpecialHome" type="bool" label="Reemplazar la carpeta home por special://home en los xml" default="false" />
+		<setting id="download.path" type="folder" label="Ubicación de las copias de seguridad" visible="True" />
+		<setting id="restore.path" type="folder" label="Restaurar desde carpeta de zips" visible="True" />
+    </category>
+</settings>
