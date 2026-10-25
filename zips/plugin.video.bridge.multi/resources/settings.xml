@@ -9,6 +9,7 @@
         <setting id="live_switch_on_pause" type="enum" label="Al pausar la reproducción" values="Preguntar si desea cambiar de enlace (Recomendado)|Abrir ventana de enlaces directamente|Desactivado" default="0" />
         <setting id="on_link_fail" type="enum" label="Al fallar la conexión con un enlace" values="Reabrir ventana con enlace marcado (Recomendado)|Desactivado (Cerrar)" default="0" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
+        <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="10" range="0,1,60" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
         <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="true" />
         
@@ -17,6 +18,7 @@
         <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="25" range="5,1,35" option="int" />
         <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 6 - 8)" default="8" range="1,1,25" option="int" />
         <setting id="verify_timeout" type="slider" label="Tiempo límite por servidor en verificación (segundos) (Recomendado: 8 - 12)" default="10" range="3,1,30" option="int" />
+        <setting id="verify_max_functional" type="slider" label="Detener verificación al alcanzar (enlaces funcionales, 0 = sin límite)" default="10" range="0,1,50" option="int" />
         <setting id="autoplay_resolve_timeout" type="slider" label="Tiempo límite por servidor en autoplay (segundos) (Recomendado: 10 - 15)" default="12" range="5,5,60" option="int" />
         <setting id="max_links_list" type="slider" label="Enlaces máximos en la lista (Recomendado: 40 - Más puede ralentizar o colgar Kodi)" default="40" range="10,5,100" option="int" />
         <setting type="sep" />

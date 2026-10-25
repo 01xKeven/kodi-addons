@@ -53,7 +53,10 @@ sys.modules['htmlentitydefs'] = html.entities
 sys.modules['urlparse'] = uparse
 sys.modules['cookielib'] = http.cookiejar
 
-handle = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else -1
+handle = -1
+if len(sys.argv) > 1 and sys.argv[1]:
+    try: handle = int(sys.argv[1])
+    except Exception: handle = -1
 original_argv = list(sys.argv)
 
 import xbmc
@@ -137,6 +140,7 @@ BOOKMARKS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_bookmarks.json')
 CONTINUE_WATCHING_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_continue_watching.json')
 CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
 CHANNELS_JSON_FILE = os.path.join(BRIDGE_DATA_PATH, 'channels.json')
+SEARCH_LOCK_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_search.lock')
 
 _SEARCH_CACHE_LOCK = threading.Lock()
 
@@ -565,6 +569,132 @@ def _set_dialog_active_global(active):
     except Exception:
         pass
 
+def _acquire_search_lock_atomic(search_title=''):
+    """Adquiere el bloqueo de búsqueda global de forma 100% atómica usando
+    un cerrojo a nivel de kernel del SO (O_CREAT | O_EXCL) y propiedades de ventana de Kodi."""
+    now = time.time()
+    try:
+        w = xbmcgui.Window(10000)
+    except Exception:
+        w = None
+
+    # 1. Verificar si existe cerrojo en disco previo
+    try:
+        if 'SEARCH_LOCK_FILE' in globals() and os.path.exists(SEARCH_LOCK_FILE):
+            mtime = os.path.getmtime(SEARCH_LOCK_FILE)
+            if (now - mtime) > 90:
+                try: os.remove(SEARCH_LOCK_FILE)
+                except Exception: pass
+            else:
+                return False
+    except Exception:
+        pass
+
+    # 2. Verificar propiedad en memoria de Kodi
+    try:
+        if w and w.getProperty('BridgeMulti.SearchProcessRunning') == 'true':
+            st = w.getProperty('BridgeMulti.SearchProcessStartTime')
+            if st and (now - float(st)) <= 90:
+                return False
+            else:
+                try:
+                    w.setProperty('BridgeMulti.SearchProcessRunning', 'false')
+                except Exception: pass
+    except Exception:
+        pass
+
+    # 3. Intentar crear el archivo de cerrojo de forma ATÓMICA en el kernel del SO
+    fd = None
+    try:
+        if 'SEARCH_LOCK_FILE' in globals():
+            lock_dir = os.path.dirname(SEARCH_LOCK_FILE)
+            if not os.path.exists(lock_dir):
+                try: os.makedirs(lock_dir, exist_ok=True)
+                except Exception: pass
+            fd = os.open(SEARCH_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            payload = "%s|%f|%d" % (str(search_title or ''), now, os.getpid())
+            os.write(fd, payload.encode('utf-8'))
+    except (FileExistsError, OSError):
+        # Otro proceso ganó la carrera atómica en este mismo instante
+        return False
+    finally:
+        if fd is not None:
+            try: os.close(fd)
+            except Exception: pass
+
+    # 4. Establecer las propiedades en memoria en Window(10000)
+    try:
+        if w:
+            w.setProperty('BridgeMulti.SearchProcessRunning', 'true')
+            w.setProperty('BridgeMulti.SearchProcessStartTime', str(now))
+            if search_title:
+                w.setProperty('BridgeMulti.SearchProcessTitle', str(search_title))
+    except Exception:
+        pass
+
+    return True
+
+def _update_search_lock_title(search_title):
+    """Actualiza el título del contenido una vez resuelta la traducción."""
+    if not search_title: return
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.SearchProcessTitle', str(search_title))
+    except Exception:
+        pass
+
+def _get_search_process_title_global():
+    try:
+        t = xbmcgui.Window(10000).getProperty('BridgeMulti.SearchProcessTitle')
+        if t: return t
+    except Exception:
+        pass
+    try:
+        if 'SEARCH_LOCK_FILE' in globals() and os.path.exists(SEARCH_LOCK_FILE):
+            data = open(SEARCH_LOCK_FILE, 'r', encoding='utf-8', errors='ignore').read()
+            if '|' in data:
+                return data.split('|')[0]
+    except Exception:
+        pass
+    return ''
+
+def _is_search_process_running_global():
+    now = time.time()
+    try:
+        if 'SEARCH_LOCK_FILE' in globals() and os.path.exists(SEARCH_LOCK_FILE):
+            mtime = os.path.getmtime(SEARCH_LOCK_FILE)
+            if (now - mtime) <= 90:
+                return True
+            else:
+                try: os.remove(SEARCH_LOCK_FILE)
+                except Exception: pass
+    except Exception:
+        pass
+    try:
+        w = xbmcgui.Window(10000)
+        if w.getProperty('BridgeMulti.SearchProcessRunning') == 'true':
+            st = w.getProperty('BridgeMulti.SearchProcessStartTime')
+            if st and (now - float(st)) <= 90:
+                return True
+    except Exception:
+        pass
+    return False
+
+def _release_search_lock_atomic():
+    """Libera el cerrojo atómico tanto en disco como en memoria."""
+    try:
+        if 'SEARCH_LOCK_FILE' in globals() and os.path.exists(SEARCH_LOCK_FILE):
+            try: os.remove(SEARCH_LOCK_FILE)
+            except Exception: pass
+    except Exception:
+        pass
+    try:
+        w = xbmcgui.Window(10000)
+        w.setProperty('BridgeMulti.SearchProcessRunning', 'false')
+        w.clearProperty('BridgeMulti.SearchProcessStartTime')
+        w.clearProperty('BridgeMulti.SearchProcessTitle')
+    except Exception:
+        pass
+
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
@@ -811,6 +941,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.Director')
                 xbmcgui.Window(10000).clearProperty('VideoPlayer.Director')
                 xbmcgui.Window(10000).clearProperty('MultiBridge.Director')
+                xbmcgui.Window(10000).clearProperty('script.trakt.ids')
             except Exception: pass
 
         if last_saved_time > 0 or tot_time > 0:
@@ -1359,8 +1490,9 @@ def _prepare_playable_link(link, engine='alfa'):
 # Request URL Parameter Parsing (Supports Nested URLs)
 # ---------------------------------------------------------
 def get_param(name):
-    if len(sys.argv) > 2 and sys.argv[2]:
-        params = sys.argv[2]
+    for arg in (sys.argv[1:] if len(sys.argv) > 1 else []):
+        if not arg or not isinstance(arg, str): continue
+        params = arg.split('?', 1)[1] if '?' in arg else arg
         if params.startswith('?'): params = params[1:]
         for pair in params.split('&'):
             if '=' in pair:
@@ -2732,9 +2864,12 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     checked_count = [0]
     finished_indices = set()
     lock = threading.Lock()
+    stop_event = threading.Event()
 
     max_workers = _get_int_setting('verify_threads_max', 8)
     verify_timeout = _get_int_setting('verify_timeout', 30)
+    verify_max_functional = _get_int_setting('verify_max_functional', 10)
+    if verify_max_functional < 0: verify_max_functional = 0
     if max_workers < 1: max_workers = 1
     if verify_timeout < 3: verify_timeout = 3
 
@@ -2798,6 +2933,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             return None
 
     def _test_worker(orig_idx, lnk):
+        if stop_event.is_set(): return
         # Doble salvaguarda: si es torrent, jamás verificar por red
         if _is_torrent_link(lnk):
             with lock:
@@ -2812,6 +2948,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             with lock:
                 _hit = prep_cache.get(_ckey, _CACHE_MISS)
             if _hit is _CACHE_MISS:
+                if stop_event.is_set(): return
                 _res = _resolve_one(lnk)
                 with lock:
                     prep_cache[_ckey] = _res
@@ -2819,6 +2956,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 _res = _hit
             if _res is None:
                 return
+            if stop_event.is_set(): return
             _cp = _res.clone() if hasattr(_res, 'clone') else _res
             with lock:
                 if orig_idx not in finished_indices:
@@ -2838,8 +2976,11 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     running = []
     i = 0
     try:
+        _verify_loop_start = time.time()
         while (i < len(threads) or running) and not xbmc.Monitor().abortRequested():
-            if p_dialog and p_dialog.iscanceled(): break
+            if p_dialog and p_dialog.iscanceled() and (time.time() - _verify_loop_start > 0.5):
+                xbmc.log("Multi Bridge: usuario canceló diálogo de verificación de enlaces", xbmc.LOGINFO)
+                break
             now = time.time()
             running = [(orig_idx, t, st) for (orig_idx, t, st) in running if t.is_alive() and (now - st < verify_timeout)]
 
@@ -2853,6 +2994,17 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 done = checked_count[0]
                 # Funcionales = resultados guardados menos los torrents de entrada
                 funcionales = len(verified_results) - _n_torrents
+            if verify_max_functional > 0 and funcionales >= verify_max_functional:
+                stop_event.set()
+                xbmc.log("Multi Bridge: límite de enlaces funcionales alcanzado (%d >= %d), finalizando verificación anticipadamente" % (funcionales, verify_max_functional), xbmc.LOGINFO)
+                if p_dialog:
+                    _l1 = 'Verificando %d enlaces' % len(links)
+                    _l2 = '[COLOR lime]%d Funcionales alcanzados (límite)[/COLOR]' % funcionales
+                    _l3 = '[COLOR grey]Completado anticipadamente[/COLOR]'
+                    try: p_dialog.update(100, "%s\n%s\n%s" % (_l1, _l2, _l3))
+                    except: pass
+                    time.sleep(0.3)
+                break
             if p_dialog:
                 pct = int((done / float(total_to_check)) * 100) if total_to_check else 100
                 _l1 = 'Verificando %d enlaces' % len(links)
@@ -2868,6 +3020,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             if not running and i >= len(threads): break
             time.sleep(0.1)
     finally:
+        stop_event.set()
         socket.setdefaulttimeout(orig_timeout)
 
     return [verified_results[orig_idx] for orig_idx in sorted(verified_results.keys()) if orig_idx in verified_results]
@@ -4995,10 +5148,14 @@ def _run_parallel_search_impl(engine='alfa'):
     try:
         p_dialog.close()
     except: pass
+    del p_dialog
     try:
-        xbmc.sleep(200)
+        xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+    except: pass
+    try:
+        xbmc.sleep(400)
     except:
-        time.sleep(0.2)
+        time.sleep(0.4)
 
     if not results_dict:
         _grace_start = time.time()
@@ -5021,14 +5178,14 @@ def _run_parallel_search_impl(engine='alfa'):
     try:
         global _LAST_SEARCH_TOKEN, _LAST_MERGED_PFS, _LAST_RESULTS_DICT, _LAST_SEARCH_THREADS
         _LAST_MERGED_PFS = set(
-            (ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch)
+            (ch.get('name') or ch.get('channel') or ch.get('id'))
             for ch in enabled_players
             if (ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch) in results_dict
         )
         _LAST_RESULTS_DICT = results_dict
         _LAST_SEARCH_TOKEN = (str(engine), str(target_tmdb or ''), str(p_season or ''), str(p_episode or ''), time.time())
         _LAST_SEARCH_THREADS = [
-            ((ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch), threads[idx])
+            ((ch.get('name') or ch.get('channel') or ch.get('id') or 'Canal'), threads[idx], (ch.get('id') or ch.get('channel') if isinstance(ch, dict) else ch))
             for idx, ch in enumerate(enabled_players)
             if idx in started_indices and threads[idx].is_alive()
         ]
@@ -5072,6 +5229,19 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
         if epi_s and _norm_id_str(_meta.get('episode')) and _norm_id_str(_meta.get('episode')) != epi_s:
             return 0
 
+        # Si la búsqueda principal tenía activada la verificación automática de enlaces,
+        # verificar también en segundo plano los enlaces tardíos antes de añadirlos
+        if _bridge_addon.getSetting('auto_verify_links') == 'true' or _meta.get('verified_only'):
+            try:
+                xbmc.log("Multi Bridge: verificando %d enlaces tardíos en segundo plano..." % len(new_links), xbmc.LOGINFO)
+                v_late = _verify_links_headless(new_links, engine=engine, p_dialog=None)
+                if not v_late:
+                    xbmc.log("Multi Bridge: ningún enlace tardío superó la verificación", xbmc.LOGINFO)
+                    return 0
+                new_links = v_late
+            except Exception as _ve:
+                xbmc.log("Multi Bridge: error verificando enlaces tardíos: %s" % _ve, xbmc.LOGWARNING)
+
         _cur = _sc.get('links', []) or []
         _have_urls = set()
         for _d in _cur:
@@ -5107,6 +5277,8 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
             if ram and 'links' in ram:
                 ram['links'].extend(fresh_raw)
                 ram['time'] = time.time()
+            elif ram is None:
+                _store_ram_search_cache(_cur + fresh_raw, _deserialize_item(_sc.get('item'), engine), _sc.get('meta', {}), engine)
         except: pass
 
         if added:
@@ -5114,16 +5286,20 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
                 xbmc.log("Multi Bridge: recolector tardio +%d enlaces de %s (total %d)" % (added, channel_name or '?', len(_sc['links'])), xbmc.LOGINFO)
             except: pass
 
-            # Mostrar siempre la notificación toast al usuario en cualquier dispositivo y pantalla
-            try:
-                _show_bridge_notification('Multi Bridge', '+%d enlaces de %s' % (added, channel_name or 'canal'), 3500)
+            # Pausa breve (150ms) para que el SO asiente la escritura de disco antes de invocar Container.Refresh
+            try: time.sleep(0.15)
             except: pass
 
             # Refrescar el contenedor si la lista de enlaces está abierta
             try:
-                _folder = xbmc.getInfoLabel('Container.FolderPath') or ''
-                if 'plugin.video.bridge.multi' in _folder and 'list_links' in _folder:
+                if _in_own_list():
                     xbmc.executebuiltin('Container.Refresh')
+            except Exception as _re:
+                xbmc.log("Multi Bridge: error refrescando contenedor: %s" % _re, xbmc.LOGWARNING)
+
+            # Mostrar la notificación toast al usuario tras refrescar
+            try:
+                _show_bridge_notification('Multi Bridge', '+%d enlaces de %s' % (added, channel_name or 'canal'), 3500)
             except: pass
     except Exception as _e:
         try: xbmc.log("Multi Bridge: _append_late_links error: %s" % _e, xbmc.LOGWARNING)
@@ -5137,25 +5313,29 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
         mon = xbmc.Monitor()
         t0 = time.time()
         done_pfs = set()
-        time.sleep(2.5)
+        time.sleep(0.5)
         while time.time() - t0 < deadline and not mon.abortRequested():
             try:
                 if _LAST_SEARCH_TOKEN != token:
                     return
                 avail_batch = []
-                for pf, res in list(_LAST_RESULTS_DICT.items()):
-                    if pf in _LAST_MERGED_PFS or pf in done_pfs:
-                        continue
+                for pf_tuple in list(_LAST_SEARCH_THREADS):
                     try:
-                        it, links = res
-                    except: continue
-                    if links:
+                        ch_name, th, ch_key = pf_tuple
+                    except Exception:
+                        continue
+                    if ch_name in _LAST_MERGED_PFS or ch_name in done_pfs:
+                        continue
+                    if ch_key in _LAST_RESULTS_DICT:
                         try:
-                            _ch = re.sub(r'^(Alfa|Balandro)-', '', str(pf).replace('.json', ''), flags=re.IGNORECASE)
-                        except: _ch = str(pf)
-                        avail_batch.append((pf, links, _ch))
-                    else:
-                        done_pfs.add(pf)
+                            it, links = _LAST_RESULTS_DICT[ch_key]
+                            if links:
+                                avail_batch.append((ch_name, links, ch_name))
+                            done_pfs.add(ch_name)
+                        except Exception:
+                            done_pfs.add(ch_name)
+                    elif not th.is_alive():
+                        done_pfs.add(ch_name)
 
                 if avail_batch:
                     all_batch_links = []
@@ -5164,7 +5344,6 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
                         all_batch_links.extend(links)
                         if ch_name not in channel_names:
                             channel_names.append(ch_name)
-                        done_pfs.add(pf)
 
                     if all_batch_links:
                         display_ch = ', '.join(channel_names[:3])
@@ -5175,9 +5354,10 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
                 # Terminar si no quedan hilos vivos pendientes
                 try:
                     alive = False
-                    for _pf, _th in list(_LAST_SEARCH_THREADS):
+                    for _pf_tuple in list(_LAST_SEARCH_THREADS):
                         try:
-                            if _pf not in _LAST_MERGED_PFS and _pf not in done_pfs and _th.is_alive():
+                            _ch_name, _th, _ = _pf_tuple
+                            if _ch_name not in _LAST_MERGED_PFS and _ch_name not in done_pfs and _th.is_alive():
                                 alive = True
                                 break
                         except: pass
@@ -5192,18 +5372,22 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
 _LAST_SEARCH_THREADS = []
 
 def _spawn_late_collector(engine, target_tmdb, season, episode):
-    """Arranca el recolector tardio si quedaron hilos vivos tras el cierre."""
+    """Arranca el recolector tardio si quedaron hilos vivos tras el cierre o resultados pendientes."""
     try:
         token = _LAST_SEARCH_TOKEN
         if not token:
             return
         alive = False
         try:
-            for _pf, _th in list(_LAST_SEARCH_THREADS):
+            for _item in list(_LAST_SEARCH_THREADS):
                 try:
-                    if _pf not in _LAST_MERGED_PFS and _th.is_alive():
-                        alive = True
-                        break
+                    _pf = _item[0]
+                    _th = _item[1]
+                    _ch_key = _item[2] if len(_item) > 2 else _pf
+                    if _pf not in _LAST_MERGED_PFS:
+                        if _th.is_alive() or (_ch_key in _LAST_RESULTS_DICT and _LAST_RESULTS_DICT[_ch_key][1]):
+                            alive = True
+                            break
                 except: pass
         except: pass
         if not alive:
@@ -5211,7 +5395,7 @@ def _spawn_late_collector(engine, target_tmdb, season, episode):
         th = threading.Thread(target=_late_collect_worker, args=(engine, target_tmdb, season, episode, token), daemon=True)
         th.start()
         try:
-            xbmc.log("Multi Bridge: recolector tardio activado (hilos rezagados en curso)", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: recolector tardio activado (hilos rezagados en curso o pendientes)", xbmc.LOGINFO)
         except: pass
     except: pass
 
@@ -5219,10 +5403,16 @@ def run_parallel_search(engine='alfa'):
     global _search_in_progress
     _search_in_progress = True
     _apply_silence_all()
+    _was_locked = _is_search_process_running_global()
+    if not _was_locked:
+        _t = title or get_param('title') or showname or get_param('showname') or ''
+        _acquire_search_lock_atomic(_t)
     try:
         return _run_parallel_search_impl(engine=engine)
     finally:
         _search_in_progress = False
+        if not _was_locked:
+            _release_search_lock_atomic()
 
 # ---------------------------------------------------------
 # Serialization and UI List Directory Display
@@ -5394,6 +5584,20 @@ def sync_tmdbhelper_playerstring(meta=None):
         p_str = json.dumps(p_dict)
         xbmcgui.Window(10000).setProperty('TMDbHelper.PlayerInfoString', p_str)
         xbmc.log(f"Multi Bridge: TMDbHelper.PlayerInfoString sincronizado -> {p_str}", xbmc.LOGINFO)
+        # Sincronizar IDs directamente para script.trakt (scrobbler global)
+        try:
+            _tr_ids = {}
+            if t_id: _tr_ids['tmdb'] = int(t_id) if str(t_id).isdigit() else t_id
+            if i_id: _tr_ids['imdb'] = i_id
+            if tv_id: _tr_ids['tvdb'] = int(tv_id) if str(tv_id).isdigit() else tv_id
+            _tr_val = str(meta.get('trakt') or '')
+            if _tr_val: _tr_ids['trakt'] = int(_tr_val) if _tr_val.isdigit() else _tr_val
+            if _tr_ids:
+                _tr_json = json.dumps(_tr_ids)
+                xbmcgui.Window(10000).setProperty('script.trakt.ids', _tr_json)
+                xbmc.log("Multi Bridge: script.trakt.ids en Window(10000) sincronizado -> " + _tr_json, xbmc.LOGINFO)
+        except Exception:
+            pass
 
         _c_logo = meta.get('clearlogo') or ''
         if not _c_logo and t_id:
@@ -6146,6 +6350,37 @@ def show_links_as_directory():
         engine = _RAM_SEARCH_CACHE.get('engine', 'alfa') or 'alfa'
         xbmc.log("Multi Bridge: show_links_as_directory rescate desde RAM cache global (%d enlaces)" % len(links), xbmc.LOGINFO)
 
+    # Si por colisión de refresco simultáneo aún no se leyeron enlaces, reintentar con micro-espera
+    if not links:
+        for _retry in range(5):
+            time.sleep(0.08)
+            if _RAM_SEARCH_CACHE and _RAM_SEARCH_CACHE.get('links'):
+                links = list(_RAM_SEARCH_CACHE.get('links', []))
+                matched_item = _RAM_SEARCH_CACHE.get('matched_item')
+                meta = dict(_RAM_SEARCH_CACHE.get('meta', {}))
+                engine = _RAM_SEARCH_CACHE.get('engine', 'alfa') or 'alfa'
+                xbmc.log("Multi Bridge: show_links_as_directory recuperado en reintento %d (%d enlaces)" % (_retry + 1, len(links)), xbmc.LOGINFO)
+                break
+            _retry_cache = _read_search_cache_atomic(max_attempts=3, delay=0.04)
+            if _retry_cache and _retry_cache.get('links'):
+                try:
+                    engine = _retry_cache.get('engine', 'alfa') or 'alfa'
+                    _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+                    _raw = _retry_cache.get('links', []) or []
+                    if _d_mods:
+                        links = [_deserialize_item_fast(_d_mods['Item'], _d_mods['InfoLabels'], l) for l in _raw]
+                        matched_item = _deserialize_item_fast(_d_mods['Item'], _d_mods['InfoLabels'], _retry_cache.get('item'))
+                    else:
+                        links = [_deserialize_item(l, engine) for l in _raw]
+                        matched_item = _deserialize_item(_retry_cache.get('item'), engine)
+                    links = [l for l in links if l is not None]
+                    meta = _retry_cache.get('meta', {}) or {}
+                    if links:
+                        _store_ram_search_cache(links, matched_item, meta, engine)
+                        xbmc.log("Multi Bridge: show_links_as_directory recuperado desde disco en reintento %d (%d enlaces)" % (_retry + 1, len(links)), xbmc.LOGINFO)
+                        break
+                except Exception: pass
+
     if not links:
         xbmcgui.Dialog().notification('Multi Bridge', 'No hay enlaces en caché', '', 3000)
         xbmcplugin.endOfDirectory(handle, succeeded=False)
@@ -6259,9 +6494,11 @@ def show_links_as_directory():
     _other_name   = 'Balandro' if engine == 'alfa' else 'Alfa'
     _rs_url  = 'plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s' % _other_engine
     _v_url   = 'plugin://plugin.video.bridge.multi/?action=verify_links'
+    _force_url = 'plugin://plugin.video.bridge.multi/?action=force_search'
     verified_only = meta.get('verified_only', False)
 
     base_ctx_items = []
+    base_ctx_items.append(('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'RunPlugin(%s)' % _force_url))
     if not (is_s and _other_engine == 'alfa'):
         base_ctx_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % _other_name, 'RunPlugin(%s)' % _rs_url))
     if not verified_only:
@@ -6403,7 +6640,9 @@ def show_links_as_directory():
         except Exception: pass
     xbmcplugin.setContent(handle, 'episodes')
     _apply_saved_view_mode()
-    xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+    # Si la ventana 10025 ya está visible y en nuestro listado, es un refresco dinámico: updateListing=True
+    _is_refresh = _in_own_list()
+    xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=_is_refresh, cacheToDisc=False)
     _apply_saved_view_mode()
     _start_view_mode_monitor()
 
@@ -7264,6 +7503,15 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
             try:
                 platformtools.dialog_select = _smart_alfa_select
                 platformtools.play_video(prepared, force_direct=True)
+                try:
+                    _pl_cur = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+                    _pl_pos = _pl_cur.getposition()
+                    if 0 <= _pl_pos < _pl_cur.size():
+                        _cur_li = _pl_cur[_pl_pos]
+                        if _cur_li is not None:
+                            set_listitem_info(_cur_li, meta=meta)
+                except Exception:
+                    pass
             finally:
                 if orig_select:
                     platformtools.dialog_select = orig_select
@@ -9745,14 +9993,20 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         elif aid in (self.ACTION_SHOW_INFO, 11, self.ACTION_CONTEXT_MENU, 117):
             other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
             try:
-                ans = _KODI_ORIG_DIALOG().yesno(
-                    'Multi Bridge',
-                    '¿Deseas buscar enlaces en [B]%s[/B]?' % other_eng_name,
-                    nolabel='Cancelar',
-                    yeslabel='Buscar en %s' % other_eng_name
-                )
-                if ans:
+                opts = [
+                    '[COLOR yellow]Forzar nueva búsqueda[/COLOR]',
+                    '[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name,
+                    '[COLOR deepskyblue]Verificar disponibilidad[/COLOR]'
+                ]
+                sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', opts)
+                if sel == 0:
+                    self.selected = 'force_search'
+                    self.close()
+                elif sel == 1:
                     self.selected = 'other_engine'
+                    self.close()
+                elif sel == 2:
+                    self.selected = 'verify_links'
                     self.close()
             except Exception:
                 pass
@@ -10081,6 +10335,14 @@ def _show_floating_links_dialog_impl(offset=0):
         last_tab = dlg.active_tab
         del dlg
 
+        if chosen_idx == 'force_search':
+            xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=force_search)')
+            return True
+
+        if chosen_idx == 'verify_links':
+            xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=verify_links)')
+            return True
+
         if chosen_idx == 'other_engine':
             _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
@@ -10160,8 +10422,12 @@ def _open_links_view(win_url=""):
         if not win_url:
             _ts = int(time.time())
             win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&t=%s' % _ts
-        xbmc.log("Multi Bridge: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
-        xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % win_url)
+        if xbmc.getCondVisibility("Window.IsVisible(10025)"):
+            xbmc.log("Multi Bridge: abriendo list_links via Container.Update -> " + win_url, xbmc.LOGINFO)
+            xbmc.executebuiltin('Container.Update("%s")' % win_url)
+        else:
+            xbmc.log("Multi Bridge: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
+            xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % win_url)
     else:
         show_floating_links_dialog()
 
@@ -10315,6 +10581,42 @@ def main():
         xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
         return
 
+    if action == 'force_search':
+        xbmc.log("Multi Bridge: 'Forzar nueva búsqueda' solicitado desde menú contextual", xbmc.LOGINFO)
+        _force_meta = {}
+        try:
+            _fc = _read_search_cache_atomic()
+            if _fc and isinstance(_fc, dict):
+                _force_meta = _fc.get('meta', {}) or {}
+        except Exception:
+            pass
+
+        # Invalida la cache de RAM y el timestamp de SEARCH_CACHE_FILE
+        global _RAM_SEARCH_CACHE
+        _RAM_SEARCH_CACHE = None
+        try:
+            if os.path.exists(SEARCH_CACHE_FILE):
+                os.remove(SEARCH_CACHE_FILE)
+        except Exception:
+            pass
+
+        _fm_title = _force_meta.get('title') or title or get_param('title') or ''
+        _fm_tmdb = _force_meta.get('tmdb') or tmdb_id or get_param('tmdb') or ''
+        _fm_s = _force_meta.get('season') or season or get_param('season') or ''
+        _fm_e = _force_meta.get('episode') or episode or get_param('episode') or ''
+
+        # Re-invoca la acción play con force_search=1 para ejecutar búsqueda limpia y fresca
+        _force_play_url = 'plugin://plugin.video.bridge.multi/?action=play&force_search=1'
+        if _fm_tmdb: _force_play_url += '&tmdb=%s' % _fm_tmdb
+        if _fm_title: _force_play_url += '&title=%s' % uparse.quote_plus(str(_fm_title))
+        if _fm_s and _fm_e: _force_play_url += '&season=%s&episode=%s' % (_fm_s, _fm_e)
+        for _fk in ('title_es', 'title_lat', 'year', 'showyear', 'showname', 'imdb', 'tvdb'):
+            _fv = _force_meta.get(_fk) or get_param(_fk) or ''
+            if _fv: _force_play_url += '&%s=%s' % (_fk, uparse.quote_plus(str(_fv)))
+
+        xbmc.executebuiltin('RunPlugin(%s)' % _force_play_url)
+        return
+
     if action == 'verify_links':
         verify_and_filter_links()
         return
@@ -10381,8 +10683,20 @@ def main():
             _show_bridge_notification('Multi Bridge', 'Enlace no disponible', 3000)
         return
 
-    if action == 'play':
-        # Cerrar inmediatamente el diálogo "Elige Acción" de TMDb Helper que queda abierto
+    def _play_action_impl(_tentative_title):
+        global plot, plot_lat, plot_es, tagline, tagline_lat, tagline_es
+        global title, title_es, title_lat, title_en, title_orig
+        global showname, year, showyear, season, episode
+        global tmdb_id, imdb_id, tvdb_id, trakt_id
+        global poster, fanart, thumbnail, director, clearlogo
+        try:
+            _prev_f = xbmc.getInfoLabel("Container.FolderPath") or ''
+            if _prev_f and "plugin.video.bridge.multi" not in _prev_f:
+                _bridge_addon.setSetting("last_caller_folder", _prev_f)
+                xbmc.log("Multi Bridge: last_caller_folder guardado -> " + _prev_f, xbmc.LOGINFO)
+        except Exception:
+            pass
+  # Cerrar inmediatamente el diálogo "Elige Acción" de TMDb Helper que queda abierto
         # mientras nuestro plugin corre. Lo hacemos al inicio antes de cualquier búsqueda.
         try:
             xbmc.executebuiltin('Dialog.Close(10101,true)')
@@ -10510,21 +10824,28 @@ def main():
             'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0]
         }
         sync_tmdbhelper_playerstring(_init_meta)
+        _update_search_lock_title(title or showname or _tentative_title)
 
         links = []
         matched_item = None
         meta = dict(_init_meta)
 
-        # Reutilizar cache reciente (<90s) SOLO si corresponde EXACTAMENTE al mismo contenido
+        # Reutilizar cache reciente si corresponde EXACTAMENTE al mismo contenido
         # (misma película o mismo episodio de serie con idéntica temporada y número de episodio)
+        # Respetar tiempo configurable (por defecto 10 min = 600s, 0 = buscar siempre).
+        # Si force_search=1 viene por parámetro, se omite la caché y se busca fresco.
+        _force_search = get_param('force_search') in ('1', 'true', 'True')
+        _cache_timeout_mins = _get_int_setting('cache_links_timeout', 10)
+        _cache_max_age_secs = max(0, _cache_timeout_mins * 60)
+
         _use_cache = False
         _cached_payload = None
         try:
-            if os.path.exists(SEARCH_CACHE_FILE):
+            if not _force_search and _cache_max_age_secs > 0 and os.path.exists(SEARCH_CACHE_FILE):
                 import time as _time
                 _mtime = os.path.getmtime(SEARCH_CACHE_FILE)
                 _age = _time.time() - _mtime
-                if _age < 90:
+                if _age < _cache_max_age_secs:
                     _c = _read_search_cache_atomic()
                     if _c and isinstance(_c, dict):
                         _c_meta = _c.get('meta', {}) or {}
@@ -10733,6 +11054,31 @@ def main():
                 _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
             _open_links_view(_win_url)
             return
+
+    if action == 'play':
+        _tentative_title = (title or get_param('title') or get_param('title_es') or get_param('title_lat') or showname or get_param('showname') or 'Contenido')
+        if not _acquire_search_lock_atomic(_tentative_title):
+            running_title = _get_search_process_title_global() or _tentative_title
+            msg = 'Ya hay una búsqueda en proceso'
+            if running_title:
+                msg += ' (%s)' % running_title
+            msg += '. Por favor, espera a que finalice.'
+            xbmc.log("Multi Bridge: Invocación duplicada interceptada. Ya hay un proceso activo: %s" % running_title, xbmc.LOGWARNING)
+            try:
+                xbmc.executebuiltin('Dialog.Close(10101,true)')
+            except Exception:
+                pass
+            _show_bridge_notification('Multi Bridge', msg, 3500)
+            if handle >= 0:
+                try: xbmcplugin.endOfDirectory(handle, succeeded=False)
+                except Exception: pass
+            return
+
+        try:
+            _play_action_impl(_tentative_title)
+        finally:
+            _release_search_lock_atomic()
+        return
 
     if url:
         search_item = None
