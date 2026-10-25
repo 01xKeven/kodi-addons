@@ -24,7 +24,43 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import repolib  # noqa: E402
 import validate_repo  # noqa: E402
 
-SKIP_FILES = ("__pycache__", ".pyc", ".pyo", ".log", ".zip", ".pdb", ".bak")
+SKIP_DIRS = {
+    "__pycache__", ".git", ".github", ".vscode", ".idea",
+    ".pytest_cache", ".mypy_cache", ".tox", "venv", ".venv", "env"
+}
+
+SKIP_EXTENSIONS = (
+    # Python bytecode y caches
+    ".pyc", ".pyo", ".pyd",
+    # Backups y temporales de editores
+    ".bak", ".backup", ".old", ".orig", ".bkp", ".copy",
+    ".tmp", ".temp", ".swp", ".swo",
+    # Logs, dumps y debug
+    ".log", ".pdb", ".dmp",
+    # Archivos comprimidos (evitar meter zips dentro de zips)
+    ".zip", ".tar", ".gz", ".rar", ".7z"
+)
+
+SKIP_EXACT_NAMES = {
+    ".ds_store", "thumbs.db", "desktop.ini",
+    ".gitignore", ".gitattributes", ".gitmodules"
+}
+
+
+def should_skip_file(name):
+    low = name.lower()
+    if low in SKIP_EXACT_NAMES:
+        return True
+    if low.startswith((".", "#")) or low.endswith("~"):
+        return True
+    if low.endswith(SKIP_EXTENSIONS):
+        return True
+    return False
+
+
+def clean_folders(folders):
+    """Filtra directorios no deseados in-place para os.walk."""
+    folders[:] = [f for f in folders if f not in SKIP_DIRS and not f.startswith(".")]
 
 
 def git(repo, *args, check=True):
@@ -40,12 +76,12 @@ def default_source(addon_id):
 
 
 def source_files(source):
-    """Ficheros que se publicarian, por ruta relativa (sin basura de python)."""
+    """Ficheros que se publicarian, por ruta relativa (sin basura de python ni backups)."""
     found = {}
     for root, folders, names in os.walk(source):
-        folders[:] = [f for f in folders if f != "__pycache__"]
+        clean_folders(folders)
         for name in names:
-            if name.lower().endswith(SKIP_FILES) or name.endswith(".pyc"):
+            if should_skip_file(name):
                 continue
             path = os.path.join(root, name)
             found[os.path.relpath(path, source).replace("\\", "/")] = path
@@ -104,9 +140,9 @@ def mirror_addon(source, target, addon_id):
         shutil.rmtree(target)
     os.makedirs(target)
     for root, folders, names in os.walk(source):
-        folders[:] = [f for f in folders if f != "__pycache__"]
+        clean_folders(folders)
         for name in names:
-            if name.lower().endswith(SKIP_FILES) or name.endswith(".pyc"):
+            if should_skip_file(name):
                 continue
             src = os.path.join(root, name)
             rel = os.path.relpath(src, source)
@@ -119,9 +155,9 @@ def mirror_addon(source, target, addon_id):
 def build_zip(target, addon_id, version):
     files = []
     for root, folders, names in os.walk(target):
-        folders[:] = [f for f in folders if f != "__pycache__"]
+        clean_folders(folders)
         for name in names:
-            if name.lower().endswith(".zip") or name.lower().endswith(SKIP_FILES[1:]):
+            if should_skip_file(name):
                 continue
             files.append(os.path.join(root, name))
     files.sort()
