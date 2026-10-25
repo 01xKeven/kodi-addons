@@ -126,6 +126,76 @@ if os.path.exists(addons_root):
                 _ad_path = os.path.join(addons_root, _ad)
                 if os.path.isdir(_ad_path) and _ad_path not in sys.path: sys.path.append(_ad_path)
 
+def _patch_js2py_math_compatibility():
+    """Corrige la incompatibilidad de js2py con bytecode de Python 3.14 (Math.* methods).
+    En Python 3.14, 'a != a' genera opcode LOAD_FAST_BORROW_LOAD_FAST_BORROW que injector.py
+    de js2py corrompe al anadir ('this', 'arguments'), causando AttributeError: 'float' object has no attribute 'TYPE'.
+    Este parche reemplaza los metodos de Math directamente por funciones Python seguras."""
+    try:
+        import math
+        import js2py
+        from js2py.constructors import jsmath
+        m = getattr(jsmath, 'Math', None)
+        if not m:
+            return
+        NaN = getattr(jsmath, 'NaN', float('nan'))
+
+        def _num(v):
+            if v is None:
+                return float('nan')
+            if hasattr(v, 'to_number'):
+                try:
+                    return v.to_number().value
+                except:
+                    pass
+            try:
+                return float(v)
+            except:
+                return float('nan')
+
+        def _u(fn):
+            def _wrapped(x, this=None, arguments=None):
+                val = _num(x)
+                if math.isnan(val):
+                    return NaN
+                try:
+                    res = fn(val)
+                    if math.isnan(res):
+                        return NaN
+                    return res
+                except:
+                    return NaN
+            return _wrapped
+
+        if hasattr(m, 'get'):
+            for fn_name, fn_impl in [
+                ('abs', _u(abs)),
+                ('acos', _u(lambda v: NaN if (v < -1 or v > 1) else math.acos(v))),
+                ('asin', _u(lambda v: NaN if (v < -1 or v > 1) else math.asin(v))),
+                ('atan', _u(math.atan)),
+                ('ceil', _u(math.ceil)),
+                ('cos', _u(math.cos)),
+                ('exp', _u(math.exp)),
+                ('floor', _u(math.floor)),
+                ('log', _u(lambda v: NaN if v < 0 else math.log(v))),
+                ('round', _u(round)),
+                ('sin', _u(math.sin)),
+                ('sqrt', _u(lambda v: NaN if v < 0 else math.sqrt(v))),
+                ('tan', _u(math.tan)),
+                ('atan2', lambda y, x, this=None, arguments=None: NaN if (y is None or x is None or math.isnan(_num(y)) or math.isnan(_num(x))) else math.atan2(_num(y), _num(x))),
+                ('pow', lambda x, y, this=None, arguments=None: NaN if (x is None or y is None or math.isnan(_num(x)) or math.isnan(_num(y))) else (_num(x)**_num(y))),
+            ]:
+                item = m.get(fn_name)
+                if item and hasattr(item, 'code'):
+                    item.code = fn_impl
+    except Exception as e:
+        try:
+            xbmc.log(f"Multi Bridge: aviso al aplicar parche js2py Math: {e}", xbmc.LOGWARNING)
+        except:
+            pass
+
+_patch_js2py_math_compatibility()
+
 TMDB_PLAYERS_PATH = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/players/')
 BRIDGE_DATA_PATH = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.bridge.multi/')
 if not os.path.exists(BRIDGE_DATA_PATH):
@@ -1075,6 +1145,7 @@ def _get_balandro_modules():
         return None
     try:
         _switch_engine_environment('balandro')
+        _patch_js2py_math_compatibility()
         from platformcode import config, platformtools
         from core.item import Item, InfoLabels
         from core import servertools, httptools, scrapertools
