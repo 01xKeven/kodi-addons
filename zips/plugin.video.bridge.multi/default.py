@@ -575,9 +575,21 @@ def load_continue_watching_data():
             return {}
     return {}
 
+def _strip_emojis_and_symbols(text):
+    if not text: return ""
+    try:
+        # Elimina emojis, iconos y caracteres decorativos unicode
+        return re.sub(r'[\U00010000-\U0010ffff\u2500-\u2bef\u2600-\u27bf\u2300-\u23ff\u2b00-\u2bff]', '', str(text)).strip()
+    except Exception:
+        return str(text)
+
 def save_continue_watching_record(media_key, record_data):
     if not media_key or not isinstance(record_data, dict): return
     try:
+        if 'title' in record_data and record_data['title']:
+            record_data['title'] = _strip_emojis_and_symbols(record_data['title'])
+        if 'showname' in record_data and record_data['showname']:
+            record_data['showname'] = _strip_emojis_and_symbols(record_data['showname'])
         data = load_continue_watching_data()
         data[media_key] = record_data
         _tmp = CONTINUE_WATCHING_FILE + '.tmp'
@@ -7992,8 +8004,8 @@ def show_continue_watching():
         if is_series:
             s_num = int(season_val) if (season_val is not None and str(season_val).isdigit()) else 1
             e_num = int(episode_val) if (episode_val is not None and str(episode_val).isdigit()) else 1
-            show_name = showname_val or title_val
-            ep_name = title_val if (title_val and title_val != show_name) else ''
+            show_name = _strip_emojis_and_symbols(showname_val or title_val)
+            ep_name = _strip_emojis_and_symbols(title_val if (title_val and title_val != show_name) else '')
             if ep_name:
                 item_label = f"{show_name} - {s_num}x{e_num:02d} - {ep_name}"
             else:
@@ -8008,7 +8020,8 @@ def show_continue_watching():
                 target_url += f'&query={uparse.quote_plus(show_name)}'
             target_url += f'&season={s_num}&episode={e_num}'
         else:
-            item_label = title_val or 'Película'
+            clean_title = _strip_emojis_and_symbols(title_val) or 'Película'
+            item_label = clean_title
             if year_val:
                 item_label += f' ({year_val})'
 
@@ -8018,9 +8031,13 @@ def show_continue_watching():
             elif imdb_id_val:
                 target_url += f'&imdb_id={imdb_id_val}'
             else:
-                target_url += f'&query={uparse.quote_plus(title_val)}'
+                target_url += f'&query={uparse.quote_plus(clean_title)}'
 
         li = xbmcgui.ListItem(label=item_label)
+        try:
+            li.setLabel2(f"Interrumpido en {time_str}")
+        except Exception:
+            pass
 
         poster_art = rec.get('poster') or rec.get('thumbnail') or 'DefaultVideo.png'
         fanart_art = rec.get('fanart') or ''
@@ -8036,7 +8053,7 @@ def show_continue_watching():
         }
         li.setArt(art_dict)
 
-        display_plot = f"[COLOR gold][B]▶ Interrumpido en {time_str}[/B][/COLOR]"
+        display_plot = f"[COLOR gold][B]Interrumpido en {time_str}[/B][/COLOR]"
 
         genre_val = rec.get('genre') or ''
         if not genre_val and tmdb_id_val:
