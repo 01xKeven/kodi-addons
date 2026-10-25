@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import repolib  # noqa: E402
 import validate_repo  # noqa: E402
 
-SKIP_FILES = ("__pycache__", ".pyc", ".pyo", ".log", ".zip", ".pdb")
+SKIP_FILES = ("__pycache__", ".pyc", ".pyo", ".log", ".zip", ".pdb", ".bak")
 
 
 def git(repo, *args, check=True):
