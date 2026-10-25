@@ -1503,12 +1503,9 @@ def _prepare_playable_link(link, engine='alfa'):
         except Exception as e:
             xbmc.log(f"Multi Bridge: error decodificando data_url: {e}", xbmc.LOGINFO)
 
-    # 2. Si el canal tiene metodo play(), ejecutarlo para resolver wrappers/protectores
+    # 2. Si el canal tiene metodo play(), ejecutarlo para resolver wrappers/protectores (igual que Balandro/Alfa nativo)
     ch_name = _safe_str(getattr(item, 'channel', '') or '').strip()
-    srv = _safe_str(getattr(item, 'server', '') or '').strip().lower()
-    cur_u = _safe_str(getattr(item, 'url', '') or '').lower()
-    needs_channel_play = bool(not srv or srv in ('', 'directo', 'local') or (ch_name and ch_name in cur_u))
-    if ch_name and needs_channel_play:
+    if ch_name:
         if engine == 'balandro':
             try:
                 _switch_engine_environment('balandro')
@@ -6612,7 +6609,7 @@ def show_links_as_directory():
             li.setLabel(lbl)
             li.setLabel2(ch)
             li.setProperty('title', lbl)
-            li.setProperty('IsPlayable', 'false')
+            li.setProperty('IsPlayable', 'true')
             if clearlogo_val:
                 li.setProperty('clearlogo', clearlogo_val)
                 li.setProperty('Art(clearlogo)', clearlogo_val)
@@ -7493,16 +7490,26 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
-                xbmc.Player().play(media_url, _resolved_li[0])
+                if handle > 0:
+                    xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
+                else:
+                    xbmc.Player().play(media_url, _resolved_li[0])
                 return True
             else:
                 xbmc.log(f"Multi Bridge: {server_name} resolvió pero no proporcionó la ruta final del vídeo", xbmc.LOGWARNING)
+                if handle > 0:
+                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                    except: pass
                 dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
                 dlg.ok(
                     'Multi Bridge — Error de Reproducción',
                     f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] resolvió pero no proporcionó la ruta final del vídeo.'
                 )
                 return False
+
+        if handle > 0:
+            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+            except: pass
 
         if _result[0] is None:
             xbmc.log(f"Multi Bridge: timeout conectando a {server_name} tras 15s", xbmc.LOGINFO)
@@ -10745,12 +10752,22 @@ def main():
                 if _rsel == 0:
                     seek_to_time = r_time
                 elif _rsel is None or _rsel < 0:
+                    if handle > 0:
+                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                        except: pass
                     return
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta)
+            else:
+                if handle > 0:
+                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                    except: pass
         else:
+            if handle > 0:
+                try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                except: pass
             _show_bridge_notification('Multi Bridge', 'Enlace no disponible', 3000)
         return
 
