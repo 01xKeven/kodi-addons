@@ -2,23 +2,23 @@
 <settings>
     <!-- Categoría 1: General -->
     <category label="General">
-        <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="0" />
+        <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="2" />
         <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="false" />
-        <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="false" />
+        <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="true" />
         <setting id="links_display_mode" type="enum" label="Mostrar enlaces encontrados en" values="Ventana personalizada|Lista nativa de Kodi (Recomendado)" default="1" />
         <setting id="live_switch_on_pause" type="enum" label="Al pausar la reproducción" values="Preguntar si desea cambiar de enlace (Recomendado)|Abrir ventana de enlaces directamente|Desactivado" default="0" />
         <setting id="on_link_fail" type="enum" label="Al fallar la conexión con un enlace" values="Reabrir ventana con enlace marcado (Recomendado)|Desactivado (Cerrar)" default="0" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
-        <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="10" range="0,1,60" option="int" />
+        <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="60" range="0,1,60" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
-        <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="true" />
+        <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="false" />
         
         <setting type="sep" />
         <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />
-        <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="25" range="5,1,35" option="int" />
+        <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="8" range="5,1,35" option="int" />
         <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 6 - 8)" default="8" range="1,1,25" option="int" />
         <setting id="verify_timeout" type="slider" label="Tiempo límite por servidor en verificación (segundos) (Recomendado: 8 - 12)" default="10" range="3,1,30" option="int" />
-        <setting id="verify_max_functional" type="slider" label="Detener verificación al alcanzar (enlaces funcionales, 0 = sin límite)" default="10" range="0,1,50" option="int" />
+        <setting id="verify_max_functional" type="slider" label="Detener verificación al alcanzar (enlaces funcionales, 0 = sin límite)" default="12" range="0,1,50" option="int" />
         <setting id="autoplay_resolve_timeout" type="slider" label="Tiempo límite por servidor en autoplay (segundos) (Recomendado: 10 - 15)" default="12" range="5,5,60" option="int" />
         <setting id="max_links_list" type="slider" label="Enlaces máximos en la lista (Recomendado: 40 - Más puede ralentizar o colgar Kodi)" default="40" range="10,5,100" option="int" />
         <setting type="sep" />
@@ -43,8 +43,8 @@
     <!-- Categoría 4: Servidores -->
     <category label="Filtrar Servidores">
         <setting id="filter_servers_enabled" type="bool" label="Opciones" default="true" />
-        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="voe,doodstream,vidmoly" visible="eq(-1,true)" />
-        <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="uqload,torrent" visible="eq(-2,true)" />
+        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
+        <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="voe,uqload,torrent" visible="eq(-2,true)" />
         <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
     </category>
 </settings>
