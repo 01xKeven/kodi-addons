@@ -904,14 +904,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         save_continue_watching_record(media_key, session_record)
 
         if seek_to_time > 2:
-            for _s in range(20):
+            for _s in range(30):
                 if mon.abortRequested() or _get_global_monitor_token() != my_token: return
-                if not p.isPlayingVideo(): break
                 try:
-                    if p.getTime() > 0 or p.getTotalTime() > 0:
+                    if p.isPlayingVideo() and (p.getTime() > 0 or p.getTotalTime() > 0):
                         break
                 except: pass
-                if mon.waitForAbort(0.2): return
+                if mon.waitForAbort(0.25): return
             try:
                 xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
                 p.seekTime(float(seek_to_time))
@@ -985,8 +984,9 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
                                         return
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
-                                        _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng)
-                                        return
+                                        switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time)
+                                        if switched:
+                                            return
                                     else:
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
                                             try: p.pause()
@@ -7344,7 +7344,7 @@ def _clean_dialog_text(text):
     return t.strip()
 
 
-def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
+def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False):
 
     if not link: return False
 
@@ -7502,14 +7502,20 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
-                if handle > 0:
+                if handle > 0 and not is_switch:
                     xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
                 else:
+                    try:
+                        if is_switch and xbmc.Player().isPlaying():
+                            xbmc.Player().stop()
+                            xbmc.sleep(250)
+                    except Exception:
+                        pass
                     xbmc.Player().play(media_url, _resolved_li[0])
                 return True
             else:
                 xbmc.log(f"Multi Bridge: {server_name} resolvió pero no proporcionó la ruta final del vídeo", xbmc.LOGWARNING)
-                if handle > 0:
+                if handle > 0 and not is_switch:
                     try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
                     except: pass
                 dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
@@ -7519,7 +7525,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
                 )
                 return False
 
-        if handle > 0:
+        if handle > 0 and not is_switch:
             try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
             except: pass
 
@@ -7556,7 +7562,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None):
         if not mods: return False
         platformtools = mods['platformtools']
         try:
-            sys.argv[1] = str(handle)
+            sys.argv[1] = '-1' if is_switch else str(handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
 
@@ -10254,14 +10260,6 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         except Exception:
             pass
 
-    try:
-        if p.isPlaying():
-            p.stop()
-    except Exception:
-        pass
-
-    xbmc.sleep(300)
-
     # Preservar metadatos completos para TMDb Helper, Trakt y Kodi OSD
     _enrich_link_metadata(chosen, meta, matched_item)
     sync_tmdbhelper_playerstring(meta)
@@ -10272,7 +10270,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         pass
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
-    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True)
     if played:
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx, meta=meta)
         return True
@@ -10305,7 +10303,7 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
                 return 'cancel'
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
-    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True)
     if played:
         mon_idx = global_idx if global_idx is not None else chosen_idx
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta)
