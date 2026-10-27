@@ -1,0 +1,469 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+from jurialmunkey.ftools import cached_property
+from jurialmunkey.checks import has_arg_value
+from tmdbhelper.lib.addon.consts import LASTACTIVITIES_DATA
+from tmdbhelper.lib.items.database.database import ItemDetailsDatabase
+from tmdbhelper.lib.files.dbdata import DatabaseStatements
+
+
+class SyncItemDetailsDatabase(ItemDetailsDatabase):
+    def set_activity(self, item_type, method, value, expiry):
+        cursor = self.execute_sql(
+            DatabaseStatements.insert_or_replace('lactivities', keys=('id', 'data', 'expiry')),
+            (f'{item_type}.{method}', value, expiry))
+        cursor.close() if cursor else None
+
+    def get_activity(self, item_type, method, expiry=0):
+        cursor = self.execute_sql(
+            DatabaseStatements.select_limit('lactivities', keys=('data', ), conditions='id=? and expiry>=?'),
+            (f'{item_type}.{method}', expiry))
+        if not cursor:
+            return
+        result = cursor.fetchone()
+        cursor.close()
+        if not result:
+            return
+        return result[0]
+
+
+class SyncDataSetters:
+    """ Add-in class to group setter methods for SyncData class """
+
+    def like_userlist(self, user_slug=None, list_slug=None, confirmation=False, delete=False):
+        from tmdbhelper.lib.addon.plugin import get_localized
+        func = self.trakt_api.delete_response if delete else self.trakt_api.post_response
+        response = func('users', user_slug, 'lists', list_slug, 'like')
+        if confirmation:
+            from xbmcgui import Dialog
+            affix = get_localized(32320) if delete else get_localized(32321)
+            body = [
+                get_localized(32316).format(affix),
+                get_localized(32168).format(list_slug, user_slug)
+            ] if response.status_code == 204 else [
+                get_localized(32317).format(affix),
+                get_localized(32168).format(list_slug, user_slug),
+                get_localized(32318).format(response.status_code)
+            ]
+            Dialog().ok(get_localized(32315), '\n'.join(body))
+        if response.status_code == 204:
+            return response
+
+
+class SyncDataGetterAll:
+
+    operator = 'OR'
+    query_clauses = ('item_type=?', )  # WHERE {query_clauses}
+    query_values = ('', )  # WHERE {query_clauses}={query_values}
+    clause_keys = ()  # WHERE {query_clauses} AND ({clause_key} IS NOT NULL {operator} {clause_key} IS NOT NULL)
+    additional_keys = ()  # Additional keys to retrieve values for
+    query_value_item_argx = 0  # Query value to use as sync item_type (normally item_type query is first ie 0 index)
+
+    def __init__(self, instance_syncdata):
+        self.instance_syncdata = instance_syncdata  # The SyncData object sync called from
+
+    @cached_property
+    def item_type(self):
+        return self.get_item_type()
+
+    def get_item_type(self):
+        return self.query_values[self.query_value_item_argx]
+
+    @cached_property
+    def base_keys(self):
+        return self.get_base_keys()
+
+    def get_base_keys(self):
+        if self.item_type == 'season':
+            return ('tmdb_id', 'title', 'season_number', )
+        if self.item_type == 'episode':
+            return ('tmdb_id', 'title', 'season_number', 'episode_number', )
+        return ('tmdb_id', 'title', )
+
+    @cached_property
+    def clause(self):
+        return self.get_clause()
+
+    def get_clause(self):
+        clause = [f'{k} IS NOT NULL' for k in self.clause_keys]
+        clause = '({})'.format(f' {self.operator} '.join(clause))
+        clause = (*self.query_clauses, clause, )
+        clause = ' AND '.join(clause)
+        return clause
+
+    @cached_property
+    def keys(self):
+        return self.get_keys()
+
+    def get_keys(self):
+        return (*(self.base_keys or ()), *(self.clause_keys or ()), *(self.additional_keys or ()), )
+
+    @cached_property
+    def items(self):
+        return self.get_items()
+
+    def get_items(self):
+        self.instance_syncdata.sync(self.item_type, self.keys)
+        return self.instance_syncdata.cache.get_list_values(keys=self.keys, values=self.query_values, conditions=self.clause)
+
+
+class SyncDataGetterProgressWatchedUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'progress_watched_hidden_at IS NULL', )
+
+
+class SyncDataGetterProgressCollectedUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'progress_collected_hidden_at IS NULL', )
+
+
+class SyncDataGetterCalendarUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'calendar_hidden_at IS NULL', )
+
+
+class SyncDataGetterDroppedWatchedUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'dropped_hidden_at IS NULL AND progress_watched_hidden_at IS NULL', )
+
+
+class SyncDataGetterDroppedCollectionUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'dropped_hidden_at IS NULL AND progress_collected_hidden_at IS NULL', )
+
+
+class SyncDataGetterDroppedCalendarUnHidden(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'dropped_hidden_at IS NULL AND calendar_hidden_at IS NULL', )
+
+
+class SyncDataGetterAllUnHiddenMoviesToWatch(SyncDataGetterProgressWatchedUnHidden):
+    query_values = ('movie', )
+    clause_keys = ('playback_progress', 'watchlist_listed_at', )
+
+
+class SyncDataGetterAllUnHiddenShowsToWatch(SyncDataGetterDroppedWatchedUnHidden):
+    query_values = ('show', )
+    clause_keys = ('next_episode_id', 'watchlist_listed_at', )
+
+
+class SyncDataGetterAllUnHiddenShowsStarted(SyncDataGetterDroppedWatchedUnHidden):
+    query_values = ('show', )
+    clause_keys = ('last_watched_at', )
+
+
+class SyncDataGetterAllUnHiddenShowsNextEpisode(SyncDataGetterDroppedWatchedUnHidden):
+    query_values = ('show', )
+    clause_keys = ('next_episode_id', )
+
+
+class SyncDataGetterAllUnHiddenEpisodesUpNext(SyncDataGetterDroppedWatchedUnHidden):  # TODO: UNSURE ABOUT THIS ONE
+    query_values = ('episode', )
+    clause_keys = ('upnext_episode_id', )
+
+
+class SyncDataGetterAllEpisodePlaycounts(SyncDataGetterAll):
+    query_values = ('episode', )
+    clause_keys = ('plays', )
+    base_keys = ('id', )
+
+
+class SyncDataGetterAllItems(SyncDataGetterAll):
+    @property
+    def query_values(self):
+        return (self.item_type, )
+
+
+class SyncDataGetterAllUnwatchedItems(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'last_watched_at IS NULL')  # WHERE {query_clauses}
+
+    @property
+    def query_values(self):
+        return (self.item_type, )
+
+
+class SyncDataGetterAllReleasedItems(SyncDataGetterAll):
+    query_clauses = ('item_type=?', 'premiered < date(\'now\')', 'premiered IS NOT NULL')  # WHERE {query_clauses}
+
+    @property
+    def query_values(self):
+        return (self.item_type, )
+
+
+class SyncDataGetterAllAnticipatedItems(SyncDataGetterAll):
+    query_clauses = ('item_type=?', '(premiered >= date(\'now\') OR premiered IS NULL)')  # WHERE {query_clauses}
+
+    @property
+    def query_values(self):
+        return (self.item_type, )
+
+
+class SyncDataGetterAllItemsCollected(SyncDataGetterAllItems):
+    clause_keys = ('collection_last_collected_at', )
+
+
+class SyncDataGetterAllItemsWatchlist(SyncDataGetterAllItems):
+    clause_keys = ('watchlist_listed_at', )
+
+
+class SyncDataGetterAllReleasedItemsWatchlist(SyncDataGetterAllReleasedItems):
+    clause_keys = ('watchlist_listed_at', )
+
+
+class SyncDataGetterAllAnticipatedItemsWatchlist(SyncDataGetterAllAnticipatedItems):
+    clause_keys = ('watchlist_listed_at', )
+
+
+class SyncDataGetterAllItemsFavorites(SyncDataGetterAllItems):
+    clause_keys = ('favorites_listed_at', )
+
+
+class SyncDataGetterAllItemsDropped(SyncDataGetterAllItems):
+    clause_keys = ('dropped_hidden_at', )
+
+
+class SyncDataGetterAllItemsWatched(SyncDataGetterAllItems):
+    clause_keys = ('last_watched_at', )
+
+
+class SyncDataGetterWatchedHistoryStats(SyncDataGetterAllItemsWatched):
+    days = 30
+    query_clauses = (
+        'item_type=?',
+        "DATE(last_watched_at, 'localtime') >= DATE('now', 'localtime', ?)",
+        "DATE(last_watched_at, 'localtime') <= DATE('now', 'localtime')",
+    )
+
+    @property
+    def query_values(self):
+        return (self.item_type, f'-{self.days - 1} days', )
+
+    def get_keys(self):
+        return (
+            "DATE(last_watched_at, 'localtime') AS watched_date",
+            'COUNT(*) AS watched_count',
+        )
+
+    def get_clause(self):
+        return f'{super().get_clause()} GROUP BY watched_date ORDER BY watched_date DESC'
+
+    def get_items(self):
+        self.instance_syncdata.sync(self.item_type, self.clause_keys)
+        return self.instance_syncdata.cache.get_list_values(keys=self.keys, values=self.query_values, conditions=self.clause)
+
+
+class SyncDataGetterWatchedMonthlyHistoryStats(SyncDataGetterWatchedHistoryStats):
+    months = 12
+    query_clauses = (
+        'item_type=?',
+        "DATE(last_watched_at, 'localtime') >= DATE('now', 'localtime', 'start of month', ?)",
+        "DATE(last_watched_at, 'localtime') <= DATE('now', 'localtime')",
+    )
+
+    @property
+    def query_values(self):
+        return (self.item_type, f'-{self.months - 1} months', )
+
+    def get_keys(self):
+        return (
+            "DATE(last_watched_at, 'localtime', 'start of month') AS watched_date",
+            'COUNT(*) AS watched_count',
+        )
+
+
+class SyncDataGetterAllItemsPlayback(SyncDataGetterAllItems):
+    clause_keys = ('playback_progress', )
+
+
+class SyncDataGetterAllUnwatchedItemsPlayback(SyncDataGetterAllUnwatchedItems):
+    clause_keys = ('playback_progress', )
+
+
+class SyncDataGetterUnHiddenShowEpisodesUpNext(SyncDataGetterDroppedWatchedUnHidden):
+    clause_keys = ('upnext_episode_id', )
+    query_clauses = ('item_type=?', 'tmdb_id=?', )
+
+    @property
+    def query_values(self):
+        return ('episode', self.tmdb_id, )
+
+
+def SyncDataGetterAllUnHiddenShowsInProgress(instance_syncdata):
+    from tmdbhelper.lib.addon.plugin import get_setting
+    if get_setting('sync_source_watched', 'str') == 'MDbList':
+        from tmdbhelper.lib.sync.mdblist.datasync import MDbListSyncDataGetterAllUnHiddenShowsInProgress
+        return MDbListSyncDataGetterAllUnHiddenShowsInProgress(instance_syncdata)
+    from tmdbhelper.lib.sync.trakt.datasync import TraktSyncDataGetterAllUnHiddenShowsInProgress
+    return TraktSyncDataGetterAllUnHiddenShowsInProgress(instance_syncdata)
+
+
+class SyncDataGetters:
+    """ Add-in class to group getter methods for SyncData class """
+
+    def get_all_unhidden_movies_towatch_getter(self):
+        return SyncDataGetterAllUnHiddenMoviesToWatch(self)
+
+    def get_all_unhidden_shows_towatch_getter(self):
+        return SyncDataGetterAllUnHiddenShowsToWatch(self)
+
+    def get_all_unhidden_shows_started_getter(self):
+        return SyncDataGetterAllUnHiddenShowsStarted(self)
+
+    def get_all_unhidden_shows_nextepisode_getter(self):
+        return SyncDataGetterAllUnHiddenShowsNextEpisode(self)
+
+    def get_all_unhidden_episodes_upnext_getter(self):
+        return SyncDataGetterAllUnHiddenEpisodesUpNext(self)
+
+    def get_all_episode_playcounts_getter(self):
+        return SyncDataGetterAllEpisodePlaycounts(self)
+
+    def get_all_unhidden_shows_inprogress_getter(self):
+        return SyncDataGetterAllUnHiddenShowsInProgress(self)
+
+    def get_item_type_getter(self, sync_data_class, item_type):
+        sd = sync_data_class(self)
+        sd.item_type = item_type
+        return sd
+
+    def get_all_dropped_shows_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsDropped, item_type)
+
+    def get_all_collected_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsCollected, item_type)
+
+    def get_all_watchlist_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsWatchlist, item_type)
+
+    def get_all_released_watchlist_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllReleasedItemsWatchlist, item_type)
+
+    def get_all_anticipated_watchlist_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllAnticipatedItemsWatchlist, item_type)
+
+    def get_all_favorites_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsFavorites, item_type)
+
+    def get_all_watched_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsWatched, item_type)
+
+    def get_watched_history_stats_getter(self, item_type, days):
+        sd = self.get_item_type_getter(SyncDataGetterWatchedHistoryStats, item_type)
+        sd.days = days
+        return sd
+
+    def get_watched_monthly_history_stats_getter(self, item_type, months):
+        sd = self.get_item_type_getter(SyncDataGetterWatchedMonthlyHistoryStats, item_type)
+        sd.months = months
+        return sd
+
+    def get_all_playback_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllItemsPlayback, item_type)
+
+    def get_all_unwatched_playback_getter(self, item_type):
+        return self.get_item_type_getter(SyncDataGetterAllUnwatchedItemsPlayback, item_type)
+
+    def get_tmdb_id_getter(self, sync_data_class, tmdb_id):
+        sd = sync_data_class(self)
+        sd.tmdb_id = tmdb_id
+        return sd
+
+    def get_unhidden_show_episodes_upnext(self, tmdb_id):
+        return self.get_tmdb_id_getter(SyncDataGetterUnHiddenShowEpisodesUpNext, tmdb_id)
+
+    def get_movie_playcount(self, tmdb_id):
+        return self.get_value('movie', tmdb_id, key='plays')
+
+    def get_movie_playprogress(self, tmdb_id):
+        return self.get_value('movie', tmdb_id, key='playback_progress')
+
+    def get_movie_playprogress_id(self, tmdb_id):
+        return self.get_value('movie', tmdb_id, key='playback_id')
+
+    def get_episode_playcount(self, tmdb_id, season, episode):
+        return self.get_value('tv', tmdb_id, season, episode, key='plays')
+
+    def get_episode_playprogress(self, tmdb_id, season, episode):
+        return self.get_value('tv', tmdb_id, season, episode, key='playback_progress')
+
+    def get_episode_playprogress_id(self, tmdb_id, season, episode):
+        return self.get_value('tv', tmdb_id, season, episode, key='playback_id')
+
+    def get_episode_airedcount(self, tmdb_id, season=None, episode=None):
+        return self.get_value('tv', tmdb_id, season, episode, key='aired_episodes')
+
+    def get_episode_watchedcount(self, tmdb_id, season=None, episode=None):
+        return self.get_value('tv', tmdb_id, season, episode, key='watched_episodes')
+
+
+class SyncData(SyncDataGetters):
+
+    def __init__(self, trakt_api=None, mdblist_api=None):
+        self.trakt_api = trakt_api
+        self.mdblist_api = mdblist_api
+
+    @cached_property
+    def routes(self):
+        return self.get_routes()
+
+    def get_routes(self):
+        return {k: v['sync'] for k, v in self.cache.simplecache_columns.items()}
+
+    def reset_lastactivities(self):
+        self.window.get_property(LASTACTIVITIES_DATA, clear_property=True)  # Wipe new last activities cache
+
+    @cached_property
+    def cache(self):
+        return self.get_cache()
+
+    def get_cache(self):
+        return SyncItemDetailsDatabase()
+
+    @cached_property
+    def window(self):
+        return self.get_window()
+
+    def get_window(self):
+        from jurialmunkey.window import WindowPropertySetter
+        return WindowPropertySetter()
+
+    @staticmethod
+    def get_name(tmdb_type, tmdb_id, season=None, episode=None):
+        name = f'{tmdb_type}.{tmdb_id}'
+        if season is None:
+            return name
+        name = f'{name}.{season}'
+        if episode is None:
+            return name
+        name = f'{name}.{episode}'
+        return name
+
+    @has_arg_value(0, ('tv', 'movie', ))
+    def get_values(self, tmdb_type, tmdb_id, season=None, episode=None, keys=None, item_type=None):
+        self.sync(item_type or ('show' if tmdb_type == 'tv' else 'movie'), keys)
+        return self.cache.get_values(item_id=self.get_name(tmdb_type, tmdb_id, season, episode), keys=keys)
+
+    def get_value(self, tmdb_type, tmdb_id, season=None, episode=None, key=None, item_type=None):
+        data = self.get_values(tmdb_type, tmdb_id, season, episode, keys=(key,), item_type=item_type)
+        return data[0] if data else None
+
+    def sync(self, item_type, keys, forced=False):
+        from jurialmunkey.modimp import importmodule
+        for route in set([j for j in (self.routes.get(k) for k in keys) if j]):
+            factory = importmodule(*route)
+            factory()(self, item_type).sync(forced=forced)
+
+
+def SyncDataFactory(parent=None):
+    try:
+        trakt_api = parent.trakt_api
+    except AttributeError:
+        from tmdbhelper.lib.api.trakt.api import TraktAPI
+        trakt_api = TraktAPI()
+
+    try:
+        mdblist_api = parent.mdblist_api
+    except AttributeError:
+        from tmdbhelper.lib.api.mdblist.api import MDbListAPI
+        mdblist_api = MDbListAPI()
+
+    if not trakt_api and not mdblist_api:
+        return
+    # if not trakt_api.is_authorized:  # TODO: Allow MDBLIST ONLY  # AUTHORIZED CHECK MDBLIST
+    #     return
+
+    return SyncData(trakt_api=trakt_api, mdblist_api=mdblist_api)
