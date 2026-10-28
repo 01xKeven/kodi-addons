@@ -777,7 +777,7 @@ def _release_search_lock_atomic():
     except Exception:
         pass
 
-def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None):
+def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
     with _playback_monitor_lock:
@@ -826,6 +826,18 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
+        # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
+        sync_tmdbhelper_playerstring(_m_dict)
+        try:
+            _pl = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+            _pos = _pl.getposition()
+            if 0 <= _pos < _pl.size():
+                _cur_item = _pl[_pos]
+                if _cur_item:
+                    set_listitem_info(_cur_item, meta=_m_dict)
+        except Exception:
+            pass
+
         _logo_val = _m_dict.get('clearlogo') or ''
         if not _logo_val and _m_dict.get('tmdb'):
             try:
@@ -916,6 +928,16 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 p.seekTime(float(seek_to_time))
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
+        elif force_beginning:
+            for _s in range(30):
+                if mon.abortRequested() or _get_global_monitor_token() != my_token: return
+                try:
+                    if p.isPlayingVideo() and p.getTime() > 2:
+                        xbmc.log("Multi Bridge: forzando reproduccion desde el inicio 0s (key=%s)" % media_key, xbmc.LOGINFO)
+                        p.seekTime(0.0)
+                        break
+                except: pass
+                if mon.waitForAbort(0.25): return
 
         last_saved_time = 0
         tot_time = 0
@@ -923,11 +945,17 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         pause_cooldown = time.time() + 2.5
         active_idx = current_link_index
 
+        _trakt_reassert_deadline = time.time() + 15.0
         while p.isPlayingVideo() and not mon.abortRequested():
             if _get_global_monitor_token() != my_token:
                 xbmc.log("Multi Bridge: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
                 break
             try:
+                # Mantener IDs de Trakt activos durante el arranque para evitar que eventos stop asíncronos los borren
+                if time.time() < _trakt_reassert_deadline:
+                    if not xbmcgui.Window(10000).getProperty('script.trakt.ids'):
+                        sync_tmdbhelper_playerstring(_m_dict)
+
                 cur_time = p.getTime()
                 tot = p.getTotalTime()
                 if tot > 0: tot_time = tot
@@ -1463,18 +1491,10 @@ def _restore_dialog_noblock():
     return False
 
 def _ask_resume_dialog(title_text, time_str):
-    """Pregunta reanudar usando la clase Dialog REAL guardada, inmune al
-    silenciamiento global que dejan workers de verificacion aun en curso
-    (esos workers hacen que xbmcgui.Dialog siga siendo el falso silencioso,
-    que contesta Si sin mostrar nada). Mismo texto y botones que siempre."""
+    """Pregunta reanudar usando la ventana compacta de Multi Bridge."""
     try:
-        dlg_cls = _orig_dialog_class or _KODI_ORIG_DIALOG
-        if dlg_cls is None or dlg_cls is _SilentDialog:
-            dlg_cls = xbmcgui.Dialog
-        return bool(dlg_cls().yesno(
-            'Reanudar reproducción',
-            '¿Reanudar desde [COLOR gold]%s[/COLOR]?' % time_str,
-            nolabel='Desde el principio', yeslabel='Reanudar (%s)' % time_str))
+        _rsel = show_resume_dialog(time_str, title_text)
+        return (_rsel == 0)
     except Exception:
         return False
 
@@ -6564,7 +6584,8 @@ def show_links_as_directory():
     media_key_main = _get_media_key(meta, matched_item)
     saved_bm = get_bookmark(media_key_main, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
     bm_str = ''
-    if saved_bm:
+    show_bm_in_links = (_bridge_addon.getSetting('show_resume_in_links') == 'true')
+    if saved_bm and show_bm_in_links:
         r_sec = float(saved_bm.get('resume_time', 0))
         m_mins = int(r_sec // 60); m_secs = int(r_sec % 60); m_hrs = m_mins // 60; m_mins = m_mins % 60
         bm_str = (' [COLOR orange][Reanudar: %d:%02d:%02d][/COLOR]' % (m_hrs, m_mins, m_secs)) if m_hrs else (' [COLOR orange][Reanudar: %d:%02d][/COLOR]' % (m_mins, m_secs))
@@ -7508,10 +7529,14 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     try:
                         if is_switch and xbmc.Player().isPlaying():
                             xbmc.Player().stop()
-                            xbmc.sleep(250)
+                            xbmc.sleep(350)
                     except Exception:
                         pass
+                    sync_tmdbhelper_playerstring(meta)
+                    if _resolved_li[0] is not None:
+                        set_listitem_info(_resolved_li[0], meta=meta)
                     xbmc.Player().play(media_url, _resolved_li[0])
+                    sync_tmdbhelper_playerstring(meta)
                 return True
             else:
                 xbmc.log(f"Multi Bridge: {server_name} resolvió pero no proporcionó la ruta final del vídeo", xbmc.LOGWARNING)
@@ -7562,6 +7587,12 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         if not mods: return False
         platformtools = mods['platformtools']
         try:
+            if is_switch and xbmc.Player().isPlaying():
+                try:
+                    xbmc.Player().stop()
+                    xbmc.sleep(350)
+                except Exception:
+                    pass
             sys.argv[1] = '-1' if is_switch else str(handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
@@ -9297,69 +9328,81 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     def _white(self):
         return _AutoplayStopDialog._bg_texture() or _EnginePickerDialog._white()
 
+    def addControl(self, *args, **kwargs):
+        res = super().addControl(*args, **kwargs)
+        try:
+            ctrl = args[0] if args else None
+            if ctrl is not None:
+                try:
+                    ctrl.setAnimations([
+                        ('WindowOpen', 'effect=fade start=0 end=100 time=140'),
+                        ('WindowClose', 'effect=fade start=100 end=0 time=100')
+                    ])
+                except Exception: pass
+        except Exception: pass
+        return res
+
     def _build(self):
         W = self.getWidth() or 1920
         H = self.getHeight() or 1080
-        dw, dh = 580, 240
-        dx = (W - dw) // 2
-        dy = (H - dh) // 2
-        border = 3
+        dw, dh = 330, 88
+        border = 2
         GOLD = '0xFFCFA82C'
         white = self._white()
+
+        pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
+        margin_x = 40
+        dx = W - dw - margin_x
+        if pos_setting == '1':  # Inferior derecha
+            margin_y = 60
+            dy = H - dh - margin_y
+        else:  # Superior derecha (0)
+            margin_y = 40
+            dy = margin_y
 
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
         # Fondo oscuro interior
-        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='0xF20A0A0A'))
+        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='0xF40A0A0E'))
 
-        # Título
+        # Servidor actual (limpio y compacto)
+        srv = (self.server_name or "Actual").strip()
+        if srv.lower() in ('torrent', 'magnet'):
+            srv = 'Torrent'
+        elif len(srv) > 13:
+            srv = srv[:12] + '..'
+
+        # Encabezado compacto con fuente pequeña y colores nativos de Kodi (sin #)
+        header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
         self.addControl(xbmcgui.ControlLabel(
-            dx+24, dy+16, dw-48, 30,
-            '[B][COLOR #CFA82C]MULTI BRIDGE[/COLOR][/B]  [COLOR #E0E0E0]—  Reproducción Pausada[/COLOR]',
-            font='font13'))
+            dx+16, dy+11, dw-32, 20,
+            header_text,
+            font='font10'))
 
-        # Separador dorado
-        self.addControl(xbmcgui.ControlImage(dx+20, dy+50, dw-40, 2, white, colorDiffuse='0x55CFA82C'))
-
-        # Pregunta principal
-        self.addControl(xbmcgui.ControlLabel(
-            dx+24, dy+66, dw-48, 28,
-            '[B][COLOR #FFFFFF]¿Deseas cambiar de enlace o servidor?[/COLOR][/B]',
-            font='font13', alignment=6))
-
-        # Detalle de servidor en reproducción
-        srv_name_clean = self.server_name.strip()
-        if srv_name_clean.lower() in ('torrent', 'magnet'):
-            srv_str = '[COLOR #888888]En reproducción:[/COLOR] [B][COLOR cyan]TORRENT[/COLOR][/B]'
-        else:
-            srv_str = '[COLOR #888888]En reproducción:[/COLOR] [B][COLOR #CFA82C]%s[/COLOR][/B]' % srv_name_clean
-        self.addControl(xbmcgui.ControlLabel(
-            dx+24, dy+100, dw-48, 24, srv_str, font='font12', alignment=6))
-
-        # Dos botones: [ No, continuar ]  [ Abrir enlaces ]
-        bw, bh = 220, 42
-        gap = 24
+        # Dos botones compactos proporcionados: [ Continuar ]  [ Cambiar ]
+        bw, bh = 138, 34
+        gap = 12
         total_w = bw * 2 + gap
         bx = dx + (dw - total_w) // 2
-        by = dy + dh - 64
+        by = dy + 39
 
-        labels = ('No, continuar', 'Abrir enlaces')
+        labels = ('Continuar', 'Cambiar')
         for i, lbl in enumerate(labels):
             btn_x = bx + i * (bw + gap)
             btn = xbmcgui.ControlButton(
                 btn_x, by, bw, bh, lbl, '', '',
-                font='font13', textColor='0xFFFFFFFF', focusedColor=GOLD, alignment=6)
+                font='font10', textColor='0xFFCCCCCC', focusedColor='0xFFFFFFFF', alignment=6)
             self.addControl(btn)
             self._btn_ids.append(btn.getId())
 
-            m, t = 4, 2
+            m, t = 2, 2
             # Marco dorado tenue permanente
             for _bx, _by, _bw, _bh in (
                     (btn_x-m, by-m, bw+m*2, t),
                     (btn_x-m, by+bh+m-t, bw+m*2, t),
                     (btn_x-m, by-m, t, bh+m*2),
                     (btn_x+bw+m-t, by-m, t, bh+m*2)):
-                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='0xFF66551A'))
+                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='0xFF443311'))
 
             # Resaltado brillante cuando tiene foco
             hl = [
@@ -9371,12 +9414,6 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             ]
             for c in hl: self.addControl(c)
             self._highlights.append(hl)
-
-        # Ayuda en pie de página
-        self.addControl(xbmcgui.ControlLabel(
-            dx, dy+dh-22, dw, 18,
-            '[COLOR=666666][← →] Elegir    [OK] Confirmar    [Atrás] Continuar[/COLOR]',
-            font='font11', alignment=6))
 
         self._update_highlight()
         try:
@@ -9450,6 +9487,49 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             super().close()
         except Exception:
             pass
+
+
+def show_resume_dialog(time_str, title_text=""):
+    """Diálogo de reanudar 100% nativo de Kodi.
+    Retorna:
+      0: Continuar desde time_str
+      1: Reiniciar
+      -1: Cancelar (no reproducir nada)
+    """
+    try:
+        dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+        if hasattr(dialog, 'yesnocustom'):
+            # Kodi nativo con 3 botones (DialogConfirm):
+            # ret == 1 -> yeslabel ('Continuar')
+            # ret == 0 -> nolabel ('Reiniciar')
+            # ret == 2 -> customlabel ('Cancelar')
+            # ret == -1 -> Cancelado / Atrás / ESC
+            ret = dialog.yesnocustom(
+                'Reanudar reproducción',
+                '¿Deseas reanudar desde [COLOR gold]%s[/COLOR] o ver desde el principio?' % time_str,
+                'Cancelar',
+                'Reiniciar',
+                'Continuar'
+            )
+            xbmc.log('Multi Bridge show_resume_dialog yesnocustom ret=%s' % str(ret), xbmc.LOGINFO)
+            if ret == 1:
+                return 0  # Continuar
+            elif ret == 0:
+                return 1  # Reiniciar
+            else:
+                return -1 # Cancelar (Atrás / ESC / botón Cancelar)
+    except Exception as e:
+        xbmc.log('Multi Bridge show_resume_dialog yesnocustom error: %s' % str(e), xbmc.LOGWARNING)
+
+    # Fallback seguro con dialog.select
+    try:
+        dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+        ret = dialog.select('Reanudar reproducción', ['Continuar (%s)' % time_str, 'Reiniciar'])
+        xbmc.log('Multi Bridge show_resume_dialog select ret=%s' % str(ret), xbmc.LOGINFO)
+        return ret
+    except Exception as e:
+        xbmc.log('Multi Bridge show_resume_dialog select error: %s' % str(e), xbmc.LOGWARNING)
+        return -1
 
 
 class _FloatingLinksDialog(xbmcgui.WindowDialog):
@@ -10260,6 +10340,14 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         except Exception:
             pass
 
+    # Parar explícitamente la reproducción anterior para que Kodi y los scrobblers procesen el evento stop
+    try:
+        if p.isPlaying():
+            p.stop()
+            xbmc.sleep(350)
+    except Exception:
+        pass
+
     # Preservar metadatos completos para TMDb Helper, Trakt y Kodi OSD
     _enrich_link_metadata(chosen, meta, matched_item)
     sync_tmdbhelper_playerstring(meta)
@@ -10288,17 +10376,19 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
     is_s = bool(meta.get('season') and meta.get('episode'))
     bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
     seek_to_time = 0
+    start_beginning = False
     if bm:
         r_time = float(bm.get('resume_time', 0))
         if r_time > 10:
             mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
             time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-            dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
-            _rsel = dialog.select(
-                'Reanudar reproducción',
-                ['Reanudar desde %s' % time_str, 'Desde el principio'])
+            _rsel = show_resume_dialog(time_str, meta.get('title', ''))
             if _rsel == 0:
                 seek_to_time = r_time
+            elif _rsel == 1:
+                seek_to_time = 0
+                start_beginning = True
+                save_bookmark(media_key, 0, 0, title=meta.get('title', ''))
             elif _rsel is None or _rsel < 0:
                 return 'cancel'
 
@@ -10306,7 +10396,7 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True)
     if played:
         mon_idx = global_idx if global_idx is not None else chosen_idx
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta)
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta, force_beginning=start_beginning)
         return True
     return False
 
@@ -10753,19 +10843,19 @@ def main():
             is_s = bool(meta.get('season') and meta.get('episode'))
             bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
             seek_to_time = 0
+            start_beginning = False
             if bm:
                 r_time = float(bm.get('resume_time', 0))
                 mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
                 time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
                 t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                # select() en vez de yesno: asi Atras (-1) se distingue de No
-                # y cancela sin reproducir.
-                _rsel = dialog.select(
-                    'Reanudar reproducción',
-                    ['Reanudar desde %s' % time_str, 'Desde el principio'])
+                _rsel = show_resume_dialog(time_str, t_title)
                 if _rsel == 0:
                     seek_to_time = r_time
+                elif _rsel == 1:
+                    seek_to_time = 0
+                    start_beginning = True
+                    save_bookmark(media_key, 0, 0, title=t_title)
                 elif _rsel is None or _rsel < 0:
                     if handle > 0:
                         try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
@@ -10774,7 +10864,7 @@ def main():
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
             if played:
-                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta)
+                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta, force_beginning=start_beginning)
             else:
                 if handle > 0:
                     try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
