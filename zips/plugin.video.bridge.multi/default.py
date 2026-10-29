@@ -9627,7 +9627,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._rw = 0
         self._touch_accum_y = 0.0
         self._touch_accum_x = 0.0
-        self._backdrop_id = -1
+        self._last_pointer_y = None
+        self._last_pointer_x = None
+        self._is_touching = False
+        self._touch_has_dragged = False
         try:
             self._build()
         except Exception as e:
@@ -9739,11 +9742,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         GOLD = 'FFCFA82C'
         BORDER = 3
 
-        # Fondo transparente de pantalla completa para detectar toques y clics fuera del dialogo
-        self._backdrop_btn = xbmcgui.ControlButton(0, 0, W, H, '', '', '',
-                                                   textColor='00000000', focusedColor='00000000')
-        self.addControl(self._backdrop_btn)
-        self._backdrop_id = self._backdrop_btn.getId()
+        # Sin backdrop de cierre para la ventana grande (no se puede cerrar dando clic afuera)
 
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
@@ -10200,32 +10199,81 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self._scroll(-2)
         elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105, 112):
             self._scroll(2)
-        # Soporte ultra-sensible para gestos táctiles en Android y pantallas táctiles
-        elif aid in (501, 502):  # GESTURE_BEGIN, GESTURE_END
+        # Soporte nativo y ultra-fluido para gestos táctiles en Android y pantallas táctiles
+        if aid in (500, 501):  # ACTION_TOUCH_TAP / ACTION_GESTURE_BEGIN
+            self._is_touching = True
+            self._touch_has_dragged = False
             self._touch_accum_y = 0.0
             self._touch_accum_x = 0.0
-        elif aid == 503:         # GESTURE_PAN táctil en Android / móvil
+            self._last_pointer_y = None
+            self._last_pointer_x = None
             try:
-                dy = action.getAmount2()
-                self._touch_accum_y += dy
-                # Umbral de 12px con acumulador para respuesta táctil suave e instantánea
-                if self._touch_accum_y >= 12:
-                    steps = int(self._touch_accum_y / 12)
-                    self._scroll(-steps)
-                    self._touch_accum_y -= steps * 12
-                elif self._touch_accum_y <= -12:
-                    steps = int(abs(self._touch_accum_y) / 12)
-                    self._scroll(steps)
-                    self._touch_accum_y += steps * 12
+                sy = action.getAmount2()
+                if sy and float(sy) > 80: self._last_pointer_y = float(sy)
+                sx = action.getAmount1()
+                if sx and float(sx) > 80: self._last_pointer_x = float(sx)
+            except Exception: pass
+        elif aid in (502, 505, 599):  # ACTION_GESTURE_END (599/502), ACTION_GESTURE_ABORT (505)
+            self._is_touching = False
+            self._last_pointer_y = None
+            self._last_pointer_x = None
+            self._touch_accum_y = 0.0
+            self._touch_accum_x = 0.0
+        elif aid in (504, 503, 106) or (aid in (self.ACTION_MOUSE_MOVE, 107) and getattr(self, '_is_touching', False)):
+            # 504 = ACTION_GESTURE_PAN nativo en Kodi
+            # 106 = ACTION_MOUSE_DRAG al arrastrar dedo en Android
+            # 107 = ACTION_MOUSE_MOVE continuo mientras se mantiene el toque
+            try:
+                raw_y = action.getAmount2()
+                dy = 0.0
+                if raw_y is not None:
+                    raw_y = float(raw_y)
+                    # Si el valor es pequeño (<= 80), Kodi envía delta relativo
+                    if abs(raw_y) <= 80:
+                        dy = raw_y
+                    # Si el valor es grande (> 80), Kodi envía coordenada Y absoluta en pantalla
+                    elif getattr(self, '_last_pointer_y', None) is not None:
+                        dy = raw_y - self._last_pointer_y
+                        self._last_pointer_y = raw_y
+                    else:
+                        self._last_pointer_y = raw_y
+                        dy = 0.0
 
-                dx_pan = action.getAmount1()
-                self._touch_accum_x += dx_pan
-                if self._touch_accum_x > 35:
-                    self._switch_tab(0)
-                    self._touch_accum_x = 0.0
-                elif self._touch_accum_x < -35:
-                    self._switch_tab(1)
-                    self._touch_accum_x = 0.0
+                if dy != 0.0:
+                    if abs(dy) > 2:
+                        self._touch_has_dragged = True
+                    self._touch_accum_y += dy
+                    # Umbral de 8px para respuesta instantánea, suave y natural al navegar
+                    if self._touch_accum_y >= 8:
+                        steps = int(self._touch_accum_y / 8)
+                        self._scroll(-steps)
+                        self._touch_accum_y -= steps * 8
+                    elif self._touch_accum_y <= -8:
+                        steps = int(abs(self._touch_accum_y) / 8)
+                        self._scroll(steps)
+                        self._touch_accum_y += steps * 8
+
+                raw_x = action.getAmount1()
+                dx = 0.0
+                if raw_x is not None:
+                    raw_x = float(raw_x)
+                    if abs(raw_x) <= 80:
+                        dx = raw_x
+                    elif getattr(self, '_last_pointer_x', None) is not None:
+                        dx = raw_x - self._last_pointer_x
+                        self._last_pointer_x = raw_x
+                    else:
+                        self._last_pointer_x = raw_x
+                        dx = 0.0
+
+                if dx != 0.0:
+                    self._touch_accum_x += dx
+                    if self._touch_accum_x > 35:
+                        self._switch_tab(0)
+                        self._touch_accum_x = 0.0
+                    elif self._touch_accum_x < -35:
+                        self._switch_tab(1)
+                        self._touch_accum_x = 0.0
             except Exception:
                 pass
         elif aid in (514,):      # SWIPE_DOWN (deslizar abajo -> subir lista)
@@ -10237,6 +10285,14 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         elif aid in (512,):      # SWIPE_RIGHT -> Directos
             self._switch_tab(0)
         elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103, 500, 505, 510):
+            # Si el toque fue un arrastre de scroll, no seleccionar enlace al soltar
+            if getattr(self, '_touch_has_dragged', False):
+                self._touch_has_dragged = False
+                self._is_touching = False
+                self._last_pointer_y = None
+                return
+            self._is_touching = False
+
             try: fid = self.getFocusId()
             except: fid = -1
             if hasattr(self, '_tab0_btn') and fid == self._tab0_btn.getId():
@@ -10256,13 +10312,17 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     except ValueError: self.selected = 0
                     self.close()
                     return
-            if hasattr(self, '_backdrop_id') and fid == self._backdrop_id:
-                # Clic o toque fuera del recuadro -> Cerrar sin seleccionar
-                self.selected = -1
-                self.close()
-                return
+            # Clic o toque fuera en la ventana grande: IGNORAR (no cerrar ni seleccionar)
+            return
 
     def onClick(self, control_id):
+        # Si fue arrastre de desplazamiento táctil, no ejecutar clic
+        if getattr(self, '_touch_has_dragged', False):
+            self._touch_has_dragged = False
+            self._is_touching = False
+            return
+        self._is_touching = False
+
         if hasattr(self, '_tab0_btn') and control_id == self._tab0_btn.getId():
             self._switch_tab(0)
             return
@@ -10286,11 +10346,8 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     self.selected = 0
                 self.close()
                 return
-        if hasattr(self, '_backdrop_id') and control_id == self._backdrop_id:
-            # Clic o toque fuera del recuadro -> Cerrar sin seleccionar
-            self.selected = -1
-            self.close()
-            return
+        # Clic fuera: no hacer nada en la ventana grande
+        return
 
     def close(self):
         if getattr(self, '_is_closed', False):
