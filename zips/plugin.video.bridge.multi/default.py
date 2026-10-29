@@ -9714,6 +9714,8 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._scroll_controls = []
         self._up_btn = None
         self._down_btn = None
+        self._close_btn = None
+        self._close_bg = None
         self._scroll_btn_bgs = {}
         self._row_start_y = 0
         self._row_h = 48
@@ -9855,6 +9857,23 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             dx+28, dy+16, 620, 28,
             '[B][COLOR #CFA82C]MULTI BRIDGE[/COLOR][/B]  [COLOR #E0E0E0]—  %s[/COLOR]' % sub_head,
             font='font13'))
+
+        # Botón de cierre [ ✕ ] en la esquina superior derecha (táctil y cursor PC)
+        close_w, close_h = 48, 32
+        close_x = dx + dw - 24 - close_w
+        close_y = dy + 10
+        self._close_bg = xbmcgui.ControlImage(close_x, close_y, close_w, close_h, white, colorDiffuse='22FFFFFF')
+        self.addControl(self._close_bg)
+        for _bx, _by, _bw, _bh in (
+                (close_x, close_y, close_w, 2),
+                (close_x, close_y + close_h - 2, close_w, 2),
+                (close_x, close_y, 2, close_h),
+                (close_x + close_w - 2, close_y, 2, close_h)):
+            self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='44CFA82C'))
+        self._close_btn = xbmcgui.ControlButton(
+            close_x, close_y, close_w, close_h, '[B]✕[/B]', '', '',
+            font='font13', textColor='FFCCCCCC', focusedColor='FFFF4444', alignment=6)
+        self.addControl(self._close_btn)
 
         # Línea separadora dorada superior
         self.addControl(xbmcgui.ControlImage(dx+20, dy+48, dw-40, 2, white, colorDiffuse='55CFA82C'))
@@ -10230,6 +10249,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     self.current = hovered_idx
                     self._update_highlight_and_bgs()
 
+            if hasattr(self, '_close_btn') and hasattr(self, '_close_bg') and self._close_btn and self._close_bg:
+                self._close_bg.setColorDiffuse('66AA2222' if fid == self._close_btn.getId() else '22FFFFFF')
+
             if hasattr(self, '_scroll_btn_bgs'):
                 for bid, bg_c in self._scroll_btn_bgs.items():
                     try:
@@ -10390,6 +10412,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
             try: fid = self.getFocusId()
             except: fid = -1
+            if hasattr(self, '_close_btn') and self._close_btn and fid == self._close_btn.getId():
+                self.selected = -1
+                self.close()
+                return
             if hasattr(self, '_tab0_btn') and fid == self._tab0_btn.getId():
                 self._switch_tab(0); return
             if hasattr(self, '_tab1_btn') and fid == self._tab1_btn.getId():
@@ -10418,6 +10444,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             return
         self._is_touching = False
 
+        if hasattr(self, '_close_btn') and self._close_btn and control_id == self._close_btn.getId():
+            self.selected = -1
+            self.close()
+            return
         if hasattr(self, '_tab0_btn') and control_id == self._tab0_btn.getId():
             self._switch_tab(0)
             return
