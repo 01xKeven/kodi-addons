@@ -75,36 +75,26 @@ _bridge_addon = xbmcaddon.Addon('plugin.video.bridge.multi')
 ADDON_PATH = xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
 
 def _get_addon_white_texture():
-    """Retorna una textura blanca sólida de 1x1 píxel 100% garantizada para fondos y bordes."""
+    """Retorna una textura blanca sólida garantizada para fondos y bordes."""
     try:
-        cand = os.path.join(ADDON_PATH, 'resources', 'media', 'white.png')
+        cand = os.path.normpath(os.path.join(ADDON_PATH, 'resources', 'skins', 'Default', 'media', 'white.png'))
         if os.path.exists(cand):
             return cand
-        med_dir = os.path.join(ADDON_PATH, 'resources', 'media')
-        if not os.path.exists(med_dir):
-            try: os.makedirs(med_dir)
-            except: pass
-        _png = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
-                b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff'
-                b'\x3f\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00\x00\x00IEND\xaeB`\x82')
-        try:
-            with open(cand, 'wb') as _f: _f.write(_png)
-            if os.path.exists(cand): return cand
-        except: pass
-        d = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.bridge.multi/')
-        if d:
-            if not os.path.exists(d):
-                try: os.makedirs(d)
-                except: pass
-            ud_white = os.path.join(d, 'bm_white.png')
-            if not os.path.exists(ud_white):
-                try:
-                    with open(ud_white, 'wb') as _f: _f.write(_png)
-                except: pass
-            if os.path.exists(ud_white): return ud_white
     except Exception:
         pass
-    return 'special://skin/media/white-diffuse.png'
+    try:
+        cand2 = os.path.normpath(os.path.join(ADDON_PATH, 'resources', 'media', 'white.png'))
+        if os.path.exists(cand2):
+            return cand2
+    except Exception:
+        pass
+    try:
+        cand3 = os.path.normpath(os.path.join(os.path.dirname(ADDON_PATH), 'service.guiaparental', 'resources', 'skins', 'Default', 'media', 'white.png'))
+        if os.path.exists(cand3):
+            return cand3
+    except Exception:
+        pass
+    return 'special://home/addons/plugin.video.bridge.multi/resources/skins/Default/media/white.png'
 
 def _show_bridge_notification(heading, message, time_ms=3500):
     """Muestra una notificación en pantalla de forma infalible en cualquier dispositivo y skin,
@@ -8889,22 +8879,22 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
 
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(
-            dx, dy, dw, dh, white, colorDiffuse='0xFFCFA82C'))
+            dx, dy, dw, dh, white, colorDiffuse='FFCFA82C'))
 
         # Fondo oscuro interior (negro puro)
         self.addControl(xbmcgui.ControlImage(
             dx+border, dy+border, dw-border*2, dh-border*2,
-            white, colorDiffuse='0xFF000000'))
+            white, colorDiffuse='FF000000'))
 
         # Titulo
         self.addControl(xbmcgui.ControlLabel(
             dx, dy+14, dw, 36,
             '[B]¿Con qué addon deseas buscar?[/B]',
-            font='font13', textColor='0xFFCFA82C', alignment=6))
+            font='font13', textColor='FFCFA82C', alignment=6))
 
         # Línea separadora dorada
         self.addControl(xbmcgui.ControlImage(
-            dx+30, dy+56, dw-60, 2, white, colorDiffuse='0x55CFA82C'))
+            dx+30, dy+56, dw-60, 2, white, colorDiffuse='55CFA82C'))
 
         # ----- opciones: iconos centrados horizontalmente -----
         icon_sz  = 148
@@ -8922,7 +8912,7 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
         self.addControl(xbmcgui.ControlLabel(
             opt1_x, icon_y+icon_sz+6, icon_sz, 32,
             '[B]Alfa[/B]', font='font13',
-            textColor='0xFFFFFFFF', alignment=6))
+            textColor='FFFFFFFF', alignment=6))
 
         # --- Balandro ---
         bal_img = xbmcgui.ControlImage(opt2_x, icon_y, icon_sz, icon_sz, self._bal_icon)
@@ -8932,13 +8922,13 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
         self.addControl(xbmcgui.ControlLabel(
             opt2_x, icon_y+icon_sz+6, icon_sz, 32,
             '[B]Balandro[/B]', font='font13',
-            textColor='0xFFFFFFFF', alignment=6))
+            textColor='FFFFFFFF', alignment=6))
 
         # ----- highlight dorado (4 lados como borde) -----
         hl_mg  = 8
         hl_sz  = icon_sz + hl_mg*2
         thick  = 3
-        GOLD   = '0xFFCFA82C'
+        GOLD   = 'FFCFA82C'
 
         def make_hl(ox, oy):
             return [
@@ -8958,7 +8948,7 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
         self.addControl(xbmcgui.ControlLabel(
             dx, dy+dh-34, dw, 28,
             '[COLOR=888888][← →] Navegar    [OK] Confirmar    [Atrás] Cancelar[/COLOR]',
-            font='font12', textColor='0xFF888888', alignment=6))
+            font='font12', textColor='FF888888', alignment=6))
 
         self._update_highlight()
 
@@ -9082,46 +9072,9 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         except Exception as e:
             xbmc.log('BridgeMulti AutoplayStopDialog build error: ' + str(e), xbmc.LOGWARNING)
 
-    def addControl(self, *args, **kwargs):
-        # Entrada estilo cartoon: pop rapido con rebote (pasa de 100 y se
-        # asienta = efecto "pum"). Animacion nativa de Kodi; DEBE ir DESPUES
-        # de addControl o Kodi la ignora. Si falla, el dialogo sale normal.
-        res = super().addControl(*args, **kwargs)
-        try:
-            ctrl = args[0] if args else None
-            if ctrl is not None:
-                try:
-                    ctrl.setAnimations([('WindowOpen', 'effect=zoom start=50,50 end=100,100 center=auto time=220 tween=back easing=out')])
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return res
-
-    _WHITE_PNG_CACHE = None
-
     @staticmethod
     def _bg_texture():
-        if _AutoplayStopDialog._WHITE_PNG_CACHE and os.path.exists(_AutoplayStopDialog._WHITE_PNG_CACHE):
-            return _AutoplayStopDialog._WHITE_PNG_CACHE
-        try:
-            d = BRIDGE_DATA_PATH
-            if not os.path.exists(d):
-                try: os.makedirs(d)
-                except: pass
-            _tmp = os.path.join(d, 'bm_white.png')
-            if not os.path.exists(_tmp):
-                _png = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
-                        b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff'
-                        b'\x3f\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00\x00\x00IEND\xaeB`\x82')
-                with open(_tmp, 'wb') as _f: _f.write(_png)
-            if os.path.exists(_tmp):
-                _AutoplayStopDialog._WHITE_PNG_CACHE = _tmp
-                return _tmp
-            xbmc.log('BridgeMulti AutoplayStopDialog: sin textura bg', xbmc.LOGWARNING)
-        except Exception as e:
-            xbmc.log('BridgeMulti AutoplayStopDialog bg error: ' + str(e), xbmc.LOGWARNING)
-        return ''
+        return _get_addon_white_texture()
 
     def _build(self):
         W = self.getWidth()
@@ -9132,18 +9085,18 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         dx = (W - dw) // 2
         dy = (H - dh) // 2
         border = 4
-        GOLD = '0xFFCFA82C'
+        GOLD = 'FFCFA82C'
         white = self._bg_texture()
         xbmc.log('BridgeMulti AutoplayStopDialog: bg=%s' % ('ok' if white else 'FALLO'), xbmc.LOGINFO)
 
         if white:
             # Borde dorado exterior
             self.addControl(xbmcgui.ControlImage(
-                dx, dy, dw, dh, white, colorDiffuse='0xFFCFA82C'))
+                dx, dy, dw, dh, white, colorDiffuse='FFCFA82C'))
             # Fondo oscuro interior
             self.addControl(xbmcgui.ControlImage(
                 dx+border, dy+border, dw-border*2, dh-border*2,
-                white, colorDiffuse='0xFF000000'))
+                white, colorDiffuse='FF000000'))
 
         # Titulo
         self.addControl(xbmcgui.ControlLabel(
@@ -9154,17 +9107,17 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         # Linea separadora dorada
         if white:
             self.addControl(xbmcgui.ControlImage(
-                dx+30, dy+48, dw-60, 2, white, colorDiffuse='0x55CFA82C'))
+                dx+30, dy+48, dw-60, 2, white, colorDiffuse='55CFA82C'))
 
         # Mensaje (2 lineas)
         self.addControl(xbmcgui.ControlLabel(
             dx+20, dy+60, dw-40, 30,
             '[B]%s[/B] se detuvo.' % self._server_label,
-            font='font13', textColor='0xFFFFFFFF', alignment=6))
+            font='font13', textColor='FFFFFFFF', alignment=6))
         self.addControl(xbmcgui.ControlLabel(
             dx+20, dy+92, dw-40, 30,
             '¿Reproducir siguiente enlace disponible?',
-            font='font13', textColor='0xFFFFFFFF', alignment=6))
+            font='font13', textColor='FFFFFFFF', alignment=6))
 
         # ----- fila de 3 botones -----
         widths  = (110, 110, 190)
@@ -9177,7 +9130,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
         for i, (label, bw) in enumerate(zip(self._LABELS, widths)):
             btn = xbmcgui.ControlButton(
                 bx, btn_y, bw, btn_h, label, '', '',
-                font='font13', textColor='0xFFFFFFFF', focusedColor=GOLD,
+                font='font13', textColor='FFFFFFFF', focusedColor=GOLD,
                 alignment=6)
             self.addControl(btn)
             self._btn_ids.append(btn.getId())
@@ -9185,7 +9138,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
             hl = []
             if white:
                 m, t = 5, 2
-                DIM = '0xFF8A6D1F'
+                DIM = 'FF8A6D1F'
                 for _bx, _by, _bw, _bh in (
                         (bx-m, btn_y-m, bw+m*2, t),
                         (bx-m, btn_y+btn_h+m-t, bw+m*2, t),
@@ -9195,7 +9148,7 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
                     self.addControl(_base)
                 m, t = 5, 5
                 hl = [
-                    xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, btn_h+m*2, white, colorDiffuse='0x44CFA82C'),
+                    xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, btn_h+m*2, white, colorDiffuse='44CFA82C'),
                     xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, t, white, colorDiffuse=GOLD),
                     xbmcgui.ControlImage(bx-m, btn_y+btn_h+m-t, bw+m*2, t, white, colorDiffuse=GOLD),
                     xbmcgui.ControlImage(bx-m, btn_y-m, t, btn_h+m*2, white, colorDiffuse=GOLD),
@@ -9313,13 +9266,14 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     ACTION_MOUSE_MOVE       = 107
     ACTION_BACKSPACE   = 110
 
-    def __init__(self, current_server_name="", meta=None):
+    def __init__(self, current_server_name="", meta=None, is_test=False):
         super().__init__()
         self._is_closed = False
         self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, -1=Cerrar/Atrás
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
         self.server_name = current_server_name or "Actual"
         self.meta = meta or {}
+        self.is_test = is_test
         self._btn_ids = []
         self._highlights = []
         try:
@@ -9329,6 +9283,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         self._start_playback_watchdog()
 
     def _start_playback_watchdog(self):
+        if getattr(self, "is_test", False): return
         def _watch():
             p = xbmc.Player()
             mon = xbmc.Monitor()
@@ -9356,7 +9311,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         H = self.getHeight() or 1080
         dw, dh = 330, 88
         border = 2
-        GOLD = '0xFFCFA82C'
+        GOLD = 'FFCFA82C'
         white = self._white()
 
         pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
@@ -9372,7 +9327,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
         # Fondo oscuro interior
-        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='0xF40A0A0E'))
+        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='F40A0A0E'))
 
         # Servidor actual (limpio y compacto)
         srv = (self.server_name or "Actual").strip()
@@ -9400,7 +9355,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             btn_x = bx + i * (bw + gap)
             btn = xbmcgui.ControlButton(
                 btn_x, by, bw, bh, lbl, '', '',
-                font='font10', textColor='0xFFCCCCCC', focusedColor='0xFFFFFFFF', alignment=6)
+                font='font10', textColor='FFCCCCCC', focusedColor='FFFFFFFF', alignment=6)
             self.addControl(btn)
             self._btn_ids.append(btn.getId())
 
@@ -9411,11 +9366,11 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     (btn_x-m, by+bh+m-t, bw+m*2, t),
                     (btn_x-m, by-m, t, bh+m*2),
                     (btn_x+bw+m-t, by-m, t, bh+m*2)):
-                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='0xFF443311'))
+                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='FF443311'))
 
             # Resaltado brillante cuando tiene foco
             hl = [
-                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='0x33CFA82C'),
+                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='33CFA82C'),
                 xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, t+1, white, colorDiffuse=GOLD),
                 xbmcgui.ControlImage(btn_x-m, by+bh+m-t-1, bw+m*2, t+1, white, colorDiffuse=GOLD),
                 xbmcgui.ControlImage(btn_x-m, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
@@ -9659,6 +9614,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self._start_playback_watchdog()
 
     def _start_playback_watchdog(self):
+        if getattr(self, "is_test", False): return
         def _watch():
             p = xbmc.Player()
             mon = xbmc.Monitor()
@@ -9697,20 +9653,6 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
     @offset.setter
     def offset(self, val):
         self.tab_offset[self.active_tab] = val
-
-    def addControl(self, *args, **kwargs):
-        res = super().addControl(*args, **kwargs)
-        try:
-            ctrl = args[0] if args else None
-            if ctrl is not None:
-                try:
-                    ctrl.setAnimations([
-                        ('WindowOpen', 'effect=zoom start=85,85 end=100,100 center=auto time=180 tween=back easing=out'),
-                        ('WindowClose', 'effect=fade start=100 end=0 time=100')
-                    ])
-                except Exception: pass
-        except Exception: pass
-        return res
 
     def _white(self):
         return _get_addon_white_texture()
@@ -9772,13 +9714,13 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         dx = (W - dw) // 2
         dy = (H - dh) // 2
         white = self._white()
-        GOLD = '0xFFCFA82C'
+        GOLD = 'FFCFA82C'
         BORDER = 3
 
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
         # Fondo oscuro interior translúcido
-        self.addControl(xbmcgui.ControlImage(dx+BORDER, dy+BORDER, dw-BORDER*2, dh-BORDER*2, white, colorDiffuse='0xF20A0A0A'))
+        self.addControl(xbmcgui.ControlImage(dx+BORDER, dy+BORDER, dw-BORDER*2, dh-BORDER*2, white, colorDiffuse='F20A0A0A'))
 
         # Título cabecera
         if self.is_playback:
@@ -9793,7 +9735,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             font='font13'))
 
         # Línea separadora dorada superior
-        self.addControl(xbmcgui.ControlImage(dx+20, dy+48, dw-40, 2, white, colorDiffuse='0x55CFA82C'))
+        self.addControl(xbmcgui.ControlImage(dx+20, dy+48, dw-40, 2, white, colorDiffuse='55CFA82C'))
 
         # Barra de Pestañas (Tabs)
         tab_y = dy + 58
@@ -9805,7 +9747,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         t = 2
 
         # Pestaña 0: Enlaces Directos
-        self._tab0_bg = xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, tab_h, white, colorDiffuse='0x44CFA82C')
+        self._tab0_bg = xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, tab_h, white, colorDiffuse='44CFA82C')
         self.addControl(self._tab0_bg)
         self._tab0_borders = [
             xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, t, white, colorDiffuse=GOLD),
@@ -9820,13 +9762,13 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self.addControl(self._tab0_lbl)
 
         # Pestaña 1: Torrents
-        self._tab1_bg = xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, tab_h, white, colorDiffuse='0x15FFFFFF')
+        self._tab1_bg = xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, tab_h, white, colorDiffuse='15FFFFFF')
         self.addControl(self._tab1_bg)
         self._tab1_borders = [
-            xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, t, white, colorDiffuse='0x33CFA82C'),
-            xbmcgui.ControlImage(tab1_x, tab_y + tab_h - t, tab1_w, t, white, colorDiffuse='0x33CFA82C'),
-            xbmcgui.ControlImage(tab1_x, tab_y, t, tab_h, white, colorDiffuse='0x33CFA82C'),
-            xbmcgui.ControlImage(tab1_x + tab1_w - t, tab_y, t, tab_h, white, colorDiffuse='0x33CFA82C'),
+            xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, t, white, colorDiffuse='33CFA82C'),
+            xbmcgui.ControlImage(tab1_x, tab_y + tab_h - t, tab1_w, t, white, colorDiffuse='33CFA82C'),
+            xbmcgui.ControlImage(tab1_x, tab_y, t, tab_h, white, colorDiffuse='33CFA82C'),
+            xbmcgui.ControlImage(tab1_x + tab1_w - t, tab_y, t, tab_h, white, colorDiffuse='33CFA82C'),
         ]
         for b in self._tab1_borders: self.addControl(b)
         self._tab1_btn = xbmcgui.ControlButton(tab1_x, tab_y, tab1_w, tab_h, '', '', '', font='font12', alignment=6)
@@ -9840,7 +9782,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         up_top_y = tab_y
 
         # Botón superior ▲ con marco dorado y fondo táctil destacado
-        up_top_bg = xbmcgui.ControlImage(up_top_x, up_top_y, btn_w, btn_h, white, colorDiffuse='0x33CFA82C')
+        up_top_bg = xbmcgui.ControlImage(up_top_x, up_top_y, btn_w, btn_h, white, colorDiffuse='33CFA82C')
         self.addControl(up_top_bg)
         self._scroll_controls.append(up_top_bg)
         for _bx, _by, _bw, _bh in (
@@ -9854,7 +9796,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
         self._up_btn = xbmcgui.ControlButton(
             up_top_x, up_top_y, btn_w, btn_h, '[B]▲[/B]', '', '',
-            font='font20_title', textColor=GOLD, focusedColor='0xFFFFFFFF', alignment=6)
+            font='font20_title', textColor=GOLD, focusedColor='FFFFFFFF', alignment=6)
         self.addControl(self._up_btn)
         self._scroll_controls.append(self._up_btn)
         self._scroll_btn_bgs[self._up_btn.getId()] = up_top_bg
@@ -9871,7 +9813,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
         for i in range(self.visible_rows):
             ry = self._row_start_y + i * (self._row_h + self._row_gap)
-            bg = xbmcgui.ControlImage(self._rx, ry, self._rw, self._row_h, white, colorDiffuse='0x18FFFFFF')
+            bg = xbmcgui.ControlImage(self._rx, ry, self._rw, self._row_h, white, colorDiffuse='18FFFFFF')
             self.addControl(bg)
             self._row_bgs.append(bg)
 
@@ -9890,7 +9832,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             # Botón interactivo transparente sobre toda la fila para soporte táctil, clic y hover con cursor
             btn = xbmcgui.ControlButton(
                 self._rx, ry, self._rw, self._row_h, '', '', '',
-                textColor='0x00000000', focusedColor='0x00000000')
+                textColor='00000000', focusedColor='00000000')
             self.addControl(btn)
             self._row_btns.append(btn)
             self._row_btn_ids.append(btn.getId())
@@ -9917,7 +9859,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         nav_y = dy + 492
         down_x = dx + dw - btn_w - 24
 
-        down_bg = xbmcgui.ControlImage(down_x, nav_y, btn_w, btn_h, white, colorDiffuse='0x33CFA82C')
+        down_bg = xbmcgui.ControlImage(down_x, nav_y, btn_w, btn_h, white, colorDiffuse='33CFA82C')
         self.addControl(down_bg)
         self._scroll_controls.append(down_bg)
         for _bx, _by, _bw, _bh in (
@@ -9931,7 +9873,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
         self._down_btn = xbmcgui.ControlButton(
             down_x, nav_y, btn_w, btn_h, '[B]▼[/B]', '', '',
-            font='font20_title', textColor=GOLD, focusedColor='0xFFFFFFFF', alignment=6)
+            font='font20_title', textColor=GOLD, focusedColor='FFFFFFFF', alignment=6)
         self.addControl(self._down_btn)
         self._scroll_controls.append(self._down_btn)
         self._scroll_btn_bgs[self._down_btn.getId()] = down_bg
@@ -9952,11 +9894,11 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
 
         self._bottom_media_label = xbmcgui.ControlLabel(
             dx + 28, nav_y + 6, dw - btn_w - 76, 22,
-            bottom_media_title, font='font12', textColor='0xFFAAAAAA')
+            bottom_media_title, font='font12', textColor='FFAAAAAA')
         self.addControl(self._bottom_media_label)
 
         # Separador inferior
-        self.addControl(xbmcgui.ControlImage(dx+20, dy+538, dw-40, 1, white, colorDiffuse='0x44CFA82C'))
+        self.addControl(xbmcgui.ControlImage(dx+20, dy+538, dw-40, 1, white, colorDiffuse='44CFA82C'))
 
         # Ayuda en pie de página
         other_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
@@ -9978,10 +9920,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._update_view()
 
     def _update_tab_headers(self):
-        GOLD = '0xFFCFA82C'
-        DIM_BORDER = '0x33CFA82C'
-        BG_ACTIVE = '0x44CFA82C'
-        BG_INACTIVE = '0x15FFFFFF'
+        GOLD = 'FFCFA82C'
+        DIM_BORDER = '33CFA82C'
+        BG_ACTIVE = '44CFA82C'
+        BG_INACTIVE = '15FFFFFF'
 
         d_count = len(self.direct_links)
         t_count = len(self.torrent_links)
@@ -10022,7 +9964,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._update_view()
 
     def _scroll(self, delta):
-        """Desplazamiento directo para rueda del ratón y gestos táctiles en pantallas táctiles."""
+        """Desplazamiento ultra fluido sin bloqueo de foco para rueda del ratón y táctil."""
         links = self.active_links
         if not links: return
         n = len(links)
@@ -10030,7 +9972,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             new_idx = max(0, min(n - 1, self.current + delta))
             if new_idx != self.current:
                 self.current = new_idx
-                self._update_view()
+                self._update_view(sync_focus=False)
             return
         max_offset = max(0, n - self.visible_rows)
         new_offset = max(0, min(max_offset, self.offset + delta))
@@ -10040,12 +9982,12 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                 self.current = self.offset
             elif self.current >= self.offset + self.visible_rows:
                 self.current = self.offset + self.visible_rows - 1
-            self._update_view()
+            self._update_view(sync_focus=False)
         else:
             new_idx = max(0, min(n - 1, self.current + delta))
             if new_idx != self.current:
                 self.current = new_idx
-                self._update_view()
+                self._update_view(sync_focus=False)
 
     def _update_highlight_and_bgs(self):
         links = self.active_links
@@ -10070,14 +10012,14 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     lnk = links[item_idx]
                     is_failed = (lnk in self.failed_links)
                     if i == slot:
-                        bg_c = '0x44AA3333' if is_failed else '0x33CFA82C'
+                        bg_c = '44AA3333' if is_failed else '33CFA82C'
                     else:
-                        bg_c = '0x20551111' if is_failed else '0x18FFFFFF'
+                        bg_c = '20551111' if is_failed else '18FFFFFF'
                     self._row_bgs[i].setColorDiffuse(bg_c)
 
             self._counter_label.setLabel('[B][COLOR #CFA82C]%d[/COLOR] [COLOR #888888]/ %d[/COLOR][/B]' % (self.current + 1, n))
 
-    def _update_view(self):
+    def _update_view(self, sync_focus=True):
         links = self.active_links
         n = len(links)
         if n == 0:
@@ -10126,9 +10068,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                 self._row_channels[i].setVisible(True)
                 self._row_bgs[i].setVisible(True)
                 if i == slot:
-                    bg_c = '0x44AA3333' if is_failed else '0x33CFA82C'
+                    bg_c = '44AA3333' if is_failed else '33CFA82C'
                 else:
-                    bg_c = '0x20551111' if is_failed else '0x18FFFFFF'
+                    bg_c = '20551111' if is_failed else '18FFFFFF'
                 self._row_bgs[i].setColorDiffuse(bg_c)
                 if i < len(self._row_btns): self._row_btns[i].setVisible(True)
             else:
@@ -10147,7 +10089,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         for hl in self._hl_images: hl.setVisible(True)
 
         # Sincronizar foco nativo en el botón interactivo de la fila activa
-        if hasattr(self, '_row_btns') and 0 <= slot < len(self._row_btns) and slot < n - self.offset:
+        if sync_focus and hasattr(self, '_row_btns') and 0 <= slot < len(self._row_btns) and slot < n - self.offset:
             try:
                 self.setFocus(self._row_btns[slot])
             except Exception:
@@ -10169,7 +10111,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             if hasattr(self, '_scroll_btn_bgs'):
                 for bid, bg_c in self._scroll_btn_bgs.items():
                     try:
-                        bg_c.setColorDiffuse('0x77CFA82C' if bid == fid else '0x33CFA82C')
+                        bg_c.setColorDiffuse('77CFA82C' if bid == fid else '33CFA82C')
                     except Exception:
                         pass
         except Exception:
@@ -10227,9 +10169,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             except Exception:
                 pass
         elif aid in (self.ACTION_MOUSE_WHEEL_UP, 104, 111):
-            self._scroll(-1)
+            self._scroll(-2)
         elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105, 112):
-            self._scroll(1)
+            self._scroll(2)
         # Soporte para gestos táctiles en pantallas táctiles (móviles / tablets)
         elif aid in (514,):  # SWIPE_DOWN
             self._scroll(-2)
