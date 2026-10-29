@@ -7239,6 +7239,83 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
 
 
+def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
+    """Solución GLOBAL para todos los servidores:
+    Asegura que el ListItem y su URL contengan las cabeceras HTTP necesarias (User-Agent de navegador
+    y Referer del servidor/página), evitando errores 403 Forbidden y 'Error opening file' de cualquier CDN
+    (Doodstream, Streamtape, Voe, Mixdrop, Uqload, etc.).
+    """
+    if not listitem:
+        return
+    try:
+        path = listitem.getPath()
+        if not path or not path.startswith(('http://', 'https://')):
+            return
+
+        import urllib.parse
+        base_url = path
+        headers = {}
+        if '|' in path:
+            parts = path.split('|', 1)
+            base_url = parts[0]
+            if len(parts) > 1 and parts[1]:
+                for kv in parts[1].split('&'):
+                    if '=' in kv:
+                        k, v = kv.split('=', 1)
+                        headers[urllib.parse.unquote_plus(k)] = urllib.parse.unquote_plus(v)
+
+        # User-Agent de navegador estándar universal
+        if 'User-Agent' not in headers:
+            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+        # Referer adecuado para el servidor o CDN
+        if 'Referer' not in headers:
+            srv_lower = (server_name or '').lower()
+            ref = ''
+            if page_url and page_url.startswith(('http://', 'https://')):
+                ref = page_url
+            elif 'dood' in srv_lower or 'cloudatacdn' in base_url or 'ds2play' in srv_lower:
+                ref = 'https://doodstream.com/'
+            elif 'streamtape' in srv_lower or 'tapecontent' in base_url:
+                ref = 'https://streamtape.com/'
+            elif 'voe' in srv_lower:
+                ref = 'https://voe.sx/'
+            elif 'mixdrop' in srv_lower:
+                ref = 'https://mixdrop.co/'
+            elif 'uqload' in srv_lower:
+                ref = 'https://uqload.io/'
+            elif 'vidmoly' in srv_lower:
+                ref = 'https://vidmoly.to/'
+            elif 'filelions' in srv_lower:
+                ref = 'https://filelions.to/'
+            elif 'goodstream' in srv_lower:
+                ref = 'https://goodstream.uno/'
+            else:
+                parsed = urllib.parse.urlparse(base_url)
+                if parsed.scheme and parsed.netloc:
+                    ref = f"{parsed.scheme}://{parsed.netloc}/"
+
+            if ref:
+                headers['Referer'] = ref
+
+        # Reconstruir pipe con cabeceras completas
+        pipe_parts = [f"{urllib.parse.quote_plus(k)}={urllib.parse.quote_plus(v)}" for k, v in headers.items()]
+        safe_path = base_url + '|' + '&'.join(pipe_parts)
+        listitem.setPath(safe_path)
+
+        # Si es stream HLS/DASH, inyectar también a inputstream.adaptive
+        if '.m3u8' in base_url.lower() or '.mpd' in base_url.lower():
+            raw_hdr_str = '&'.join([f"{k}={v}" for k, v in headers.items()])
+            try:
+                listitem.setProperty('inputstream.adaptive.manifest_headers', raw_hdr_str)
+                listitem.setProperty('inputstream.adaptive.stream_headers', raw_hdr_str)
+            except Exception:
+                pass
+        return safe_path
+    except Exception as e:
+        xbmc.log(f"Multi Bridge _ensure_playback_headers_on_item error: {e}", xbmc.LOGWARNING)
+        return listitem.getPath()
+
 def _autoplay_link(link, handle, engine, matched_item=None):
     """Resolve *link* and tell Kodi to play it via setResolvedUrl(handle, True, ...).
 
@@ -7333,6 +7410,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
         if _result[0] is True and _resolved_li[0] is not None:
             xbmc.log('Multi Bridge _autoplay_link: setResolvedUrl True via %s' % server_name,
                      xbmc.LOGINFO)
+            _ensure_playback_headers_on_item(_resolved_li[0], server_name=server_name, page_url=getattr(link, 'url', ''))
             xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
             return True
         else:
@@ -7527,7 +7605,24 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             xbmc.log(f"Multi Bridge: conexión a {server_name} cancelada", xbmc.LOGINFO)
             return False
 
+                # Fallback universal ResolveUrl si el motor principal falló
+        if (_result[0] is not True or _resolved_li[0] is None) and xbmc.getCondVisibility('System.HasAddon("script.module.resolveurl")'):
+            try:
+                page_url = getattr(prepared, 'url', '') or getattr(link, 'url', '')
+                if page_url:
+                    import resolveurl
+                    if resolveurl.HostedMediaFile(page_url).valid_url():
+                        xbmc.log(f"Multi Bridge: fallback universal ResolveUrl para {server_name}...", xbmc.LOGINFO)
+                        _res_url = resolveurl.resolve(page_url)
+                        if _res_url:
+                            _resolved_li[0] = xbmcgui.ListItem(path=_res_url)
+                            _result[0] = True
+                            xbmc.log(f"Multi Bridge: ResolveUrl resolvió {server_name} con éxito!", xbmc.LOGINFO)
+            except Exception as _re_e:
+                xbmc.log(f"Multi Bridge fallback ResolveUrl error: {_re_e}", xbmc.LOGINFO)
+
         if _result[0] is True and _resolved_li[0] is not None:
+            _ensure_playback_headers_on_item(_resolved_li[0], server_name=server_name, page_url=getattr(prepared, 'url', '') or getattr(link, 'url', ''))
             media_url = ''
             try: media_url = _resolved_li[0].getPath()
             except: pass
