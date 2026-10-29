@@ -9161,9 +9161,20 @@ class _AutoplayStopDialog(xbmcgui.WindowDialog):
 
         self._update_highlight()
         try:
-            self.setFocus(self.getControl(self._btn_ids[0]))
+            b0 = self.getControl(self._btn_ids[0])
+            b1 = self.getControl(self._btn_ids[1])
+            b0.controlLeft(b1)
+            b0.controlRight(b1)
+            b1.controlLeft(b0)
+            b1.controlRight(b0)
+            b0.controlUp(b0)
+            b0.controlDown(b0)
+            b1.controlUp(b1)
+            b1.controlDown(b1)
+            self.setFocus(b0)
         except Exception:
-            pass
+            try: self.setFocus(self.getControl(self._btn_ids[0]))
+            except: pass
 
     def _update_highlight(self):
         for i, hl in enumerate(self._highlights):
@@ -9324,6 +9335,12 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             margin_y = 40
             dy = margin_y
 
+        # Backdrop a pantalla completa para capturar clics/toques fuera del popup y reanudar
+        self._backdrop_btn = xbmcgui.ControlButton(0, 0, W, H, '', '', '',
+                                                   textColor='00000000', focusedColor='00000000')
+        self.addControl(self._backdrop_btn)
+        self._backdrop_id = self._backdrop_btn.getId()
+
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
         # Fondo oscuro interior
@@ -9427,20 +9444,22 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         elif aid == self.ACTION_SELECT_ITEM:
             self.selected = self.current
             self.close()
-        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, 100, 103):
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, 100, 103, 500, 505, 510):
             try: fid = self.getFocusId()
             except: fid = -1
             if fid in self._btn_ids:
                 self.selected = self._btn_ids.index(fid)
             else:
-                self.selected = self.current
+                # Clic o toque fuera en pantalla -> Reanudar reproduccion (Continuar)
+                self.selected = 0
             self.close()
 
     def onClick(self, control_id):
         if control_id in self._btn_ids:
             self.selected = self._btn_ids.index(control_id)
         else:
-            self.selected = self.current
+            # Clic o toque fuera en el backdrop -> Reanudar reproduccion (Continuar)
+            self.selected = 0
         self.close()
 
     def close(self):
@@ -9606,6 +9625,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._row_gap = 6
         self._rx = 0
         self._rw = 0
+        self._touch_accum_y = 0.0
+        self._touch_accum_x = 0.0
+        self._backdrop_id = -1
         try:
             self._build()
         except Exception as e:
@@ -9717,6 +9739,12 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         GOLD = 'FFCFA82C'
         BORDER = 3
 
+        # Fondo transparente de pantalla completa para detectar toques y clics fuera del dialogo
+        self._backdrop_btn = xbmcgui.ControlButton(0, 0, W, H, '', '', '',
+                                                   textColor='00000000', focusedColor='00000000')
+        self.addControl(self._backdrop_btn)
+        self._backdrop_id = self._backdrop_btn.getId()
+
         # Borde dorado exterior
         self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
         # Fondo oscuro interior translúcido
@@ -9776,8 +9804,8 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self._tab1_lbl = xbmcgui.ControlLabel(tab1_x, tab_y + 4, tab1_w, 24, '', font='font12', alignment=6)
         self.addControl(self._tab1_lbl)
 
-        # Botón de scroll arriba (único botón de navegación en la parte superior)
-        btn_w, btn_h = 88, 34
+        # Botón de scroll arriba (ampliado para toque táctil fácil en Android)
+        btn_w, btn_h = 100, 36
         up_top_x = dx + dw - btn_w - 24
         up_top_y = tab_y
 
@@ -10172,26 +10200,43 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self._scroll(-2)
         elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105, 112):
             self._scroll(2)
-        # Soporte para gestos táctiles en pantallas táctiles (móviles / tablets)
-        elif aid in (514,):  # SWIPE_DOWN
-            self._scroll(-2)
-        elif aid in (513,):  # SWIPE_UP
-            self._scroll(2)
-        elif aid in (511,):  # SWIPE_LEFT -> Torrents
-            self._switch_tab(1)
-        elif aid in (512,):  # SWIPE_RIGHT -> Directos
-            self._switch_tab(0)
-        elif aid == 503:     # GESTURE_PAN
+        # Soporte ultra-sensible para gestos táctiles en Android y pantallas táctiles
+        elif aid in (501, 502):  # GESTURE_BEGIN, GESTURE_END
+            self._touch_accum_y = 0.0
+            self._touch_accum_x = 0.0
+        elif aid == 503:         # GESTURE_PAN táctil en Android / móvil
             try:
                 dy = action.getAmount2()
-                if dy > 15: self._scroll(-1)
-                elif dy < -15: self._scroll(1)
+                self._touch_accum_y += dy
+                # Umbral de 12px con acumulador para respuesta táctil suave e instantánea
+                if self._touch_accum_y >= 12:
+                    steps = int(self._touch_accum_y / 12)
+                    self._scroll(-steps)
+                    self._touch_accum_y -= steps * 12
+                elif self._touch_accum_y <= -12:
+                    steps = int(abs(self._touch_accum_y) / 12)
+                    self._scroll(steps)
+                    self._touch_accum_y += steps * 12
+
                 dx_pan = action.getAmount1()
-                if dx_pan > 40: self._switch_tab(0)
-                elif dx_pan < -40: self._switch_tab(1)
+                self._touch_accum_x += dx_pan
+                if self._touch_accum_x > 35:
+                    self._switch_tab(0)
+                    self._touch_accum_x = 0.0
+                elif self._touch_accum_x < -35:
+                    self._switch_tab(1)
+                    self._touch_accum_x = 0.0
             except Exception:
                 pass
-        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103):
+        elif aid in (514,):      # SWIPE_DOWN (deslizar abajo -> subir lista)
+            self._scroll(-2)
+        elif aid in (513,):      # SWIPE_UP (deslizar arriba -> bajar lista)
+            self._scroll(2)
+        elif aid in (511,):      # SWIPE_LEFT -> Torrents
+            self._switch_tab(1)
+        elif aid in (512,):      # SWIPE_RIGHT -> Directos
+            self._switch_tab(0)
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103, 500, 505, 510):
             try: fid = self.getFocusId()
             except: fid = -1
             if hasattr(self, '_tab0_btn') and fid == self._tab0_btn.getId():
@@ -10199,9 +10244,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             if hasattr(self, '_tab1_btn') and fid == self._tab1_btn.getId():
                 self._switch_tab(1); return
             if hasattr(self, '_up_btn') and fid == self._up_btn.getId():
-                self._scroll(-1); return
+                self._scroll(-2); return
             if hasattr(self, '_down_btn') and fid == self._down_btn.getId():
-                self._scroll(1); return
+                self._scroll(2); return
             if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
                 row_idx = self._row_btn_ids.index(fid)
                 item_idx = self.offset + row_idx
@@ -10211,13 +10256,11 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     except ValueError: self.selected = 0
                     self.close()
                     return
-            if self.active_links and 0 <= self.current < len(self.active_links):
-                chosen = self.active_links[self.current]
-                try: self.selected = self.all_links.index(chosen)
-                except ValueError: self.selected = 0
-            else:
+            if hasattr(self, '_backdrop_id') and fid == self._backdrop_id:
+                # Clic o toque fuera del recuadro -> Cerrar sin seleccionar
                 self.selected = -1
-            self.close()
+                self.close()
+                return
 
     def onClick(self, control_id):
         if hasattr(self, '_tab0_btn') and control_id == self._tab0_btn.getId():
@@ -10227,10 +10270,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self._switch_tab(1)
             return
         if hasattr(self, '_up_btn') and control_id == self._up_btn.getId():
-            self._scroll(-1)
+            self._scroll(-2)
             return
         if hasattr(self, '_down_btn') and control_id == self._down_btn.getId():
-            self._scroll(1)
+            self._scroll(2)
             return
         if hasattr(self, '_row_btn_ids') and control_id in self._row_btn_ids:
             row_idx = self._row_btn_ids.index(control_id)
@@ -10243,15 +10286,11 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     self.selected = 0
                 self.close()
                 return
-        if self.active_links and 0 <= self.current < len(self.active_links):
-            chosen = self.active_links[self.current]
-            try:
-                self.selected = self.all_links.index(chosen)
-            except ValueError:
-                self.selected = 0
-        else:
+        if hasattr(self, '_backdrop_id') and control_id == self._backdrop_id:
+            # Clic o toque fuera del recuadro -> Cerrar sin seleccionar
             self.selected = -1
-        self.close()
+            self.close()
+            return
 
     def close(self):
         if getattr(self, '_is_closed', False):
