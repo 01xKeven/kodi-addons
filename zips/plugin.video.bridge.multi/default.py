@@ -11287,7 +11287,7 @@ def main():
             # Reutilizar cache reciente — respetar ajuste autoplay
             try:
                 try:
-                    xbmcgui.Dialog().notification('Multi Bridge', 'Enlaces temporales recuperados', xbmcgui.NOTIFICATION_INFO, 2500)
+                    xbmcgui.Dialog().notification('Multi Bridge', 'Enlaces en caché recuperados', xbmcgui.NOTIFICATION_INFO, 2500)
                 except Exception:
                     pass
                 _c = _cached_payload
