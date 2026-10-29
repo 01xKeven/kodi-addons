@@ -45,7 +45,7 @@
     <!-- Categoría 4: Servidores -->
     <category label="Filtrar Servidores">
         <setting id="filter_servers_enabled" type="bool" label="Opciones" default="true" />
-        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
+        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="mega,filemoon,okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
         <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="voe,uqload,torrent" visible="eq(-2,true)" />
         <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
     </category>

@@ -2816,7 +2816,7 @@ def _get_filter_prefs():
         'preferencia_idioma_esp': _bi('preferencia_idioma_esp', 2) if lang_on else 1,
         'preferencia_idioma_vos': _bi('preferencia_idioma_vos', 3) if lang_on else 1,
         'servers_sort_quality': _bi('servers_sort_quality', 1) if qual_on else 0,
-        'servers_preferred': _bcsv('servers_preferred', ['voe', 'doodstream', 'vidmoly']) if srv_on else [],
+        'servers_preferred': _bcsv('servers_preferred', ['mega', 'filemoon', 'okru', 'doodstream', 'vidmoly', 'streamwish']) if srv_on else [],
         'servers_unfavored': _bcsv('servers_unfavored', ['uqload', 'torrent']) if srv_on else [],
         'servers_discarded': _bcsv('servers_discarded', ['rapidgator', 'directo', 'waaw']) if srv_on else [],
     }
