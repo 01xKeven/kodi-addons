@@ -52,11 +52,11 @@ def log_active_settings():
             f"posición={get_int('overlay_position', 0)}, "
             f"diseño={get_int('overlay_layout', 0)}, "
             f"animación={get_int('overlay_animation', 0)}, "
-            f"retardo={get_int('overlay_delay', 1)} s, "
+            f"retardo={get_int('overlay_delay', 2)} s, "
             f"duración visible={duration} s, "
             f"valoración={get_bool('show_rating', False)}, "
             f"clasificación={get_bool('show_certificate', False)}, "
-            f"post-créditos={get_bool('show_post_credits', False)}, "
+            f"post-créditos={get_bool('show_post_credits', True)}, "
             f"global={get_bool('show_overall', False)}, "
             f"datos extra={get_bool('show_extra_meta', False)}, "
             f"ID IMDb={get_bool('show_imdb_id', False)}, "
@@ -668,7 +668,7 @@ class ParentalPlayer(xbmc.Player):
                 return
 
             # 1. Esperar los segundos configurados antes de iniciar el procesamiento
-            wait_steps = self._get_seconds('overlay_delay', 1) * 10
+            wait_steps = self._get_seconds('overlay_delay', 2) * 10
             for _ in range(wait_steps):
                 if self.stop_event.is_set() or not self.isPlayingVideo():
                     return
