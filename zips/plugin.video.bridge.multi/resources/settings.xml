@@ -8,7 +8,7 @@
         <setting id="links_display_mode" type="enum" label="Mostrar enlaces encontrados en" values="Ventana personalizada|Lista nativa de Kodi (Recomendado)" default="1" />
         <setting id="show_resume_in_links" type="bool" label="Mostrar tiempo de reanudación en nombres de enlaces" default="false" />
         <setting id="live_switch_on_pause" type="enum" label="Al pausar la reproducción" values="Preguntar si desea cambiar de enlace (Recomendado)|Abrir ventana de enlaces directamente|Desactivado" default="0" />
-        <setting id="pause_prompt_position" type="enum" label="Posición del aviso al pausar" values="Superior derecha (Recomendado)|Inferior derecha" default="0" visible="eq(-1,0)" />
+        <setting id="pause_prompt_position" type="enum" label="Posición del aviso al pausar" values="Superior derecha|Inferior derecha" default="1" visible="eq(-1,0)" />
         <setting id="on_link_fail" type="enum" label="Al fallar la conexión con un enlace" values="Reabrir ventana con enlace marcado (Recomendado)|Desactivado (Cerrar)" default="0" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
         <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="60" range="0,1,60" option="int" />

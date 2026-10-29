@@ -6613,7 +6613,7 @@ def show_links_as_directory():
 
     base_ctx_items = []
     base_ctx_items.append(('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'RunPlugin(%s)' % _force_url))
-    if not (is_s and _other_engine == 'alfa'):
+    if not (is_s and _other_engine == 'alfa') and _is_engine_installed(_other_engine):
         base_ctx_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % _other_name, 'RunPlugin(%s)' % _rs_url))
     if not verified_only:
         base_ctx_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'RunPlugin(%s)' % _v_url))
@@ -10294,21 +10294,16 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self.close()
         elif aid in (self.ACTION_SHOW_INFO, 11, self.ACTION_CONTEXT_MENU, 117):
             other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
+            other_eng_id = 'balandro' if self.engine == 'alfa' else 'alfa'
             try:
-                opts = [
-                    '[COLOR yellow]Forzar nueva búsqueda[/COLOR]',
-                    '[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name,
-                    '[COLOR deepskyblue]Verificar disponibilidad[/COLOR]'
-                ]
-                sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', opts)
-                if sel == 0:
-                    self.selected = 'force_search'
-                    self.close()
-                elif sel == 1:
-                    self.selected = 'other_engine'
-                    self.close()
-                elif sel == 2:
-                    self.selected = 'verify_links'
+                opts_items = [('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'force_search')]
+                if _is_engine_installed(other_eng_id):
+                    opts_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name, 'other_engine'))
+                opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
+
+                sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', [o[0] for o in opts_items])
+                if 0 <= sel < len(opts_items):
+                    self.selected = opts_items[sel][1]
                     self.close()
             except Exception:
                 pass
@@ -11291,6 +11286,10 @@ def main():
         if _use_cache and _cached_payload:
             # Reutilizar cache reciente — respetar ajuste autoplay
             try:
+                try:
+                    xbmcgui.Dialog().notification('Multi Bridge', 'Enlaces temporales recuperados', xbmcgui.NOTIFICATION_INFO, 2500)
+                except Exception:
+                    pass
                 _c = _cached_payload
                 _cached_engine  = _c.get('engine', 'alfa') or 'alfa'
                 _cached_links   = [_deserialize_item(l, _cached_engine) for l in _c.get('links', [])]
