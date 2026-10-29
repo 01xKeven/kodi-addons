@@ -72,6 +72,39 @@ if not hasattr(xbmc, 'translatePath'):
     xbmc.translatePath = xbmcvfs.translatePath
 
 _bridge_addon = xbmcaddon.Addon('plugin.video.bridge.multi')
+ADDON_PATH = xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
+
+def _get_addon_white_texture():
+    """Retorna una textura blanca sólida de 1x1 píxel 100% garantizada para fondos y bordes."""
+    try:
+        cand = os.path.join(ADDON_PATH, 'resources', 'media', 'white.png')
+        if os.path.exists(cand):
+            return cand
+        med_dir = os.path.join(ADDON_PATH, 'resources', 'media')
+        if not os.path.exists(med_dir):
+            try: os.makedirs(med_dir)
+            except: pass
+        _png = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+                b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff'
+                b'\x3f\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00\x00\x00IEND\xaeB`\x82')
+        try:
+            with open(cand, 'wb') as _f: _f.write(_png)
+            if os.path.exists(cand): return cand
+        except: pass
+        d = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.bridge.multi/')
+        if d:
+            if not os.path.exists(d):
+                try: os.makedirs(d)
+                except: pass
+            ud_white = os.path.join(d, 'bm_white.png')
+            if not os.path.exists(ud_white):
+                try:
+                    with open(ud_white, 'wb') as _f: _f.write(_png)
+                except: pass
+            if os.path.exists(ud_white): return ud_white
+    except Exception:
+        pass
+    return 'special://skin/media/white-diffuse.png'
 
 def _show_bridge_notification(heading, message, time_ms=3500):
     """Muestra una notificación en pantalla de forma infalible en cualquier dispositivo y skin,
@@ -928,16 +961,6 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 p.seekTime(float(seek_to_time))
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
-        elif force_beginning:
-            for _s in range(30):
-                if mon.abortRequested() or _get_global_monitor_token() != my_token: return
-                try:
-                    if p.isPlayingVideo() and p.getTime() > 2:
-                        xbmc.log("Multi Bridge: forzando reproduccion desde el inicio 0s (key=%s)" % media_key, xbmc.LOGINFO)
-                        p.seekTime(0.0)
-                        break
-                except: pass
-                if mon.waitForAbort(0.25): return
 
         last_saved_time = 0
         tot_time = 0
@@ -9326,21 +9349,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         t.start()
 
     def _white(self):
-        return _AutoplayStopDialog._bg_texture() or _EnginePickerDialog._white()
-
-    def addControl(self, *args, **kwargs):
-        res = super().addControl(*args, **kwargs)
-        try:
-            ctrl = args[0] if args else None
-            if ctrl is not None:
-                try:
-                    ctrl.setAnimations([
-                        ('WindowOpen', 'effect=fade start=0 end=100 time=140'),
-                        ('WindowClose', 'effect=fade start=100 end=0 time=100')
-                    ])
-                except Exception: pass
-        except Exception: pass
-        return res
+        return _get_addon_white_texture()
 
     def _build(self):
         W = self.getWidth() or 1920
@@ -9704,7 +9713,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         return res
 
     def _white(self):
-        return _AutoplayStopDialog._bg_texture() or _EnginePickerDialog._white()
+        return _get_addon_white_texture()
 
     def _format_link(self, lnk, is_playing=False, is_failed=False):
         srv = _get_link_server_name(lnk)
@@ -10012,6 +10021,32 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         self.current = new_idx
         self._update_view()
 
+    def _scroll(self, delta):
+        """Desplazamiento directo para rueda del ratón y gestos táctiles en pantallas táctiles."""
+        links = self.active_links
+        if not links: return
+        n = len(links)
+        if n <= self.visible_rows:
+            new_idx = max(0, min(n - 1, self.current + delta))
+            if new_idx != self.current:
+                self.current = new_idx
+                self._update_view()
+            return
+        max_offset = max(0, n - self.visible_rows)
+        new_offset = max(0, min(max_offset, self.offset + delta))
+        if new_offset != self.offset:
+            self.offset = new_offset
+            if self.current < self.offset:
+                self.current = self.offset
+            elif self.current >= self.offset + self.visible_rows:
+                self.current = self.offset + self.visible_rows - 1
+            self._update_view()
+        else:
+            new_idx = max(0, min(n - 1, self.current + delta))
+            if new_idx != self.current:
+                self.current = new_idx
+                self._update_view()
+
     def _update_highlight_and_bgs(self):
         links = self.active_links
         n = len(links)
@@ -10121,10 +10156,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
     def onAction(self, action):
         aid = action.getId()
 
-        # Detección instantánea de cursor sobre un enlace o botón (Hover / Focus)
+        # Detección de cursor sobre enlace o botón (Hover solo en movimiento o cambio de foco)
         try:
             fid = self.getFocusId()
-            if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
+            if aid in (self.ACTION_MOUSE_MOVE, 107) and hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
                 row_idx = self._row_btn_ids.index(fid)
                 hovered_idx = self.offset + row_idx
                 if hovered_idx < len(self.active_links) and hovered_idx != self.current:
@@ -10191,10 +10226,29 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     self.close()
             except Exception:
                 pass
-        elif aid in (self.ACTION_MOUSE_WHEEL_UP, 104):
-            self._move(-1)
-        elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105):
-            self._move(1)
+        elif aid in (self.ACTION_MOUSE_WHEEL_UP, 104, 111):
+            self._scroll(-1)
+        elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105, 112):
+            self._scroll(1)
+        # Soporte para gestos táctiles en pantallas táctiles (móviles / tablets)
+        elif aid in (514,):  # SWIPE_DOWN
+            self._scroll(-2)
+        elif aid in (513,):  # SWIPE_UP
+            self._scroll(2)
+        elif aid in (511,):  # SWIPE_LEFT -> Torrents
+            self._switch_tab(1)
+        elif aid in (512,):  # SWIPE_RIGHT -> Directos
+            self._switch_tab(0)
+        elif aid == 503:     # GESTURE_PAN
+            try:
+                dy = action.getAmount2()
+                if dy > 15: self._scroll(-1)
+                elif dy < -15: self._scroll(1)
+                dx_pan = action.getAmount1()
+                if dx_pan > 40: self._switch_tab(0)
+                elif dx_pan < -40: self._switch_tab(1)
+            except Exception:
+                pass
         elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103):
             try: fid = self.getFocusId()
             except: fid = -1
@@ -10203,9 +10257,9 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             if hasattr(self, '_tab1_btn') and fid == self._tab1_btn.getId():
                 self._switch_tab(1); return
             if hasattr(self, '_up_btn') and fid == self._up_btn.getId():
-                self._move(-1); return
+                self._scroll(-1); return
             if hasattr(self, '_down_btn') and fid == self._down_btn.getId():
-                self._move(1); return
+                self._scroll(1); return
             if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
                 row_idx = self._row_btn_ids.index(fid)
                 item_idx = self.offset + row_idx
@@ -10231,10 +10285,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             self._switch_tab(1)
             return
         if hasattr(self, '_up_btn') and control_id == self._up_btn.getId():
-            self._move(-1)
+            self._scroll(-1)
             return
         if hasattr(self, '_down_btn') and control_id == self._down_btn.getId():
-            self._move(1)
+            self._scroll(1)
             return
         if hasattr(self, '_row_btn_ids') and control_id in self._row_btn_ids:
             row_idx = self._row_btn_ids.index(control_id)
