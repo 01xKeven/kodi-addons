@@ -9871,7 +9871,7 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                 (close_x + close_w - 2, close_y, 2, close_h)):
             self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='44CFA82C'))
         self._close_btn = xbmcgui.ControlButton(
-            close_x, close_y, close_w, close_h, '[B]✕[/B]', '', '',
+            close_x, close_y, close_w, close_h, '[B]X[/B]', '', '',
             font='font13', textColor='FFCCCCCC', focusedColor='FFFF4444', alignment=6)
         self.addControl(self._close_btn)
 
