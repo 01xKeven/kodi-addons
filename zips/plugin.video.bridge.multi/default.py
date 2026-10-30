@@ -2367,10 +2367,11 @@ def _is_torrent_link(link):
     return False
 
 
-def _get_torrent_client():
+def _get_torrent_client(is_magnet=False):
     """Lee el ajuste 'cliente_torrent' de Balandro y devuelve (addon_id, url_template).
 
     url_template usa %s como placeholder para la URL/magnet codificada.
+    Si is_magnet es True y el cliente define 'url_magnet' (ej. Torrest), usa esa plantilla.
     Retorna (None, None) si no hay cliente configurado o no está instalado.
     """
     try:
@@ -2393,7 +2394,8 @@ def _get_torrent_client():
             if client.get('name', '').lower() == cliente:
                 addon_id = client.get('id', '')
                 if addon_id and xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
-                    return addon_id, client.get('url', '')
+                    tpl = client.get('url_magnet') if (is_magnet and client.get('url_magnet')) else client.get('url', '')
+                    return addon_id, tpl
                 else:
                     xbmc.log('Multi Bridge: cliente torrent "%s" (%s) no instalado' % (cliente, addon_id), xbmc.LOGINFO)
                     return None, None
@@ -2508,7 +2510,8 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
         return False
     torrent_url = _tl
 
-    _tor_id, _tor_tpl = _get_torrent_client()
+    _is_magnet = torrent_url.startswith('magnet:')
+    _tor_id, _tor_tpl = _get_torrent_client(is_magnet=_is_magnet)
     if not (_tor_id and _tor_tpl):
         xbmcgui.Dialog().notification(
             'Multi Bridge',
@@ -2516,11 +2519,6 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
             '', 5000)
         return False
 
-    # Elegir url o url_magnet según tipo de enlace
-    _is_magnet = torrent_url.startswith('magnet:')
-
-    # Si el template no acepta magnets y tenemos magnet, intentar url_magnet
-    # (ya resuelto: _tor_tpl viene del json y tiene la URL correcta para el tipo)
     encoded = uparse.quote_plus(torrent_url)
     play_url = _tor_tpl % encoded
 
