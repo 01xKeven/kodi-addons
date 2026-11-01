@@ -813,6 +813,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             pass
         _current_playing_link_index = current_link_index
 
+    # Pre-calentar en segundo plano la comprobación de siguiente episodio (para 0 latencia en pausa)
+    if meta and meta.get('season') and meta.get('episode'):
+        try:
+            threading.Thread(target=_get_next_episode_info, args=(meta,), daemon=True).start()
+        except Exception:
+            pass
+
     # Limpiar cualquier estado residual de diálogo previo
     _set_dialog_active_global(False)
 
@@ -849,6 +856,14 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
+
+        # Disparar precarga del siguiente episodio en segundo plano si está activado en ajustes
+        if _bridge_addon.getSetting('preload_next_episode') != 'false':
+            if _m_dict.get('season') and _m_dict.get('episode'):
+                try:
+                    threading.Thread(target=_start_next_episode_preloader, args=(_m_dict, my_token), daemon=True).start()
+                except Exception as _pre_e:
+                    xbmc.log("Multi Bridge: error lanzando precarga de siguiente episodio: %s" % str(_pre_e), xbmc.LOGWARNING)
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
         try:
@@ -909,6 +924,26 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', _director_val)
                 xbmcgui.Window(10000).setProperty('VideoPlayer.Director', _director_val)
                 xbmcgui.Window(10000).setProperty('MultiBridge.Director', _director_val)
+            except Exception:
+                pass
+
+        _still_val = _m_dict.get('thumbnail') or ''
+        if bool(_m_dict.get('season') and _m_dict.get('episode')) and _m_dict.get('tmdb'):
+            try:
+                _ep_still = _get_episode_still(_m_dict.get('tmdb'), _m_dict.get('season'), _m_dict.get('episode'))
+                if _ep_still:
+                    _still_val = _ep_still
+                    _m_dict['thumbnail'] = _still_val
+            except Exception:
+                pass
+        if _still_val:
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Thumb', _still_val)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.Player.Thumb', _still_val)
+                xbmcgui.Window(10000).setProperty('Player.Art(thumb)', _still_val)
+                xbmcgui.Window(10000).setProperty('Player.Art(poster)', _still_val)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Cover', _still_val)
+                xbmcgui.Window(10000).setProperty('MultiBridge.EpisodeStill', _still_val)
             except Exception:
                 pass
         session_record = {
@@ -1004,9 +1039,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, meta=c_meta)
                                     prompt_dlg.doModal()
                                     ans = prompt_dlg.selected
+                                    next_ep_info = getattr(prompt_dlg, 'next_ep', None)
                                     del prompt_dlg
                                     if ans == 1 and p.isPlayingVideo():
                                         open_links = True
+                                    elif ans == 2 and next_ep_info:
+                                        # Usuario seleccionó reproducir siguiente capítulo
+                                        try:
+                                            if p.isPlayingVideo():
+                                                p.stop()
+                                        except Exception:
+                                            pass
+                                        _play_next_episode(c_meta, next_ep_info)
+                                        return
                                     else:
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
                                             try: p.pause()
@@ -1112,6 +1157,24 @@ def _safe_get_item_attr(item, attr_name, default=''):
 # ---------------------------------------------------------
 _current_engine_env = None
 _engine_lock = threading.RLock()
+
+def _is_addon_installed(addon_id):
+    """Comprueba si un add-on determinado está instalado y disponible en Kodi."""
+    if not addon_id:
+        return False
+    try:
+        if xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+            return True
+    except Exception:
+        pass
+    try:
+        _a = xbmcaddon.Addon(addon_id)
+        if _a and _a.getAddonInfo('id'):
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def _is_engine_installed(engine):
     """Comprueba si el motor (alfa o balandro) está instalado y disponible en Kodi."""
@@ -5618,7 +5681,20 @@ def _enrich_link_metadata(link, meta, matched_item=None):
             except: pass
         if plot_val: target.infoLabels['plot'] = plot_val; target.plot = plot_val
         if tagline_val: target.infoLabels['tagline'] = tagline_val; target.tagline = tagline_val
-        if poster_val:
+        ep_still = ''
+        if is_series and t_id and meta.get('season') and meta.get('episode'):
+            try: ep_still = _get_episode_still(t_id, meta.get('season'), meta.get('episode'))
+            except Exception: ep_still = ''
+        if is_series and (ep_still or meta.get('thumbnail')):
+            ep_target_art = ep_still or meta.get('thumbnail')
+            target.thumbnail = ep_target_art
+            target.infoLabels['thumbnail'] = ep_target_art
+            target.infoLabels['poster'] = ep_target_art
+            target.infoLabels['still'] = ep_target_art
+            if poster_val:
+                target.infoLabels['tvshow.poster'] = poster_val
+                target.infoLabels['season.poster'] = poster_val
+        elif poster_val:
             target.thumbnail = poster_val
             target.infoLabels['poster'] = poster_val
             target.infoLabels['thumbnail'] = poster_val
@@ -5751,6 +5827,23 @@ def sync_tmdbhelper_playerstring(meta=None):
                 xbmcgui.Window(10000).setProperty('VideoPlayer.Director', _c_director)
                 xbmcgui.Window(10000).setProperty('MultiBridge.Director', _c_director)
             except Exception: pass
+
+        _c_still = meta.get('thumbnail') or ''
+        if is_series and t_id and s_val and e_val:
+            try:
+                _found_still = _get_episode_still(t_id, s_val, e_val)
+                if _found_still:
+                    _c_still = _found_still
+            except Exception: pass
+        if _c_still:
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Thumb', _c_still)
+                xbmcgui.Window(10000).setProperty('TMDbHelper.Player.Thumb', _c_still)
+                xbmcgui.Window(10000).setProperty('Player.Art(thumb)', _c_still)
+                xbmcgui.Window(10000).setProperty('Player.Art(poster)', _c_still)
+                xbmcgui.Window(10000).setProperty('VideoPlayer.Cover', _c_still)
+                xbmcgui.Window(10000).setProperty('MultiBridge.EpisodeStill', _c_still)
+            except Exception: pass
     except Exception as ex:
         xbmc.log(f"Multi Bridge: error sincronizando TMDbHelper.PlayerInfoString: {ex}", xbmc.LOGINFO)
 
@@ -5772,8 +5865,17 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
     year_val = info.get('year') or meta.get('showyear' if is_series else 'year') or meta.get('year')
     plot_val = str(info.get('plot') or meta.get('plot') or '')
     tagline_val = str(info.get('tagline') or meta.get('tagline') or '')
-    poster_val = str(info.get('poster') or info.get('thumbnail') or meta.get('poster') or meta.get('thumbnail') or '')
+    poster_val = str(info.get('poster') or meta.get('poster') or info.get('thumbnail') or meta.get('thumbnail') or '')
     fanart_val = str(info.get('fanart') or meta.get('fanart') or '')
+    thumb_val = str(info.get('thumbnail') or meta.get('thumbnail') or '')
+    still_val = ''
+    if is_series and tmdb_id and s_val and e_val:
+        try:
+            still_val = _get_episode_still(tmdb_id, s_val, e_val)
+        except Exception:
+            still_val = ''
+        if still_val:
+            thumb_val = still_val
 
     unique_dict = {}
     if tmdb_id:
@@ -5811,10 +5913,25 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
 
     art_dict = {}
     if not skip_art:
-        if poster_val:
-            art_dict['poster'] = poster_val
-            art_dict['thumb'] = poster_val
-            art_dict['icon'] = poster_val
+        ep_art = still_val or thumb_val
+        if is_series and ep_art:
+            art_dict['poster'] = ep_art
+            art_dict['thumb'] = ep_art
+            art_dict['icon'] = ep_art
+            art_dict['still'] = ep_art
+            art_dict['landscape'] = ep_art
+            if poster_val:
+                art_dict['tvshow.poster'] = poster_val
+                art_dict['season.poster'] = poster_val
+        else:
+            if poster_val:
+                art_dict['poster'] = poster_val
+            if thumb_val:
+                art_dict['thumb'] = thumb_val
+                art_dict['icon'] = thumb_val
+            elif poster_val:
+                art_dict['thumb'] = poster_val
+                art_dict['icon'] = poster_val
         if fanart_val:
             art_dict['fanart'] = fanart_val
         if clearlogo_val:
@@ -5826,6 +5943,30 @@ def set_listitem_info(listitem, info=None, meta=None, skip_art=False):
     if art_dict:
         try: listitem.setArt(art_dict)
         except: pass
+
+    effective_thumb = (still_val or thumb_val) if is_series else thumb_val
+    if effective_thumb:
+        listitem.setProperty('thumbnail', effective_thumb)
+        listitem.setProperty('Art(thumb)', effective_thumb)
+        if is_series:
+            listitem.setProperty('poster', effective_thumb)
+            listitem.setProperty('Art(poster)', effective_thumb)
+            listitem.setProperty('still', effective_thumb)
+            listitem.setProperty('Art(still)', effective_thumb)
+            listitem.setProperty('landscape', effective_thumb)
+            listitem.setProperty('Art(landscape)', effective_thumb)
+
+    if is_series and (still_val or thumb_val):
+        _win_still = still_val or thumb_val
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Thumb', _win_still)
+            xbmcgui.Window(10000).setProperty('TMDbHelper.Player.Thumb', _win_still)
+            xbmcgui.Window(10000).setProperty('Player.Art(thumb)', _win_still)
+            xbmcgui.Window(10000).setProperty('Player.Art(poster)', _win_still)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Cover', _win_still)
+            xbmcgui.Window(10000).setProperty('MultiBridge.EpisodeStill', _win_still)
+        except Exception:
+            pass
 
     if clearlogo_val:
         listitem.setProperty('clearlogo', clearlogo_val)
@@ -6407,6 +6548,144 @@ def _get_directors(tmdb_id, is_series=False):
     _directors_cache[_cache_key] = list(directors_list)
     return directors_list
 
+_episode_still_cache = {}
+
+def _get_episode_still(tmdb_id, season, episode):
+    """Obtiene de forma instantánea la miniatura/still (16:9) del episodio
+    desde la base de datos local SQLite de TMDb Helper (ItemDetails.db) o caché en RAM,
+    con fallback a la API de TMDb si aún no estuviera en caché local."""
+    if not tmdb_id or season is None or episode is None:
+        return ''
+    _id_str = str(tmdb_id).strip()
+    if not _id_str.isdigit():
+        return ''
+    try:
+        s_int = int(season)
+        e_int = int(episode)
+    except (ValueError, TypeError):
+        return ''
+
+    _cache_key = f"tv.{_id_str}.{s_int}.{e_int}"
+    if _cache_key in _episode_still_cache:
+        return _episode_still_cache[_cache_key]
+
+    still_url = ''
+    # 1. Búsqueda instantánea en SQLite local de TMDb Helper (ItemDetails.db)
+    try:
+        tmdb_base = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/')
+        db_files = []
+        if os.path.exists(tmdb_base):
+            for root, _, files in os.walk(tmdb_base):
+                for fn in files:
+                    if fn.lower() == 'itemdetails.db':
+                        db_files.append(os.path.join(root, fn))
+
+        parent_key = f"tv.{_id_str}.{s_int}.{e_int}"
+        for db_path in db_files:
+            try:
+                conn = sqlite3.connect(db_path, timeout=1.0)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT icon FROM art WHERE type = 'stills' AND parent_id = ? "
+                    "ORDER BY rating DESC, votes DESC LIMIT 1;",
+                    (parent_key,)
+                )
+                row = cur.fetchone()
+                conn.close()
+                if row and row[0]:
+                    icon = row[0].strip()
+                    if icon.startswith('/'):
+                        still_url = f"https://image.tmdb.org/t/p/w780{icon}"
+                    elif icon.startswith('http'):
+                        still_url = icon
+                    break
+            except Exception:
+                pass
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: _get_episode_still db error: {e}", xbmc.LOGDEBUG)
+
+    # 2. Fallback a API TMDb si la base local aún no lo tiene
+    if not still_url:
+        try:
+            import urllib.request, ssl
+            api_url = f"https://api.themoviedb.org/3/tv/{_id_str}/season/{s_int}/episode/{e_int}?api_key=a07324c669cac4d96789197134ce272b&language=es-ES"
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                sp = data.get('still_path')
+                if sp:
+                    still_url = f"https://image.tmdb.org/t/p/w780{sp}"
+        except Exception:
+            pass
+
+    _episode_still_cache[_cache_key] = still_url
+    return still_url
+
+def _verify_remaining_preloaded_impl():
+    """Verifica los enlaces restantes de una sesión precargada que aún no habían sido comprobados,
+    añadiendo los enlaces funcionales a la lista actual y refrescando el contenedor."""
+    c = _read_search_cache_atomic()
+    if not c or not isinstance(c, dict):
+        xbmcgui.Dialog().notification('Multi Bridge', 'No hay enlaces en caché', '', 2500)
+        return
+
+    unverified_raw = c.get('unverified_links', [])
+    if not unverified_raw:
+        xbmcgui.Dialog().notification('Multi Bridge', 'No hay más enlaces pendientes', '', 2500)
+        return
+
+    engine = c.get('engine', 'balandro') or 'balandro'
+    meta = c.get('meta', {}) or {}
+    matched_item = _deserialize_item(c.get('item'), engine)
+
+    unverified_items = [_deserialize_item(l, engine) for l in unverified_raw]
+    unverified_items = [l for l in unverified_items if l is not None]
+
+    if not unverified_items:
+        c['unverified_links'] = []
+        c['is_preloaded_session'] = False
+        _save_search_cache_atomic(c)
+        return
+
+    p_diag = xbmcgui.DialogProgress()
+    p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores restantes...')
+    newly_verified = _verify_links_headless(unverified_items, engine=engine, p_dialog=p_diag)
+    try: p_diag.close()
+    except Exception: pass
+
+    curr_raw = c.get('links', [])
+    curr_items = [_deserialize_item(l, engine) for l in curr_raw]
+    curr_items = [l for l in curr_items if l is not None]
+
+    combined = list(curr_items)
+    added_count = 0
+    if newly_verified:
+        for nv in newly_verified:
+            nv_url = getattr(nv, 'url', None)
+            if not nv_url or not any(getattr(ci, 'url', None) == nv_url for ci in combined):
+                combined.append(nv)
+                added_count += 1
+
+    combined = _filter_and_sort_links(combined)
+
+    c['links'] = [_serialize_item(l) for l in combined]
+    c['unverified_links'] = []
+    c['is_preloaded_session'] = False
+    _save_search_cache_atomic(c)
+    _store_ram_search_cache(combined, matched_item, meta, engine)
+
+    if added_count > 0:
+        xbmcgui.Dialog().notification('Multi Bridge', '%d enlaces adicionales verificados' % added_count, xbmcgui.NOTIFICATION_INFO, 2500)
+    else:
+        xbmcgui.Dialog().notification('Multi Bridge', 'Ningún enlace adicional superó la verificación', '', 2500)
+
+    try:
+        xbmc.executebuiltin('Container.Refresh')
+    except Exception:
+        pass
+
+
 def show_links_as_directory():
     global _search_in_progress, _links_view_active
     _search_in_progress = False
@@ -6520,6 +6799,15 @@ def show_links_as_directory():
     if len(_safe_str(fanart_val)) > 1000: fanart_val = ''
 
     tmdb_val = meta.get('tmdb') or getattr(matched_item, 'tmdb', '') or _req_tmdb or ''
+    episode_still_val = ''
+    if is_s and tmdb_val and s_int is not None and e_int is not None:
+        try:
+            episode_still_val = _get_episode_still(tmdb_val, s_int, e_int)
+        except Exception:
+            episode_still_val = ''
+    if episode_still_val:
+        thumb_val = episode_still_val
+        meta['thumbnail'] = episode_still_val
     imdb_val = meta.get('imdb') or getattr(matched_item, 'imdb', '') or ''
     tvdb_val = meta.get('tvdb') or getattr(matched_item, 'tvdb', '') or ''
     showname_val = _safe_str(meta.get('showname') or getattr(matched_item, 'showname', '') or '')
@@ -6566,7 +6854,21 @@ def show_links_as_directory():
     director_str = director_val or ""
     director_list = [director_str] if director_str else []
 
-    base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
+    if is_s and (episode_still_val or thumb_val):
+        ep_dir_art = episode_still_val or thumb_val
+        base_art = {
+            'thumb': ep_dir_art,
+            'icon': ep_dir_art,
+            'poster': ep_dir_art,
+            'still': ep_dir_art,
+            'landscape': ep_dir_art,
+            'fanart': fanart_val
+        }
+        if poster_val:
+            base_art['tvshow.poster'] = poster_val
+            base_art['season.poster'] = poster_val
+    else:
+        base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
     if clearlogo_val:
         base_art['clearlogo'] = clearlogo_val
         base_art['logo'] = clearlogo_val
@@ -6654,6 +6956,16 @@ def show_links_as_directory():
             li.setLabel2(ch)
             li.setProperty('title', lbl)
             li.setProperty('IsPlayable', 'true')
+            if is_s and (episode_still_val or thumb_val):
+                _lp_art = episode_still_val or thumb_val
+                li.setProperty('thumbnail', _lp_art)
+                li.setProperty('Art(thumb)', _lp_art)
+                li.setProperty('poster', _lp_art)
+                li.setProperty('Art(poster)', _lp_art)
+                li.setProperty('still', _lp_art)
+                li.setProperty('Art(still)', _lp_art)
+                li.setProperty('landscape', _lp_art)
+                li.setProperty('Art(landscape)', _lp_art)
             if clearlogo_val:
                 li.setProperty('clearlogo', clearlogo_val)
                 li.setProperty('Art(clearlogo)', clearlogo_val)
@@ -6712,6 +7024,19 @@ def show_links_as_directory():
         try:
             xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
             xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', clearlogo_val)
+            xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', clearlogo_val)
+        except Exception:
+            pass
+
+    if episode_still_val:
+        try:
+            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Thumb', episode_still_val)
+            xbmcgui.Window(10000).setProperty('Player.Art(thumb)', episode_still_val)
+            xbmcgui.Window(10000).setProperty('Player.Art(poster)', episode_still_val)
+            xbmcgui.Window(10000).setProperty('VideoPlayer.Cover', episode_still_val)
+            xbmcgui.Window(10000).setProperty('MultiBridge.EpisodeStill', episode_still_val)
         except Exception:
             pass
     if genres_str:
@@ -6737,6 +7062,21 @@ def show_links_as_directory():
         try: _li_more.setArt(base_art)
         except: pass
         _dir_listing.append((_floating_url, _li_more, False))
+
+    # Opción 3: Si proviene de sesión precargada y hay enlaces sin verificar, añadir fila interactiva al final
+    try:
+        _c_disk = _read_search_cache_atomic()
+        if _c_disk and isinstance(_c_disk, dict):
+            _pending_raw = _c_disk.get('unverified_links', [])
+            if _pending_raw:
+                _verify_more_url = 'plugin://plugin.video.bridge.multi/?action=verify_remaining_preloaded'
+                _more_lbl = '[COLOR gold][B]Comprobar y cargar más enlaces (%d disponibles)...[/B][/COLOR]' % len(_pending_raw)
+                _li_verify_more = xbmcgui.ListItem(label=_more_lbl)
+                _li_verify_more.setProperty('IsPlayable', 'false')
+                _li_verify_more.setArt(base_art)
+                _dir_listing.append((_verify_more_url, _li_verify_more, False))
+    except Exception as _vme:
+        xbmc.log('Multi Bridge: error comprobando unverified_links: %s' % str(_vme), xbmc.LOGDEBUG)
 
     if _dir_listing:
         try:
@@ -9353,6 +9693,536 @@ def _show_autoplay_stop_dialog(server_label):
 
 
 # ---------------------------------------------------------
+# Siguiente Episodio: Detección y Reproducción
+# ---------------------------------------------------------
+_NEXT_EPISODE_CACHE = {}
+_PRELOADED_NEXT_EPISODE_CACHE = {}
+
+def _get_preloaded_next_episode(meta):
+    if not meta: return None
+    tmdb_id = str(meta.get('tmdb') or meta.get('tmdb_id') or '')
+    next_ep = _get_next_episode_info(meta)
+    if not next_ep: return None
+    next_s = next_ep.get('season')
+    next_e = next_ep.get('episode')
+    cache_key = '%s_S%02dE%02d' % (tmdb_id, int(next_s), int(next_e))
+    entry = _PRELOADED_NEXT_EPISODE_CACHE.get(cache_key)
+    if entry and entry.get('links'):
+        return entry
+    return None
+
+def _start_next_episode_preloader(meta, my_token):
+    """Busca en segundo plano enlaces del siguiente episodio con bajo consumo en CPU y RAM.
+    Verifica los enlaces y guarda en memoria los 3 primeros respetando las preferencias del usuario."""
+    p = xbmc.Player()
+    mon = xbmc.Monitor()
+
+    xbmc.log("Multi Bridge Preload: Monitor activo, esperando 30s reales de reproducción antes de buscar...", xbmc.LOGINFO)
+
+    # Esperar 30 segundos reales (tiempo de reloj, no de reproducción)
+    start_real_time = time.time()
+    while (time.time() - start_real_time) < 30.0:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        if mon.waitForAbort(0.5):
+            return
+
+    next_ep = _get_next_episode_info(meta)
+    if not next_ep:
+        xbmc.log("Multi Bridge Preload: No hay siguiente episodio disponible para precargar", xbmc.LOGINFO)
+        return
+
+    tmdb_id = str(meta.get('tmdb') or meta.get('tmdb_id') or '')
+    next_s = int(next_ep.get('season'))
+    next_e = int(next_ep.get('episode'))
+    cache_key = '%s_S%02dE%02d' % (tmdb_id, next_s, next_e)
+
+    if cache_key in _PRELOADED_NEXT_EPISODE_CACHE and _PRELOADED_NEXT_EPISODE_CACHE[cache_key].get('links'):
+        xbmc.log("Multi Bridge Preload: Episodio %s ya precargado en memoria" % cache_key, xbmc.LOGINFO)
+        return
+
+    xbmc.log("Multi Bridge Preload: Iniciando búsqueda en segundo plano de %s..." % cache_key, xbmc.LOGINFO)
+
+    next_meta = dict(meta)
+    next_meta['season'] = next_s
+    next_meta['episode'] = next_e
+    next_meta['title'] = next_ep.get('title') or (next_meta.get('showname', '') + (' S%02dE%02d' % (next_s, next_e)))
+    try:
+        _next_st = _get_episode_still(tmdb_id, next_s, next_e)
+        if _next_st:
+            next_meta['thumbnail'] = _next_st
+    except Exception:
+        pass
+
+    # Resolver metadatos específicos del nuevo episodio
+    try:
+        _res_meta = _resolve_localized_metadata(
+            tmdb_id=tmdb_id,
+            is_series=True,
+            season=next_s,
+            episode=next_e,
+            title_param=meta.get('showname') or meta.get('title')
+        )
+        if _res_meta.get('plot'): next_meta['plot'] = _res_meta['plot']
+        if _res_meta.get('title') and _res_meta.get('has_spanish'):
+            next_meta['title'] = _res_meta['title']
+    except Exception:
+        pass
+
+    target_title = (next_meta.get('showname') or next_meta.get('title') or '').strip()
+    target_year = next_meta.get('showyear') or next_meta.get('year') or ''
+    all_names = [t for t in [target_title, next_meta.get('showname'), next_meta.get('title')] if t]
+    for _n in list(all_names):
+        if '(' in _n and ')' in _n:
+            for inside in re.findall(r'\((.*?)\)', _n):
+                inside_clean = inside.strip()
+                if inside_clean and not re.match(r'^\d{4}$', inside_clean) and inside_clean not in all_names:
+                    all_names.append(inside_clean)
+            outside = re.sub(r'\(.*?\)', '', _n).strip()
+            if outside and outside not in all_names:
+                all_names.append(outside)
+    alt_terms = [t for t in all_names if t != target_title]
+
+    ch_data = load_channels_data()
+    engine_channels = ch_data.get('channels', {}).get('balandro', {})
+    enabled_players = []
+    for ch_id in sorted(engine_channels.keys(), key=lambda k: engine_channels[k].get('name', k).lower()):
+        ch_info = engine_channels[ch_id]
+        if not ch_info.get('series'): continue
+        if ch_info.get('series_disabled'): continue
+        enabled_players.append(ch_info)
+
+    if not enabled_players:
+        xbmc.log("Multi Bridge Preload: No hay canales de series activos en Balandro", xbmc.LOGINFO)
+        return
+
+    all_found_links = []
+    matched_item = None
+    results_lock = threading.Lock()
+
+    # Pre-importar canales con pausa
+    for ch_info in enabled_players:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        try:
+            _ch = str(ch_info.get('channel') or ch_info.get('id') or '').strip().lower()
+            if _ch and _ch != 'search':
+                with _engine_lock:
+                    _switch_engine_environment('balandro')
+                    __import__('channels.' + _ch, fromlist=[''])
+        except Exception:
+            pass
+        time.sleep(0.05)
+
+    def _preload_channel_worker(ch_info):
+        nonlocal matched_item
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        try:
+            it, links = _search_on_player(
+                ch_info, 'balandro', True, target_title, target_year,
+                next_s, next_e, all_names, alt_terms=alt_terms,
+                target_tmdb=tmdb_id, target_imdb=next_meta.get('imdb')
+            )
+            if links:
+                for l in links:
+                    try: l.bridge_engine = 'balandro'
+                    except: pass
+                with results_lock:
+                    if not matched_item and it:
+                        matched_item = it
+                    all_found_links.extend(links)
+        except Exception:
+            pass
+
+    # Ejecutar búsqueda con baja concurrencia (máximo 2 hilos) y pausas
+    active_threads = []
+    for ch_info in enabled_players:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        while len([t for t in active_threads if t.is_alive()]) >= 2:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+                return
+            time.sleep(0.15)
+        t = threading.Thread(target=_preload_channel_worker, args=(ch_info,), daemon=True)
+        t.start()
+        active_threads.append(t)
+        time.sleep(0.1)
+
+    wait_end = time.time() + 25.0
+    while any(t.is_alive() for t in active_threads) and time.time() < wait_end:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        time.sleep(0.2)
+
+    if not all_found_links:
+        xbmc.log("Multi Bridge Preload: No se encontraron enlaces para %s" % cache_key, xbmc.LOGINFO)
+        return
+
+    # Filtrar y ordenar enlaces según las preferencias del usuario (Idioma, Calidad, Servidores)
+    sorted_links = _filter_and_sort_links(all_found_links)
+    if not sorted_links:
+        return
+
+    # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
+    verified_top3 = []
+    for cand in sorted_links:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        if len(verified_top3) >= 3:
+            break
+        try:
+            v_res = _verify_links_headless([cand], engine='balandro', p_dialog=None)
+            if v_res:
+                verified_top3.append(v_res[0])
+                xbmc.log("Multi Bridge Preload: Enlace verificado [%d/3]: %s" % (
+                    len(verified_top3), _get_link_server_name(v_res[0])), xbmc.LOGINFO)
+        except Exception as _ve:
+            xbmc.log("Multi Bridge Preload: Error verificando enlace: %s" % str(_ve), xbmc.LOGDEBUG)
+        time.sleep(0.1)
+
+    if verified_top3:
+        _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
+            'links': verified_top3,
+            'all_links': sorted_links,
+            'matched_item': matched_item,
+            'meta': next_meta,
+            'engine': 'balandro',
+            'next_ep': next_ep,
+            'time': time.time()
+        }
+        try:
+            xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', str(cache_key))
+        except Exception:
+            pass
+        xbmc.log("Multi Bridge Preload: ¡Listo! %d enlaces verificados guardados en memoria para reproducción instantánea de %s" % (
+            len(verified_top3), cache_key), xbmc.LOGINFO)
+
+def _play_preloaded_episode(preloaded):
+    """Reproduce instantáneamente el siguiente episodio usando los enlaces precargados.
+    Intenta reproducir los 3 enlaces uno por uno si alguno falla, supervisando la reproducción
+    y aplicando todos los metadatos necesarios para Trakt, TMDb Helper y el reproductor."""
+    links = preloaded.get('links', [])
+    meta = preloaded.get('meta', {})
+    matched_item = preloaded.get('matched_item')
+    engine = preloaded.get('engine', 'balandro')
+    all_links = preloaded.get('all_links') or links
+    next_ep = preloaded.get('next_ep') or {}
+
+    if not links:
+        return False
+
+    player = xbmc.Player()
+    try:
+        if player.isPlayingVideo():
+            player.stop()
+    except Exception:
+        pass
+    xbmc.sleep(250)
+
+    ep_label = 'S%02dE%02d' % (int(next_ep.get('season') or meta.get('season') or 1),
+                               int(next_ep.get('episode') or meta.get('episode') or 1))
+    if next_ep.get('title'):
+        ep_label += ' - ' + str(next_ep.get('title'))
+
+    try:
+        badge_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_rayo_badge.png')
+    except Exception:
+        badge_path = xbmcgui.NOTIFICATION_INFO
+
+    try:
+        xbmcgui.Dialog().notification('Multi Bridge', 'Reproducción instantánea: %s' % ep_label, badge_path, 2500)
+    except Exception:
+        _show_bridge_notification('Multi Bridge', 'Reproducción instantánea: %s' % ep_label, 2500)
+
+    # Almacenar en caché únicamente los enlaces verificados (los 3 precargados + torrents)
+    # y guardar los restantes en 'unverified_links' (Opción 3)
+    try:
+        initial_verified = list(links)
+        for l in (all_links or []):
+            if _is_torrent_link(l) and not any(getattr(l, 'url', None) and getattr(l, 'url', None) == getattr(iv, 'url', None) for iv in initial_verified):
+                initial_verified.append(l)
+
+        unverified_pending = [
+            l for l in (all_links or [])
+            if not any(getattr(l, 'url', None) and getattr(l, 'url', None) == getattr(iv, 'url', None) for iv in initial_verified)
+            and not _is_torrent_link(l)
+        ]
+
+        _store_ram_search_cache(initial_verified, matched_item, meta, engine)
+        _save_search_cache_atomic({
+            'item': _serialize_item(matched_item),
+            'links': [_serialize_item(l) for l in initial_verified],
+            'unverified_links': [_serialize_item(l) for l in unverified_pending],
+            'meta': meta,
+            'engine': engine,
+            'is_preloaded_session': bool(unverified_pending)
+        })
+    except Exception:
+        pass
+
+    for idx, lnk in enumerate(links):
+        srv = _get_link_server_name(lnk)
+        xbmc.log("Multi Bridge Instant Play: Probando enlace [%d/%d] (%s)..." % (idx+1, len(links), srv), xbmc.LOGINFO)
+
+        ok, li = _resolve_link_to_listitem(lnk, engine, matched_item)
+        if not ok or not li:
+            xbmc.log("Multi Bridge Instant Play: Enlace %d (%s) no resolvió URL" % (idx+1, srv), xbmc.LOGWARNING)
+            continue
+
+        media_url = ''
+        try:
+            media_url = li.getPath()
+        except Exception:
+            pass
+
+        if not media_url:
+            xbmc.log("Multi Bridge Instant Play: Enlace %d (%s) URL vacía" % (idx+1, srv), xbmc.LOGWARNING)
+            continue
+
+        try:
+            sync_tmdbhelper_playerstring(meta)
+            set_listitem_info(li, meta=meta)
+            player.play(media_url, li)
+        except Exception as pe:
+            xbmc.log("Multi Bridge Instant Play: error en player.play: %s" % str(pe), xbmc.LOGWARNING)
+            continue
+
+        started = False
+        for _ in range(50):
+            if xbmc.Monitor().abortRequested():
+                break
+            if player.isPlayingVideo():
+                started = True
+                break
+            xbmc.sleep(200)
+
+        if started:
+            xbmc.log("Multi Bridge Instant Play: ¡Reproducción exitosa en enlace %d (%s)!" % (idx+1, srv), xbmc.LOGINFO)
+            sync_tmdbhelper_playerstring(meta)
+            media_key = _get_media_key(meta, lnk)
+            start_playback_monitor(media_key, title_str=meta.get('title', ''), current_link_index=idx, meta=meta)
+            return True
+        else:
+            xbmc.log("Multi Bridge Instant Play: Enlace %d (%s) no arrancó dentro de 10s. Deteniendo..." % (idx+1, srv), xbmc.LOGWARNING)
+            try: player.stop()
+            except: pass
+            xbmc.sleep(300)
+
+    xbmc.log("Multi Bridge Instant Play: Los enlaces precargados no pudieron iniciar reproducción", xbmc.LOGWARNING)
+    return False
+
+def _get_next_episode_info(meta):
+    """Determina si existe un capítulo siguiente para la serie actual guiándose
+    estrictamente por los episodios que TMDb Helper muestra (solo estrenados).
+    Consulta la base de datos local SQLite de TMDb Helper filtrando por premiered <= hoy,
+    o mediante la API de TMDb validando air_date <= hoy.
+    Retorna dict con {'season': int, 'episode': int, 'title': str} o None si no hay siguiente.
+    """
+    if not meta or not isinstance(meta, dict):
+        return None
+    s_raw = meta.get('season')
+    e_raw = meta.get('episode')
+    if s_raw is None or e_raw is None:
+        return None
+    try:
+        s = int(s_raw)
+        e = int(e_raw)
+    except (ValueError, TypeError):
+        return None
+    if s < 0 or e <= 0:
+        return None
+
+    tmdb_raw = meta.get('tmdb') or meta.get('tmdb_id')
+    if not tmdb_raw:
+        return None
+    try:
+        tmdb = int(tmdb_raw)
+    except (ValueError, TypeError):
+        return None
+
+    cache_key = (tmdb, s, e)
+    if cache_key in _NEXT_EPISODE_CACHE:
+        return _NEXT_EPISODE_CACHE[cache_key]
+
+    today = datetime.date.today().strftime('%Y-%m-%d')
+
+    # 1. Comprobar en base de datos local SQLite de TMDb Helper
+    try:
+        import glob
+        import sqlite3
+        try:
+            tmdb_dir = xbmcvfs.translatePath('special://profile/addon_data/plugin.video.themoviedb.helper')
+        except Exception:
+            tmdb_dir = os.path.expandvars(r'%APPDATA%\Kodi\userdata\addon_data\plugin.video.themoviedb.helper')
+
+        db_files = glob.glob(os.path.join(tmdb_dir, 'database_*', 'ItemDetails.db'))
+        if db_files:
+            conn = sqlite3.connect(db_files[0])
+            cur = conn.cursor()
+
+            # Mismo season, episodio + 1 estrenado (premiered <= hoy)
+            cur.execute("""
+                SELECT e.episode, s.season, e.title, e.premiered 
+                FROM episode e 
+                JOIN season s ON e.season_id = s.id 
+                WHERE (e.tvshow_id = ? OR e.tvshow_id = ?) 
+                  AND s.season = ? 
+                  AND e.episode = ?
+                  AND e.premiered IS NOT NULL 
+                  AND e.premiered != '' 
+                  AND e.premiered <= ?
+            """, (f'tv.{tmdb}', str(tmdb), s, e + 1, today))
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                res = {'season': int(row[1]), 'episode': int(row[0]), 'title': str(row[2] or '')}
+                _NEXT_EPISODE_CACHE[cache_key] = res
+                return res
+
+            # Si el episodio e+1 existe en la BD pero no se ha estrenado aún (fecha futura):
+            cur.execute("""
+                SELECT e.episode, e.premiered 
+                FROM episode e 
+                JOIN season s ON e.season_id = s.id 
+                WHERE (e.tvshow_id = ? OR e.tvshow_id = ?) 
+                  AND s.season = ? 
+                  AND e.episode = ?
+            """, (f'tv.{tmdb}', str(tmdb), s, e + 1))
+            future_ep = cur.fetchone()
+            if future_ep:
+                conn.close()
+                _NEXT_EPISODE_CACHE[cache_key] = None
+                return None
+
+            # Siguiente temporada, episodio 1 estrenado (premiered <= hoy)
+            cur.execute("""
+                SELECT e.episode, s.season, e.title, e.premiered 
+                FROM episode e 
+                JOIN season s ON e.season_id = s.id 
+                WHERE (e.tvshow_id = ? OR e.tvshow_id = ?) 
+                  AND s.season = ? 
+                  AND e.episode = 1
+                  AND e.premiered IS NOT NULL 
+                  AND e.premiered != '' 
+                  AND e.premiered <= ?
+            """, (f'tv.{tmdb}', str(tmdb), s + 1, today))
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                res = {'season': int(row[1]), 'episode': int(row[0]), 'title': str(row[2] or '')}
+                _NEXT_EPISODE_CACHE[cache_key] = res
+                return res
+
+            # Si existe temporada s+1 pero aún no estrenada:
+            cur.execute("""
+                SELECT e.episode, e.premiered 
+                FROM episode e 
+                JOIN season s ON e.season_id = s.id 
+                WHERE (e.tvshow_id = ? OR e.tvshow_id = ?) 
+                  AND s.season = ? 
+                  AND e.episode = 1
+            """, (f'tv.{tmdb}', str(tmdb), s + 1))
+            future_s = cur.fetchone()
+            if future_s:
+                conn.close()
+                _NEXT_EPISODE_CACHE[cache_key] = None
+                return None
+
+            conn.close()
+    except Exception as _dbe:
+        xbmc.log('Multi Bridge: error consultando ItemDetails.db: %s' % str(_dbe), xbmc.LOGDEBUG)
+
+    # 2. Fallback mediante TMDb API (solo episodios con air_date <= hoy)
+    try:
+        import requests
+        api_key = 'a07324c669cac4d96789197134ce272b'
+        url = f"https://api.themoviedb.org/3/tv/{tmdb}/season/{s}?api_key={api_key}&language=es-ES"
+        r = requests.get(url, timeout=3.0)
+        if r.status_code == 200:
+            data = r.json()
+            for ep in data.get('episodes', []):
+                if ep.get('episode_number') == e + 1:
+                    air_date = ep.get('air_date')
+                    if air_date and air_date <= today:
+                        res = {'season': s, 'episode': e + 1, 'title': ep.get('name', '')}
+                        _NEXT_EPISODE_CACHE[cache_key] = res
+                        return res
+                    else:
+                        _NEXT_EPISODE_CACHE[cache_key] = None
+                        return None
+
+            # Si es final de temporada, verificar temporada siguiente
+            show_url = f"https://api.themoviedb.org/3/tv/{tmdb}?api_key={api_key}&language=es-ES"
+            r_show = requests.get(show_url, timeout=3.0)
+            if r_show.status_code == 200:
+                show_data = r_show.json()
+                for szn in show_data.get('seasons', []):
+                    if szn.get('season_number') == s + 1 and szn.get('episode_count', 0) > 0:
+                        r_s_next = requests.get(f"https://api.themoviedb.org/3/tv/{tmdb}/season/{s + 1}?api_key={api_key}&language=es-ES", timeout=3.0)
+                        if r_s_next.status_code == 200:
+                            s_eps = r_s_next.json().get('episodes', [])
+                            if s_eps:
+                                air_date = s_eps[0].get('air_date')
+                                if air_date and air_date <= today:
+                                    res = {'season': s + 1, 'episode': 1, 'title': s_eps[0].get('name', '')}
+                                    _NEXT_EPISODE_CACHE[cache_key] = res
+                                    return res
+                                else:
+                                    _NEXT_EPISODE_CACHE[cache_key] = None
+                                    return None
+    except Exception as _apie:
+        xbmc.log('Multi Bridge: error consultando TMDb API para siguiente episodio: %s' % str(_apie), xbmc.LOGDEBUG)
+
+    _NEXT_EPISODE_CACHE[cache_key] = None
+    return None
+
+
+def _play_next_episode(meta, next_ep):
+    """Inicia la reproducción del siguiente capítulo idéntico a invocarlo desde TMDb Helper,
+    o reproducción instantánea si ya está precargado en memoria."""
+    try:
+        tmdb_id = meta.get('tmdb') or meta.get('tmdb_id') or ''
+        next_s = next_ep.get('season')
+        next_e = next_ep.get('episode')
+        ep_title = next_ep.get('title') or ''
+
+        # Comprobar si hay enlaces precargados en memoria para este episodio
+        if tmdb_id and next_s is not None and next_e is not None:
+            cache_key = '%s_S%02dE%02d' % (str(tmdb_id), int(next_s), int(next_e))
+            preloaded = _PRELOADED_NEXT_EPISODE_CACHE.get(cache_key)
+            if preloaded and preloaded.get('links'):
+                xbmc.log("Multi Bridge: Iniciando reproducción instantánea de siguiente episodio desde precarga (%s)" % cache_key, xbmc.LOGINFO)
+                success = _play_preloaded_episode(preloaded)
+                if success:
+                    return
+
+        msg = 'S%02dE%02d' % (next_s, next_e)
+        if ep_title:
+            msg += ' - %s' % ep_title
+        xbmcgui.Dialog().notification('Multi Bridge', 'Siguiente capítulo: %s' % msg, xbmcgui.NOTIFICATION_INFO, 2500)
+
+        xbmc.sleep(200)
+
+        if _is_addon_installed('plugin.video.themoviedb.helper') and tmdb_id:
+            url = 'plugin://plugin.video.themoviedb.helper/?info=play&tmdb_type=episode&tmdb_id=%s&season=%s&episode=%s' % (
+                str(tmdb_id), str(next_s), str(next_e)
+            )
+            xbmc.log('Multi Bridge: reproduciendo siguiente episodio vía TMDb Helper: %s' % url, xbmc.LOGINFO)
+            xbmc.executebuiltin('PlayMedia("%s")' % url)
+        else:
+            showname = meta.get('showname') or meta.get('title') or ''
+            url = 'plugin://plugin.video.bridge.multi/?action=play&tmdb=%s&season=%s&episode=%s&showname=%s&title=%s' % (
+                str(tmdb_id), str(next_s), str(next_e),
+                uparse.quote_plus(showname), uparse.quote_plus(showname)
+            )
+            xbmc.log('Multi Bridge: reproduciendo siguiente episodio vía Multi Bridge directo: %s' % url, xbmc.LOGINFO)
+            xbmc.executebuiltin('RunPlugin("%s")' % url)
+    except Exception as e:
+        xbmc.log('Multi Bridge: error en _play_next_episode: %s' % str(e), xbmc.LOGERROR)
+
+
+# ---------------------------------------------------------
 # Custom Pause Prompt Dialog & Floating Links Dialog
 # ---------------------------------------------------------
 
@@ -9373,11 +10243,12 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     def __init__(self, current_server_name="", meta=None, is_test=False):
         super().__init__()
         self._is_closed = False
-        self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, -1=Cerrar/Atrás
+        self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, 2=Siguiente capítulo, -1=Cerrar/Atrás
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
         self.server_name = current_server_name or "Actual"
         self.meta = meta or {}
         self.is_test = is_test
+        self.next_ep = _get_next_episode_info(self.meta)
         self._btn_ids = []
         self._highlights = []
         try:
@@ -9418,6 +10289,32 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         GOLD = 'FFCFA82C'
         white = self._white()
 
+        has_next = bool(getattr(self, 'next_ep', None))
+        has_instant = False
+        if has_next:
+            tmdb_id = str(self.meta.get('tmdb') or '')
+            next_s = self.next_ep.get('season')
+            next_e = self.next_ep.get('episode')
+            if tmdb_id and next_s is not None and next_e is not None:
+                cache_key = '%s_S%02dE%02d' % (tmdb_id, int(next_s), int(next_e))
+                if cache_key in _PRELOADED_NEXT_EPISODE_CACHE and _PRELOADED_NEXT_EPISODE_CACHE[cache_key].get('links'):
+                    has_instant = True
+
+        if has_next:
+            # Continuar (116), Cambiar (116), y boton icono minimalista para siguiente (38)
+            btn_configs = [
+                {'lbl': 'Continuar', 'w': 116, 'is_icon': False},
+                {'lbl': 'Cambiar',   'w': 116, 'is_icon': False},
+                {'lbl': '',          'w': 38,  'is_icon': True, 'instant': has_instant}
+            ]
+            gap = 8
+        else:
+            btn_configs = [
+                {'lbl': 'Continuar', 'w': 138, 'is_icon': False},
+                {'lbl': 'Cambiar',   'w': 138, 'is_icon': False}
+            ]
+            gap = 12
+
         pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
         margin_x = 40
         dx = W - dw - margin_x
@@ -9446,25 +10343,23 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         elif len(srv) > 13:
             srv = srv[:12] + '..'
 
-        # Encabezado compacto con fuente pequeña y colores nativos de Kodi (sin #)
+        # Encabezado compacto con fuente pequeña y colores nativos de Kodi
         header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
         self.addControl(xbmcgui.ControlLabel(
             dx+16, dy+11, dw-32, 20,
             header_text,
             font='font10'))
 
-        # Dos botones compactos proporcionados: [ Continuar ]  [ Cambiar ]
-        bw, bh = 138, 34
-        gap = 12
-        total_w = bw * 2 + gap
+        total_w = sum(b['w'] for b in btn_configs) + gap * (len(btn_configs) - 1)
         bx = dx + (dw - total_w) // 2
         by = dy + 39
 
-        labels = ('Continuar', 'Cambiar')
-        for i, lbl in enumerate(labels):
-            btn_x = bx + i * (bw + gap)
+        cur_x = bx
+        for i, cfg in enumerate(btn_configs):
+            bw = cfg['w']
+            bh = 34
             btn = xbmcgui.ControlButton(
-                btn_x, by, bw, bh, lbl, '', '',
+                cur_x, by, bw, bh, cfg['lbl'], '', '',
                 font='font10', textColor='FFCCCCCC', focusedColor='FFFFFFFF', alignment=6)
             self.addControl(btn)
             self._btn_ids.append(btn.getId())
@@ -9472,22 +10367,50 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             m, t = 2, 2
             # Marco dorado tenue permanente
             for _bx, _by, _bw, _bh in (
-                    (btn_x-m, by-m, bw+m*2, t),
-                    (btn_x-m, by+bh+m-t, bw+m*2, t),
-                    (btn_x-m, by-m, t, bh+m*2),
-                    (btn_x+bw+m-t, by-m, t, bh+m*2)):
+                    (cur_x-m, by-m, bw+m*2, t),
+                    (cur_x-m, by+bh+m-t, bw+m*2, t),
+                    (cur_x-m, by-m, t, bh+m*2),
+                    (cur_x+bw+m-t, by-m, t, bh+m*2)):
                 self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='FF443311'))
 
             # Resaltado brillante cuando tiene foco
             hl = [
-                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='33CFA82C'),
-                xbmcgui.ControlImage(btn_x-m, by-m, bw+m*2, t+1, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(btn_x-m, by+bh+m-t-1, bw+m*2, t+1, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(btn_x-m, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(btn_x+bw+m-t-1, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(cur_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='33CFA82C'),
+                xbmcgui.ControlImage(cur_x-m, by-m, bw+m*2, t+1, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(cur_x-m, by+bh+m-t-1, bw+m*2, t+1, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(cur_x-m, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
+                xbmcgui.ControlImage(cur_x+bw+m-t-1, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
             ]
+
+            if cfg['is_icon']:
+                try:
+                    icon_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_next.png')
+                except Exception:
+                    icon_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_next.png'
+                iw, ih = 18, 18
+                ix = cur_x + (bw - iw) // 2
+                iy = by + (bh - ih) // 2
+                self.addControl(xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFCCCCCC'))
+                icon_hl = xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFFFFFFF')
+                hl.append(icon_hl)
+
+                # Si hay enlaces precargados para reproducción instantánea, colocar rayo dorado en la esquina superior derecha del cuadrito
+                if cfg.get('instant'):
+                    try:
+                        badge_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_rayo_badge.png')
+                    except Exception:
+                        badge_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_rayo_badge.png'
+                    rw, rh = 21, 25
+                    rx = cur_x + bw - 13
+                    ry = by - 8
+                    self.addControl(xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFD700'))
+                    badge_hl = xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFFFFF')
+                    hl.append(badge_hl)
+
             for c in hl: self.addControl(c)
             self._highlights.append(hl)
+
+            cur_x += bw + gap
 
         self._update_highlight()
         try:
@@ -9525,15 +10448,17 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             self.selected = -1
             self.close()
         elif aid == self.ACTION_MOVE_LEFT:
-            self.current = 0
-            self._update_highlight()
-            try: self.setFocus(self.getControl(self._btn_ids[0]))
-            except: pass
+            if self._btn_ids:
+                self.current = (self.current - 1) % len(self._btn_ids)
+                self._update_highlight()
+                try: self.setFocus(self.getControl(self._btn_ids[self.current]))
+                except: pass
         elif aid == self.ACTION_MOVE_RIGHT:
-            self.current = 1
-            self._update_highlight()
-            try: self.setFocus(self.getControl(self._btn_ids[1]))
-            except: pass
+            if self._btn_ids:
+                self.current = (self.current + 1) % len(self._btn_ids)
+                self._update_highlight()
+                try: self.setFocus(self.getControl(self._btn_ids[self.current]))
+                except: pass
         elif aid == self.ACTION_SELECT_ITEM:
             self.selected = self.current
             self.close()
@@ -10293,9 +11218,10 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         elif aid in (self.ACTION_SHOW_INFO, 11, self.ACTION_CONTEXT_MENU, 117):
             other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
             other_eng_id = 'balandro' if self.engine == 'alfa' else 'alfa'
+            is_series = bool(self.meta.get('season') and self.meta.get('episode'))
             try:
                 opts_items = [('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'force_search')]
-                if _is_engine_installed(other_eng_id):
+                if not (is_series and other_eng_id == 'alfa') and _is_engine_installed(other_eng_id):
                     opts_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name, 'other_engine'))
                 opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
 
@@ -10868,6 +11794,10 @@ def main():
             xbmc.executebuiltin('Container.Refresh')
         return
 
+    if action == 'verify_remaining_preloaded':
+        _verify_remaining_preloaded_impl()
+        return
+
     if not action and not url:
         if not view or view == 'home': show_player_manager_home()
         elif view == 'continue_watching': show_continue_watching()
@@ -11393,7 +12323,7 @@ def main():
                 'plot': plot or get_param('plot'),
                 'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0],
                 'tagline': tagline or get_param('tagline'),
-                'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
+                'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': (_get_episode_still(tmdb_id or get_param('tmdb'), season or get_param('season'), episode or get_param('episode')) if ((season or get_param('season')) and (episode or get_param('episode'))) else '') or thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
                 'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
                 'verified_only': verified_flag, 'engine': eng
@@ -11584,7 +12514,7 @@ def main():
                 'plot': plot or get_param('plot'),
                 'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))) or [''])[0],
                 'tagline': tagline or get_param('tagline'),
-                'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': thumbnail or get_param('thumbnail'),
+                'poster': poster or get_param('poster'), 'fanart': fanart or get_param('fanart'), 'thumbnail': (_get_episode_still(tmdb_id or get_param('tmdb'), season or get_param('season'), episode or get_param('episode')) if ((season or get_param('season')) and (episode or get_param('episode'))) else '') or thumbnail or get_param('thumbnail'),
                 'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode')))),
                 'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(tmdb_id or get_param('tmdb'), bool((season or get_param('season')) and (episode or get_param('episode'))))),
                 'verified_only': verified_flag, 'engine': eng
