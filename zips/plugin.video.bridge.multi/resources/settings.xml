@@ -16,6 +16,7 @@
         <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="60" range="0,1,60" option="int" />
         <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
         <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="false" />
+        <setting id="notify_network_status" type="bool" label="Avisar cuando no haya internet o se restablezca la conexión" default="true" />
         
         <setting type="sep" />
         <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />
