@@ -10237,13 +10237,14 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     ACTION_PLAYER_PLAY = 79
     ACTION_NAV_BACK    = 92
     ACTION_MOUSE_LEFT_CLICK = 100
+    ACTION_MOUSE_DOUBLE_CLICK = 103
     ACTION_MOUSE_MOVE       = 107
     ACTION_BACKSPACE   = 110
 
     def __init__(self, current_server_name="", meta=None, is_test=False):
         super().__init__()
         self._is_closed = False
-        self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, 2=Siguiente capítulo, -1=Cerrar/Atrás
+        self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, 2=Siguiente capitulo, -1=Cerrar/Atras
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
         self.server_name = current_server_name or "Actual"
         self.meta = meta or {}
@@ -10251,6 +10252,8 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         self.next_ep = _get_next_episode_info(self.meta)
         self._btn_ids = []
         self._highlights = []
+        self._control_map = {}
+        self._btn_rects = []
         try:
             self._build()
         except Exception as e:
@@ -10284,7 +10287,24 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     def _build(self):
         W = self.getWidth() or 1920
         H = self.getHeight() or 1080
-        dw, dh = 330, 88
+
+        # Deteccion de Modo Tactil / Pantalla pequena
+        touch_setting = str(_bridge_addon.getSetting('pause_prompt_touch_mode') or '0').strip()
+        is_touch = False
+        if touch_setting == '1':    # Siempre activado
+            is_touch = True
+        elif touch_setting == '2':  # Desactivado (compacto)
+            is_touch = False
+        else:                       # 0 = Automatico
+            try:
+                is_touch = bool(
+                    xbmc.getCondVisibility('System.HasTouchScreen') or
+                    xbmc.getCondVisibility('System.Platform.Android') or
+                    (W <= 1280 or H <= 720)
+                )
+            except Exception:
+                is_touch = bool(W <= 1280 or H <= 720)
+
         border = 2
         GOLD = 'FFCFA82C'
         white = self._white()
@@ -10300,26 +10320,70 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                 if cache_key in _PRELOADED_NEXT_EPISODE_CACHE and _PRELOADED_NEXT_EPISODE_CACHE[cache_key].get('links'):
                     has_instant = True
 
-        if has_next:
-            # Continuar (116), Cambiar (116), y boton icono minimalista para siguiente (38)
-            btn_configs = [
-                {'lbl': 'Continuar', 'w': 116, 'is_icon': False},
-                {'lbl': 'Cambiar',   'w': 116, 'is_icon': False},
-                {'lbl': '',          'w': 38,  'is_icon': True, 'instant': has_instant}
-            ]
-            gap = 8
+        if is_touch:
+            # === Modo Tactil (Botones grandes, espacios amplios para dedos) ===
+            bh = 48
+            btn_font = 'font12'
+            hdr_font = 'font12'
+            pad_hitbox = 12
+            if has_next:
+                dw, dh = 460, 110
+                btn_configs = [
+                    {'lbl': 'Continuar', 'w': 150, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 150, 'is_icon': False},
+                    {'lbl': '',          'w': 80,  'is_icon': True, 'instant': has_instant}
+                ]
+                gap = 14
+                iw, ih = 24, 24
+                rw, rh = 26, 30
+                rx_offset = 14
+                ry_offset = 10
+            else:
+                dw, dh = 390, 110
+                btn_configs = [
+                    {'lbl': 'Continuar', 'w': 160, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 160, 'is_icon': False}
+                ]
+                gap = 18
+                iw, ih = 24, 24
+                rw, rh = 26, 30
+                rx_offset = 14
+                ry_offset = 10
         else:
-            btn_configs = [
-                {'lbl': 'Continuar', 'w': 138, 'is_icon': False},
-                {'lbl': 'Cambiar',   'w': 138, 'is_icon': False}
-            ]
-            gap = 12
+            # === Modo Compacto (Mando a distancia / TV) ===
+            bh = 36
+            btn_font = 'font10'
+            hdr_font = 'font10'
+            pad_hitbox = 6
+            if has_next:
+                dw, dh = 350, 92
+                btn_configs = [
+                    {'lbl': 'Continuar', 'w': 118, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 118, 'is_icon': False},
+                    {'lbl': '',          'w': 54,  'is_icon': True, 'instant': has_instant}
+                ]
+                gap = 10
+                iw, ih = 20, 20
+                rw, rh = 22, 26
+                rx_offset = 13
+                ry_offset = 8
+            else:
+                dw, dh = 330, 92
+                btn_configs = [
+                    {'lbl': 'Continuar', 'w': 138, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 138, 'is_icon': False}
+                ]
+                gap = 12
+                iw, ih = 20, 20
+                rw, rh = 22, 26
+                rx_offset = 13
+                ry_offset = 8
 
         pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
-        margin_x = 40
+        margin_x = 35 if is_touch else 40
         dx = W - dw - margin_x
         if pos_setting == '1':  # Inferior derecha
-            margin_y = 60
+            margin_y = 60 if is_touch else 50
             dy = H - dh - margin_y
         else:  # Superior derecha (0)
             margin_y = 40
@@ -10336,33 +10400,39 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         # Fondo oscuro interior
         self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='F40A0A0E'))
 
-        # Servidor actual (limpio y compacto)
+        # Servidor actual
         srv = (self.server_name or "Actual").strip()
         if srv.lower() in ('torrent', 'magnet'):
             srv = 'Torrent'
         elif len(srv) > 13:
             srv = srv[:12] + '..'
 
-        # Encabezado compacto con fuente pequeña y colores nativos de Kodi
+        # Encabezado con modo tactil / compacto adaptativo
         header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
+        hdr_y = dy + (12 if is_touch else 10)
+        hdr_h = 24 if is_touch else 20
         self.addControl(xbmcgui.ControlLabel(
-            dx+16, dy+11, dw-32, 20,
+            dx+16, hdr_y, dw-32, hdr_h,
             header_text,
-            font='font10'))
+            font=hdr_font))
 
         total_w = sum(b['w'] for b in btn_configs) + gap * (len(btn_configs) - 1)
         bx = dx + (dw - total_w) // 2
-        by = dy + 39
+        by = dy + (44 if is_touch else 40)
 
         cur_x = bx
         for i, cfg in enumerate(btn_configs):
             bw = cfg['w']
-            bh = 34
             btn = xbmcgui.ControlButton(
                 cur_x, by, bw, bh, cfg['lbl'], '', '',
-                font='font10', textColor='FFCCCCCC', focusedColor='FFFFFFFF', alignment=6)
+                font=btn_font, textColor='FFCCCCCC', focusedColor='FFFFFFFF', alignment=6)
             self.addControl(btn)
-            self._btn_ids.append(btn.getId())
+            btn_id = btn.getId()
+            self._btn_ids.append(btn_id)
+            self._control_map[btn_id] = i
+
+            # Hitbox para soporte tactil y cursor
+            self._btn_rects.append((cur_x - pad_hitbox, by - pad_hitbox, cur_x + bw + pad_hitbox, by + bh + pad_hitbox, i))
 
             m, t = 2, 2
             # Marco dorado tenue permanente
@@ -10371,7 +10441,9 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     (cur_x-m, by+bh+m-t, bw+m*2, t),
                     (cur_x-m, by-m, t, bh+m*2),
                     (cur_x+bw+m-t, by-m, t, bh+m*2)):
-                self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='FF443311'))
+                border_img = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='FF443311')
+                self.addControl(border_img)
+                self._control_map[border_img.getId()] = i
 
             # Resaltado brillante cuando tiene foco
             hl = [
@@ -10387,27 +10459,33 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     icon_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_next.png')
                 except Exception:
                     icon_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_next.png'
-                iw, ih = 18, 18
                 ix = cur_x + (bw - iw) // 2
                 iy = by + (bh - ih) // 2
-                self.addControl(xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFCCCCCC'))
+                icon_img = xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFCCCCCC')
+                self.addControl(icon_img)
+                self._control_map[icon_img.getId()] = i
+
                 icon_hl = xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFFFFFFF')
                 hl.append(icon_hl)
 
-                # Si hay enlaces precargados para reproducción instantánea, colocar rayo dorado en la esquina superior derecha del cuadrito
+                # Si hay enlaces precargados para reproduccion instantanea, colocar rayo dorado en la esquina superior derecha
                 if cfg.get('instant'):
                     try:
                         badge_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_rayo_badge.png')
                     except Exception:
                         badge_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_rayo_badge.png'
-                    rw, rh = 21, 25
-                    rx = cur_x + bw - 13
-                    ry = by - 8
-                    self.addControl(xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFD700'))
+                    rx = cur_x + bw - rx_offset
+                    ry = by - ry_offset
+                    badge_img = xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFD700')
+                    self.addControl(badge_img)
+                    self._control_map[badge_img.getId()] = i
+
                     badge_hl = xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFFFFF')
                     hl.append(badge_hl)
 
-            for c in hl: self.addControl(c)
+            for c in hl:
+                self.addControl(c)
+                self._control_map[c.getId()] = i
             self._highlights.append(hl)
 
             cur_x += bw + gap
@@ -10427,11 +10505,16 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     def onAction(self, action):
         aid = action.getId()
 
-        # Detección de movimiento de cursor (Hover)
+        # Deteccion de movimiento de cursor (Hover)
         try:
             fid = self.getFocusId()
             if fid in self._btn_ids:
                 idx = self._btn_ids.index(fid)
+                if idx != self.current:
+                    self.current = idx
+                    self._update_highlight()
+            elif fid in self._control_map:
+                idx = self._control_map[fid]
                 if idx != self.current:
                     self.current = idx
                     self._update_highlight()
@@ -10462,21 +10545,48 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         elif aid == self.ACTION_SELECT_ITEM:
             self.selected = self.current
             self.close()
-        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, 100, 103, 500, 505, 510):
-            try: fid = self.getFocusId()
-            except: fid = -1
-            if fid in self._btn_ids:
+        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103, 501, 510):
+            # Comprobar primero por coordenadas exactas del puntero / toque
+            try:
+                mx = int(action.getAmount1())
+                my = int(action.getAmount2())
+                if mx > 0 or my > 0:
+                    for rx1, ry1, rx2, ry2, b_idx in self._btn_rects:
+                        if rx1 <= mx <= rx2 and ry1 <= my <= ry2:
+                            self.selected = b_idx
+                            self.close()
+                            return
+            except Exception:
+                pass
+
+            # Breve margen para que Kodi actualice el foco bajo el dedo en pantallas tactiles
+            try:
+                xbmc.sleep(80)
+            except: pass
+            try:
+                fid = self.getFocusId()
+            except Exception:
+                fid = -1
+
+            if fid in self._control_map:
+                self.selected = self._control_map[fid]
+                self.close()
+            elif fid in self._btn_ids:
                 self.selected = self._btn_ids.index(fid)
-            else:
-                # Clic o toque fuera en pantalla -> Reanudar reproduccion (Continuar)
+                self.close()
+            elif fid == getattr(self, '_backdrop_id', None):
                 self.selected = 0
-            self.close()
+                self.close()
 
     def onClick(self, control_id):
-        if control_id in self._btn_ids:
+        xbmc.log('BridgeMulti PausePromptDialog onClick: id=%s' % control_id, xbmc.LOGINFO)
+        if control_id in self._control_map:
+            self.selected = self._control_map[control_id]
+        elif control_id in self._btn_ids:
             self.selected = self._btn_ids.index(control_id)
+        elif control_id == getattr(self, '_backdrop_id', None):
+            self.selected = 0
         else:
-            # Clic o toque fuera en el backdrop -> Reanudar reproduccion (Continuar)
             self.selected = 0
         self.close()
 
