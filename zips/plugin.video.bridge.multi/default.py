@@ -9850,11 +9850,12 @@ def _start_next_episode_preloader(meta, my_token):
         if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
             return
         try:
-            it, links = _search_on_player(
-                ch_info, 'balandro', True, target_title, target_year,
-                next_s, next_e, all_names, alt_terms=alt_terms,
-                target_tmdb=tmdb_id, target_imdb=next_meta.get('imdb')
-            )
+            with silenced_dialogs():
+                it, links = _search_on_player(
+                    ch_info, 'balandro', True, target_title, target_year,
+                    next_s, next_e, all_names, alt_terms=alt_terms,
+                    target_tmdb=tmdb_id, target_imdb=next_meta.get('imdb')
+                )
             if links:
                 for l in links:
                     try: l.bridge_engine = 'balandro'
@@ -9895,39 +9896,56 @@ def _start_next_episode_preloader(meta, my_token):
     if not sorted_links:
         return
 
-    # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
+    # Verificar en segundo plano hasta encontrar 3 enlaces funcionales.
+    # Si no se llega a 3, se guarda con los que hayan funcionado (1 o 2).
+    # Si no hay ningún enlace funcional, no pasa nada y el proceso se cierra silenciosamente.
     verified_top3 = []
     for cand in sorted_links:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
-            return
+        if mon.abortRequested() or _get_global_monitor_token() != my_token:
+            break
+        if not p.isPlayingVideo():
+            # Si el usuario detuvo o pausó el vídeo, salir del bucle conservando los funcionales ya verificados
+            break
         if len(verified_top3) >= 3:
             break
         try:
-            v_res = _verify_links_headless([cand], engine='balandro', p_dialog=None)
+            with silenced_dialogs():
+                v_res = _verify_links_headless([cand], engine='balandro', p_dialog=None)
             if v_res:
                 verified_top3.append(v_res[0])
                 xbmc.log("Multi Bridge Preload: Enlace verificado [%d/3]: %s" % (
                     len(verified_top3), _get_link_server_name(v_res[0])), xbmc.LOGINFO)
+                # Guardar inmediatamente de forma incremental: listo desde el 1er o 2do enlace funcional
+                _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
+                    'links': list(verified_top3),
+                    'all_links': sorted_links,
+                    'matched_item': matched_item,
+                    'meta': next_meta,
+                    'engine': 'balandro',
+                    'next_ep': next_ep,
+                    'time': time.time()
+                }
+                try:
+                    xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', str(cache_key))
+                except Exception:
+                    pass
         except Exception as _ve:
             xbmc.log("Multi Bridge Preload: Error verificando enlace: %s" % str(_ve), xbmc.LOGDEBUG)
         time.sleep(0.1)
 
     if verified_top3:
-        _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
-            'links': verified_top3,
-            'all_links': sorted_links,
-            'matched_item': matched_item,
-            'meta': next_meta,
-            'engine': 'balandro',
-            'next_ep': next_ep,
-            'time': time.time()
-        }
+        xbmc.log("Multi Bridge Preload: ¡Listo! %d enlace(s) funcional(es) guardado(s) en memoria para reproducción instantánea de %s" % (
+            len(verified_top3), cache_key), xbmc.LOGINFO)
+    else:
+        # Si no hay ningún enlace funcional, simplemente no pasa nada y se cierra el proceso silenciosamente sin mostrar nada en pantalla
+        _PRELOADED_NEXT_EPISODE_CACHE.pop(cache_key, None)
         try:
-            xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', str(cache_key))
+            if xbmcgui.Window(10000).getProperty('BridgeMulti.PreloadedNextEpKey') == str(cache_key):
+                xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', '')
         except Exception:
             pass
-        xbmc.log("Multi Bridge Preload: ¡Listo! %d enlaces verificados guardados en memoria para reproducción instantánea de %s" % (
-            len(verified_top3), cache_key), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Preload: Ningún enlace funcional encontrado para %s. Proceso cerrado silenciosamente sin mostrar nada en pantalla." % cache_key, xbmc.LOGINFO)
+        return
 
 def _play_preloaded_episode(preloaded):
     """Reproduce instantáneamente el siguiente episodio usando los enlaces precargados.
