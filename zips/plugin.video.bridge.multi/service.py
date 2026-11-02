@@ -5,17 +5,16 @@ import xbmcgui
 import xbmcvfs
 import os
 import socket
+import urllib.request
 
 def _is_internet_connected():
-    # 1. Comprobacion local rapida de Kodi
-    try:
-        if not xbmc.getCondVisibility("Network.IsConnected"):
-            return False
-    except Exception:
-        pass
-
-    # 2. Comprobacion de socket ligero (TCP SYN/ACK a servidores Anycast globales)
-    targets = (('1.1.1.1', 80), ('8.8.8.8', 53), ('1.0.0.1', 80), ('8.8.4.4', 53))
+    # Comprobacion de socket ultra ligero a Anycast DNS IPs globales (Cloudflare y Google)
+    targets = (
+        ('1.1.1.1', 80),
+        ('8.8.8.8', 53),
+        ('1.0.0.1', 80),
+        ('8.8.4.4', 53)
+    )
     for host, port in targets:
         try:
             s = socket.create_connection((host, port), timeout=2.0)
@@ -23,6 +22,19 @@ def _is_internet_connected():
             return True
         except Exception:
             continue
+
+    # Fallback HTTP generate_204 si por alguna razon los puertos 80/53 IP directos estuvieran filtrados
+    try:
+        req = urllib.request.Request(
+            'http://connectivitycheck.gstatic.com/generate_204',
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            if resp.status in (200, 204):
+                return True
+    except Exception:
+        pass
+
     return False
 
 def _show_network_notification(is_online):
@@ -47,8 +59,8 @@ def _show_network_notification(is_online):
         xbmc.log("BridgeMulti NetworkMonitor notification error: " + str(e), xbmc.LOGWARNING)
 
 def _network_monitor_loop(monitor):
-    # Periodo de gracia inicial (esperar 8s tras inicio de Kodi para que el sistema y Wi-Fi conecten)
-    if monitor.waitForAbort(8):
+    # Periodo de gracia inicial al arrancar Kodi
+    if monitor.waitForAbort(6):
         return
 
     try:
@@ -56,9 +68,17 @@ def _network_monitor_loop(monitor):
     except Exception:
         addon = None
 
+    # Estado inicial real
     was_online = _is_internet_connected()
-    if not was_online and addon and (addon.getSetting('notify_network_status') != 'false'):
-        _show_network_notification(False)
+    xbmc.log('BridgeMulti NetworkMonitor: estado inicial conexion=%s' % was_online, xbmc.LOGINFO)
+
+    # Si arranco sin internet, reconfirmar tras 4s antes de avisar
+    if not was_online:
+        if monitor.waitForAbort(4):
+            return
+        was_online = _is_internet_connected()
+        if not was_online and addon and (addon.getSetting('notify_network_status') != 'false'):
+            _show_network_notification(False)
 
     while not monitor.abortRequested():
         sleep_sec = 6 if was_online else 3
@@ -74,15 +94,17 @@ def _network_monitor_loop(monitor):
 
         now_online = _is_internet_connected()
         if was_online and not now_online:
-            # Reconfirmar tras 1.5s para evitar falsos positivos por micro-cortes transitorios
-            if monitor.waitForAbort(1.5):
+            # Reconfirmar tras 2s para evitar falsos positivos por micro-cortes
+            if monitor.waitForAbort(2):
                 break
             now_online = _is_internet_connected()
             if not now_online:
                 was_online = False
+                xbmc.log('BridgeMulti NetworkMonitor: conexion perdida -> notificando', xbmc.LOGINFO)
                 _show_network_notification(False)
         elif not was_online and now_online:
             was_online = True
+            xbmc.log('BridgeMulti NetworkMonitor: conexion restablecida -> notificando', xbmc.LOGINFO)
             _show_network_notification(True)
 
 def run_service():
