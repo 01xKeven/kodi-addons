@@ -986,6 +986,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 p.seekTime(float(seek_to_time))
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
+        elif seek_to_time <= 0 or force_beginning:
+            # Si se reproduce desde el principio, asegurar que Kodi no salte a un bookmark residual de otra sesion
+            for _s in range(15):
+                if mon.abortRequested() or _get_global_monitor_token() != my_token: return
+                try:
+                    if p.isPlayingVideo() and p.getTime() > 3:
+                        xbmc.log("Multi Bridge: detectado salto residual a %.1fs en contenido nuevo, forzando inicio a 0s" % p.getTime(), xbmc.LOGINFO)
+                        p.seekTime(0.0)
+                        break
+                    elif p.isPlayingVideo() and p.getTime() > 0:
+                        break
+                except Exception: pass
+                if mon.waitForAbort(0.25): return
 
         last_saved_time = 0
         tot_time = 0
@@ -6948,7 +6961,8 @@ def show_links_as_directory():
             else:
                 lbl = '%s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, ch, _weak_str, bm_str)
 
-            play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s' % (idx, engine)
+            media_key_val = media_key_main or _get_media_key(meta, matched_item) or ''
+            play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s&media_key=%s' % (idx, engine, media_key_val)
             li = xbmcgui.ListItem(label=lbl)
             li.setPath(play_url)
             li.setArt(base_art)
@@ -6956,6 +6970,9 @@ def show_links_as_directory():
             li.setLabel2(ch)
             li.setProperty('title', lbl)
             li.setProperty('IsPlayable', 'true')
+            if not saved_bm:
+                li.setProperty('StartOffset', '0')
+                li.setProperty('ResumeTime', '0')
             if is_s and (episode_still_val or thumb_val):
                 _lp_art = episode_still_val or thumb_val
                 li.setProperty('thumbnail', _lp_art)
@@ -7794,7 +7811,7 @@ def _clean_dialog_text(text):
     return t.strip()
 
 
-def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False):
+def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False, seek_to_time=0, start_beginning=False):
 
     if not link: return False
 
@@ -7969,6 +7986,20 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
+                    if seek_to_time > 0:
+                        _resolved_li[0].setProperty('StartOffset', str(float(seek_to_time)))
+                        _resolved_li[0].setProperty('ResumeTime', str(float(seek_to_time)))
+                        try:
+                            vt = _resolved_li[0].getVideoInfoTag()
+                            if vt: vt.setResumePoint(float(seek_to_time))
+                        except Exception: pass
+                    else:
+                        _resolved_li[0].setProperty('StartOffset', '0')
+                        _resolved_li[0].setProperty('ResumeTime', '0')
+                        try:
+                            vt = _resolved_li[0].getVideoInfoTag()
+                            if vt: vt.setResumePoint(0.0)
+                        except Exception: pass
                 if handle > 0 and not is_switch:
                     xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
                 else:
@@ -10288,22 +10319,30 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         W = self.getWidth() or 1920
         H = self.getHeight() or 1080
 
-        # Deteccion de Modo Tactil / Pantalla pequena
+        # Deteccion equilibrada de Modo Compacto vs Tactil
         touch_setting = str(_bridge_addon.getSetting('pause_prompt_touch_mode') or '0').strip()
         is_touch = False
-        if touch_setting == '1':    # Siempre activado
+        if touch_setting == '1':    # Forzar tactil
             is_touch = True
-        elif touch_setting == '2':  # Desactivado (compacto)
+        elif touch_setting == '2':  # Forzar compacto
             is_touch = False
         else:                       # 0 = Automatico
             try:
-                is_touch = bool(
-                    xbmc.getCondVisibility('System.HasTouchScreen') or
-                    xbmc.getCondVisibility('System.Platform.Android') or
-                    (W <= 1280 or H <= 720)
+                # En Windows, Mac o Linux de escritorio -> Siempre compacto y discreto
+                is_pc = bool(
+                    xbmc.getCondVisibility('System.Platform.Windows') or
+                    xbmc.getCondVisibility('System.Platform.OSX') or
+                    xbmc.getCondVisibility('System.Platform.Linux')
                 )
+                is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
+                if is_pc and not is_android:
+                    is_touch = False
+                elif is_android:
+                    is_touch = bool(xbmc.getCondVisibility('System.IsPhone'))
+                else:
+                    is_touch = False
             except Exception:
-                is_touch = bool(W <= 1280 or H <= 720)
+                is_touch = False
 
         border = 2
         GOLD = 'FFCFA82C'
@@ -10321,46 +10360,46 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     has_instant = True
 
         if is_touch:
-            # === Modo Tactil (Botones grandes, espacios amplios para dedos) ===
-            bh = 48
-            btn_font = 'font12'
-            hdr_font = 'font12'
+            # === Modo Tactil Celular (moderado y equilibrado, nunca gigante) ===
+            bh = 44
+            btn_font = 'font11'
+            hdr_font = 'font11'
             pad_hitbox = 12
             if has_next:
-                dw, dh = 460, 110
+                dw, dh = 410, 102
                 btn_configs = [
-                    {'lbl': 'Continuar', 'w': 150, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 150, 'is_icon': False},
-                    {'lbl': '',          'w': 80,  'is_icon': True, 'instant': has_instant}
+                    {'lbl': 'Continuar', 'w': 135, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 135, 'is_icon': False},
+                    {'lbl': '',          'w': 76,  'is_icon': True, 'instant': has_instant}
+                ]
+                gap = 12
+                iw, ih = 22, 22
+                rw, rh = 24, 28
+                rx_offset = 14
+                ry_offset = 9
+            else:
+                dw, dh = 350, 102
+                btn_configs = [
+                    {'lbl': 'Continuar', 'w': 145, 'is_icon': False},
+                    {'lbl': 'Cambiar',   'w': 145, 'is_icon': False}
                 ]
                 gap = 14
-                iw, ih = 24, 24
-                rw, rh = 26, 30
+                iw, ih = 22, 22
+                rw, rh = 24, 28
                 rx_offset = 14
-                ry_offset = 10
-            else:
-                dw, dh = 390, 110
-                btn_configs = [
-                    {'lbl': 'Continuar', 'w': 160, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 160, 'is_icon': False}
-                ]
-                gap = 18
-                iw, ih = 24, 24
-                rw, rh = 26, 30
-                rx_offset = 14
-                ry_offset = 10
+                ry_offset = 9
         else:
-            # === Modo Compacto (Mando a distancia / TV) ===
+            # === Modo Compacto Nativo (PC / TV / Tablet: elegante, discreto en esquina) ===
             bh = 36
             btn_font = 'font10'
             hdr_font = 'font10'
-            pad_hitbox = 6
+            pad_hitbox = 8
             if has_next:
-                dw, dh = 350, 92
+                dw, dh = 356, 92
                 btn_configs = [
                     {'lbl': 'Continuar', 'w': 118, 'is_icon': False},
                     {'lbl': 'Cambiar',   'w': 118, 'is_icon': False},
-                    {'lbl': '',          'w': 54,  'is_icon': True, 'instant': has_instant}
+                    {'lbl': '',          'w': 62,  'is_icon': True, 'instant': has_instant}
                 ]
                 gap = 10
                 iw, ih = 20, 20
@@ -10380,10 +10419,10 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                 ry_offset = 8
 
         pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
-        margin_x = 35 if is_touch else 40
+        margin_x = 35
         dx = W - dw - margin_x
         if pos_setting == '1':  # Inferior derecha
-            margin_y = 60 if is_touch else 50
+            margin_y = 50
             dy = H - dh - margin_y
         else:  # Superior derecha (0)
             margin_y = 40
@@ -10410,7 +10449,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         # Encabezado con modo tactil / compacto adaptativo
         header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
         hdr_y = dy + (12 if is_touch else 10)
-        hdr_h = 24 if is_touch else 20
+        hdr_h = 22 if is_touch else 20
         self.addControl(xbmcgui.ControlLabel(
             dx+16, hdr_y, dw-32, hdr_h,
             header_text,
@@ -11604,7 +11643,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         pass
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
-    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True)
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=cur_time)
     if played:
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx, meta=meta)
         return True
@@ -11639,7 +11678,7 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
                 return 'cancel'
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
-    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True)
+    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=seek_to_time, start_beginning=start_beginning)
     if played:
         mon_idx = global_idx if global_idx is not None else chosen_idx
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta, force_beginning=start_beginning)
@@ -12112,7 +12151,7 @@ def main():
                         except: pass
                     return
 
-            played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta)
+            played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, seek_to_time=seek_to_time, start_beginning=start_beginning)
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta, force_beginning=start_beginning)
             else:

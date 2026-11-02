@@ -6,7 +6,6 @@ import xbmcvfs
 import os
 import socket
 import urllib.request
-import threading
 
 def _is_internet_connected():
     # Comprobacion de socket ultra ligero a Anycast DNS IPs globales (Cloudflare y Google)
@@ -39,71 +38,6 @@ def _is_internet_connected():
     return False
 
 
-class _NetworkOverlayDialog(xbmcgui.WindowDialog):
-    """Banner flotante superpuesto garantizado 100% visible incluso durante reproduccion."""
-    def __init__(self, is_online):
-        super().__init__()
-        self._is_online = is_online
-        self._build()
-
-    def _build(self):
-        try:
-            W = self.getWidth() or 1920
-            H = self.getHeight() or 1080
-            dw, dh = 460, 68
-            border = 2
-            GOLD = 'FFCFA82C'
-            
-            addon = xbmcaddon.Addon('plugin.video.bridge.multi')
-            addon_path = addon.getAddonInfo('path')
-            white = os.path.join(addon_path, 'resources', 'media', 'white.png')
-            if not os.path.exists(white):
-                white = 'special://home/addons/plugin.video.bridge.multi/resources/media/white.png'
-
-            # Posicion: esquina superior derecha
-            dx = W - dw - 35
-            dy = 35
-
-            # Borde dorado exterior
-            self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
-            # Fondo oscuro interior
-            self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='F20A0A0E'))
-
-            fn = 'icon_net_online.png' if self._is_online else 'icon_net_offline.png'
-            icon_path = os.path.join(addon_path, 'resources', 'media', fn)
-            if not os.path.exists(icon_path):
-                icon_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/' + fn
-
-            iw, ih = 46, 46
-            self.addControl(xbmcgui.ControlImage(dx+12, dy+(dh-ih)//2, iw, ih, icon_path))
-
-            title = '[B][COLOR FFCFA82C]Multi Bridge[/COLOR][/B]'
-            if self._is_online:
-                subtitle = '[COLOR FFFFFFFF]Conexión a Internet restablecida[/COLOR]'
-            else:
-                subtitle = '[COLOR FFFF4D4D]Sin conexión a Internet[/COLOR]'
-
-            self.addControl(xbmcgui.ControlLabel(dx+68, dy+12, dw-80, 20, title, font='font10'))
-            self.addControl(xbmcgui.ControlLabel(dx+68, dy+34, dw-80, 24, subtitle, font='font12'))
-        except Exception as e:
-            xbmc.log('BridgeMulti NetworkOverlayDialog build error: ' + str(e), xbmc.LOGWARNING)
-
-
-def _show_playback_overlay(is_online, duration_ms=4500):
-    def _run():
-        try:
-            dlg = _NetworkOverlayDialog(is_online)
-            dlg.show()
-            xbmc.sleep(duration_ms)
-            dlg.close()
-            del dlg
-        except Exception as e:
-            xbmc.log('BridgeMulti NetworkOverlay error: ' + str(e), xbmc.LOGWARNING)
-    t = threading.Thread(target=_run, daemon=True)
-    t.name = "NetworkOverlayThread"
-    t.start()
-
-
 def _show_network_notification(is_online):
     try:
         addon = xbmcaddon.Addon('plugin.video.bridge.multi')
@@ -121,23 +55,16 @@ def _show_network_notification(is_online):
         if not os.path.exists(icon):
             icon = 'special://home/addons/plugin.video.bridge.multi/resources/media/' + fn
 
-        # 1. Notificacion nativa Builtin de Kodi (universal)
+        # 1. Notificacion nativa Builtin de Kodi (universal y limpia)
         try:
             clean_msg = str(msg).replace('"', "'")
             xbmc.executebuiltin('Notification("Multi Bridge", "%s", %d, "%s")' % (clean_msg, time_ms, icon))
         except Exception:
             pass
 
-        # 2. Respaldo con xbmcgui.Dialog().notification
+        # 2. Respaldo nativo estandar con xbmcgui.Dialog().notification
         try:
             xbmcgui.Dialog().notification("Multi Bridge", msg, icon, time_ms)
-        except Exception:
-            pass
-
-        # 3. Si se esta reproduciendo algo, mostrar banner OSD flotante sobre el video
-        try:
-            if xbmc.Player().isPlaying():
-                _show_playback_overlay(is_online, time_ms)
         except Exception:
             pass
 
