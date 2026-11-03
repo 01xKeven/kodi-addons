@@ -8234,7 +8234,14 @@ def _fast_autoplay_search_and_play(engine, handle):
     player = xbmc.Player()
     player.play(fast_url, fast_li)
 
-    # Pantalla limpia: la reproduccion arranca directamente sin colision de ventanas
+    # Actualizar la pantalla de fondo con la lista de enlaces mientras se reproduce el video
+    _cur_tmdb = str(p_tmdb or meta.get('tmdb') or '')
+    if _cur_tmdb:
+        _ts = int(time.time())
+        _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
+        if is_series and p_season and p_episode:
+            _win_url += '&season=%s&episode=%s' % (p_season, p_episode)
+        _open_links_view(_win_url)
 
     # Iniciar monitor de reproducción (para bookmarks y detección de pausa)
     start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
@@ -8386,9 +8393,16 @@ def _fast_autoplay_search_and_play(engine, handle):
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: reproduciendo automáticamente siguiente enlace: %s" % _get_link_server_name(active_link), xbmc.LOGINFO)
         player.play(next_resolved_url, next_resolved_li)
 
-    # Si se agotaron los intentos sin exito, devolver False para que el flujo principal gestione el fallback
+    # Si se agotaron los intentos sin exito, abrir lista de enlaces para el usuario y gestionar fallback
     if not player.isPlayingVideo():
         xbmc.log("Multi Bridge Fast Autoplay: ningun enlace arranco en autoplay rapido", xbmc.LOGINFO)
+        _cur_tmdb = str(meta.get('tmdb') or '')
+        if _cur_tmdb:
+            _ts = int(time.time())
+            _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
+            if meta.get('season') and meta.get('episode'):
+                _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
+            _open_links_view(_win_url)
         return False
 
     return True
