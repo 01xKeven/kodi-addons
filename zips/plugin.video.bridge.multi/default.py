@@ -389,11 +389,12 @@ _LAST_SEARCH_TOKEN = None
 _LAST_MERGED_PFS = set()
 _LAST_RESULTS_DICT = {}
 
-def _store_ram_search_cache(links, matched_item, meta, engine):
+def _store_ram_search_cache(links, matched_item, meta, engine, unverified_links=None):
     global _RAM_SEARCH_CACHE
     try:
         _RAM_SEARCH_CACHE = {
             'links': list(links or []),
+            'unverified_links': list(unverified_links or []),
             'matched_item': matched_item,
             'meta': dict(meta or {}),
             'engine': engine or 'alfa',
@@ -2899,10 +2900,71 @@ def _get_discarded_servers_list():
             return []
         raw = _bridge_addon.getSetting('servers_discarded')
         if raw is None or raw == '':
-            raw = 'rapidgator,directo,waaw'
+            raw = 'rapidgator,directo,waaw,mediafire'
         return [s.strip().lower() for s in str(raw).split(',') if s.strip()]
     except Exception:
-        return ['rapidgator', 'directo', 'waaw']
+        return ['rapidgator', 'directo', 'waaw', 'mediafire']
+
+
+def _format_language_display(lang_str, colored=True):
+    l = (str(lang_str or '')).upper().strip()
+    l = l.replace('[', '').replace(']', '').replace('(', '').replace(')', '').strip()
+    if any(k in l for k in ('LAT', 'LATINO')):
+        lbl = 'Latino'
+        color = 'deepskyblue'
+    elif any(k in l for k in ('ESP', 'CAST', 'CASTELLANO', 'ESPAÑOL', 'SPANISH')):
+        lbl = 'Castellano'
+        color = 'gold'
+    elif any(k in l for k in ('VOSE', 'SUB', 'SUBTITULADO')):
+        lbl = 'VOSE'
+        color = 'mediumpurple'
+    elif any(k in l for k in ('ENG', 'INGLES', 'INGLÉS', 'VO')):
+        lbl = 'Inglés'
+        color = 'orange'
+    else:
+        lbl = str(lang_str or '').replace('[', '').replace(']', '').strip() or 'Desconocido'
+        color = 'lightgray'
+    if colored:
+        return '[COLOR %s]%s[/COLOR]' % (color, lbl)
+    return lbl
+
+
+def _is_preferred_lang_candidate(cand, b_prefs, all_done=False):
+    """Determina si un candidato de enlace debe probarse de inmediato o esperar
+    a que los canales con idiomas de mayor preferencia terminen de buscar."""
+    if not cand:
+        return False
+    l_str = (_safe_str(getattr(cand, 'language', '')) + ' ' + _get_link_language_group(cand)).upper()
+    if 'LAT' in l_str: grp = 'Lat'
+    elif 'ESP' in l_str or 'CAST' in l_str: grp = 'Esp'
+    elif 'VOS' in l_str or 'VO' in l_str or 'SUB' in l_str or 'ENG' in l_str: grp = 'VO'
+    else: grp = '?'
+
+    p_lat = b_prefs.get('preferencia_idioma_lat', 1)
+    p_esp = b_prefs.get('preferencia_idioma_esp', 2)
+    p_vos = b_prefs.get('preferencia_idioma_vos', 3)
+    p_map = {'Lat': p_lat, 'Esp': p_esp, 'VO': p_vos, '?': 4}
+    p_val = p_map.get(grp, 4)
+
+    if p_val == 0:
+        return False
+
+    if all_done:
+        return True
+
+    active_prios = [v for k, v in [('Lat', p_lat), ('Esp', p_esp), ('VO', p_vos)] if v > 0]
+    best_prio = min(active_prios) if active_prios else 1
+
+    # Si VO o desconocido tiene menor prioridad que el idioma preferido, esperar
+    if grp == 'VO' and p_vos > best_prio:
+        return False
+    if grp == '?' and 4 > best_prio:
+        return False
+
+    threshold = max(best_prio, 2)
+    if p_vos > 0:
+        threshold = min(threshold, p_vos - 1) if p_vos > 1 else threshold
+    return p_val <= max(best_prio, threshold)
 
 
 def _is_server_discarded(it, disc_list=None):
@@ -7176,18 +7238,22 @@ def show_links_as_directory():
         except: pass
         _dir_listing.append((_floating_url, _li_more, False))
 
-    # Opción 3: Si proviene de sesión precargada y hay enlaces sin verificar, añadir fila interactiva al final
+    # Opción 3: Si proviene de sesión precargada o autoplay y hay enlaces sin verificar, añadir fila interactiva al final
     try:
-        _c_disk = _read_search_cache_atomic()
-        if _c_disk and isinstance(_c_disk, dict):
-            _pending_raw = _c_disk.get('unverified_links', [])
-            if _pending_raw:
-                _verify_more_url = 'plugin://plugin.video.bridge.multi/?action=verify_remaining_preloaded'
-                _more_lbl = '[COLOR gold][B]Comprobar y cargar más enlaces (%d disponibles)...[/B][/COLOR]' % len(_pending_raw)
-                _li_verify_more = xbmcgui.ListItem(label=_more_lbl)
-                _li_verify_more.setProperty('IsPlayable', 'false')
-                _li_verify_more.setArt(base_art)
-                _dir_listing.append((_verify_more_url, _li_verify_more, False))
+        _pending_raw = []
+        if _RAM_SEARCH_CACHE and _RAM_SEARCH_CACHE.get('unverified_links'):
+            _pending_raw = _RAM_SEARCH_CACHE.get('unverified_links')
+        else:
+            _c_disk = _read_search_cache_atomic()
+            if _c_disk and isinstance(_c_disk, dict):
+                _pending_raw = _c_disk.get('unverified_links', [])
+        if _pending_raw:
+            _verify_more_url = 'plugin://plugin.video.bridge.multi/?action=verify_remaining_preloaded'
+            _more_lbl = '[COLOR gold][B]Comprobar y cargar más enlaces (%d disponibles)...[/B][/COLOR]' % len(_pending_raw)
+            _li_verify_more = xbmcgui.ListItem(label=_more_lbl)
+            _li_verify_more.setProperty('IsPlayable', 'false')
+            _li_verify_more.setArt(base_art)
+            _dir_listing.append((_verify_more_url, _li_verify_more, False))
     except Exception as _vme:
         xbmc.log('Multi Bridge: error comprobando unverified_links: %s' % str(_vme), xbmc.LOGDEBUG)
 
@@ -7607,8 +7673,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             except: pass
             try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
             except: pass
-            xbmc.log('Multi Bridge autoplay: usuario detuvo → volver', xbmc.LOGINFO)
-            return False
+            xbmc.log('Multi Bridge autoplay: usuario detuvo → abriendo list_links', xbmc.LOGINFO)
+            break
 
         if _ver_enlaces:
             # Abrir list_links para que el usuario elija enlace manualmente
@@ -7872,14 +7938,18 @@ def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playi
     meta_copy = dict(meta)
     meta_copy['verified_only'] = auto_verify
     try:
-        _store_ram_search_cache(final_links, matched_item_holder[0], meta_copy, engine)
+        _store_ram_search_cache(final_links, matched_item_holder[0], meta_copy, engine, unverified_links=[])
         _save_search_cache_atomic({
             'item': _serialize_item(matched_item_holder[0]),
             'links': [_serialize_item(l) for l in final_links],
+            'unverified_links': [],
             'meta': meta_copy,
-            'engine': engine
+            'engine': engine,
+            'is_preloaded_session': False
         })
         xbmc.log("Multi Bridge Fast Autoplay: caché de sesión actualizada con éxito con %d enlaces totales verificados (reproducción activa en índice 0)" % len(final_links), xbmc.LOGINFO)
+        if _in_own_list():
+            xbmc.executebuiltin('Container.Refresh')
     except Exception as _ce:
         xbmc.log("Multi Bridge Fast Autoplay: error guardando caché: %s" % _ce, xbmc.LOGWARNING)
 
@@ -7981,7 +8051,8 @@ def _fast_autoplay_search_and_play(engine, handle):
 
     total_channels = len(enabled_players)
     p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create('Multi Bridge — Autoplay', 'Buscando enlace para: %s...' % target_title)
+    p_dialog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR] [COLOR white]—[/COLOR] [COLOR deepskyblue]Autoplay[/COLOR]',
+                    '[COLOR white][B]%s[/B][/COLOR]\n[COLOR gold]Iniciando canales...[/COLOR]' % target_title)
     p_dialog.update(5)
 
     results_dict = {}
@@ -8055,7 +8126,13 @@ def _fast_autoplay_search_and_play(engine, handle):
             except: pass
             return False
 
-        p_dialog.update(min(pct, 85), '%s (%d/%d canales)\n[COLOR gold]Comprobando disponibilidad de servidores...[/COLOR]' % (target_title, completed, total_channels))
+        p_dialog.update(min(pct, 85),
+            '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR gold]Comprobando disponibilidad de servidores...[/COLOR]' % (
+                target_title, completed, total_channels
+            )
+        )
+
+        all_done = (completed >= total_channels) or ((time.time() - start_time) >= 12.0)
 
         # Comprobar si hay nuevos enlaces para probar
         with results_lock:
@@ -8069,14 +8146,24 @@ def _fast_autoplay_search_and_play(engine, handle):
                 if not _is_torrent_link(l) and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
             ]
 
+            b_prefs = _get_balandro_preferences()
+
             for cand in normal_cand:
+                if not _is_preferred_lang_candidate(cand, b_prefs, all_done=all_done):
+                    continue
+
                 link_key = _safe_str(getattr(cand, 'url', '')) or str(id(cand))
                 tested_urls.add(link_key)
                 cand_u = getattr(cand, 'url', None)
 
                 srv_name = _get_link_server_name(cand)
                 lang_raw = _safe_str(getattr(cand, 'language', '') or '')
-                p_dialog.update(min(pct, 90), 'Probando enlace: [B]%s[/B] [%s]...' % (srv_name, lang_raw))
+                lang_colored = _format_language_display(lang_raw, colored=True)
+                p_dialog.update(min(pct, 90),
+                    '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR deepskyblue]Verificando:[/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s' % (
+                        target_title, completed, total_channels, srv_name, lang_colored
+                    )
+                )
 
                 _res_box = [False, None]
                 def _do_res(c=cand):
@@ -8102,6 +8189,11 @@ def _fast_autoplay_search_and_play(engine, handle):
                         fast_link = cand
                         fast_li = li
                         fast_url = li.getPath()
+                        p_dialog.update(100,
+                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [COLOR gold]%s[/COLOR]  •  %s' % (
+                                target_title, srv_name, lang_colored
+                            )
+                        )
                         break
 
                 if p_dialog.iscanceled():
@@ -8211,16 +8303,19 @@ def _fast_autoplay_search_and_play(engine, handle):
         except Exception:
             pass
 
-    # Guardar cache inicial de sesion con fast_link en indice 0
+    # Guardar cache inicial de sesion con fast_link verificado y los restantes no verificados (Opción 3)
     with results_lock:
         init_batch = list(all_found_links)
-    initial_links = [fast_link] + [l for l in init_batch if getattr(l, 'url', None) != getattr(fast_link, 'url', None)]
-    _store_ram_search_cache(initial_links, matched_item_holder[0], meta, engine)
+    pending_initial = [l for l in init_batch if getattr(l, 'url', None) != getattr(fast_link, 'url', None)]
+    initial_links = [fast_link] + pending_initial
+    _store_ram_search_cache([fast_link], matched_item_holder[0], meta, engine, unverified_links=pending_initial)
     _save_search_cache_atomic({
         'item': _serialize_item(matched_item_holder[0]),
-        'links': [_serialize_item(l) for l in initial_links],
+        'links': [_serialize_item(fast_link)],
+        'unverified_links': [_serialize_item(l) for l in pending_initial],
         'meta': meta,
-        'engine': engine
+        'engine': engine,
+        'is_preloaded_session': bool(pending_initial)
     })
 
     # ── VIGILANTE DE REPRODUCCIÓN (Watchdog sin colisiones) ───────────────────
@@ -8380,8 +8475,16 @@ def _fast_autoplay_search_and_play(engine, handle):
 
         # Actualizar caché de sesión colocando el nuevo enlace en el índice 0
         try:
-            _new_cache_links = [active_link] + [l for l in initial_links if getattr(l, 'url', None) != getattr(active_link, 'url', None)]
-            _store_ram_search_cache(_new_cache_links, matched_item_holder[0], meta, engine)
+            _rem_unverified = [l for l in pending_initial if getattr(l, 'url', None) != getattr(active_link, 'url', None)]
+            _store_ram_search_cache([active_link], matched_item_holder[0], meta, engine, unverified_links=_rem_unverified)
+            _save_search_cache_atomic({
+                'item': _serialize_item(matched_item_holder[0]),
+                'links': [_serialize_item(active_link)],
+                'unverified_links': [_serialize_item(l) for l in _rem_unverified],
+                'meta': meta,
+                'engine': engine,
+                'is_preloaded_session': bool(_rem_unverified)
+            })
         except Exception: pass
 
 
