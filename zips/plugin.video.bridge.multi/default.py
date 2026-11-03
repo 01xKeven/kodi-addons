@@ -2900,10 +2900,49 @@ def _get_discarded_servers_list():
             return []
         raw = _bridge_addon.getSetting('servers_discarded')
         if raw is None or raw == '':
-            raw = 'rapidgator,directo,waaw,mediafire'
+            raw = 'rapidgator,directo,waaw'
         return [s.strip().lower() for s in str(raw).split(',') if s.strip()]
     except Exception:
-        return ['rapidgator', 'directo', 'waaw', 'mediafire']
+        return ['rapidgator', 'directo', 'waaw']
+
+
+def _is_stream_url_playable(stream_url, timeout=2.5):
+    """Verifica si la URL directa de streaming realmente responde y entrega contenido multimedia,
+    evitando que enlaces bloqueados (como Mediafire con 403 o captchas HTML) se intenten
+    reproducir en Kodi mostrando la pantalla de carga innecesariamente."""
+    if not stream_url:
+        return False
+    if stream_url.startswith(('magnet:', 'plugin:', 'file:')) or stream_url.endswith('.torrent'):
+        return True
+    clean_url = stream_url.split('|')[0].strip()
+    if not clean_url.startswith(('http://', 'https://')):
+        return True
+
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    if '|' in stream_url:
+        pipe_parts = stream_url.split('|', 1)[1]
+        for h in pipe_parts.split('&'):
+            if '=' in h:
+                hk, hv = h.split('=', 1)
+                headers[hk.strip()] = uparse.unquote_plus(hv.strip())
+
+    try:
+        headers['Range'] = 'bytes=0-1024'
+        import requests
+        r = requests.get(clean_url, headers=headers, stream=True, timeout=timeout, allow_redirects=True, verify=False)
+        if r.status_code in (200, 206):
+            ct = (r.headers.get('Content-Type') or '').lower()
+            if 'text/html' in ct:
+                xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
+                return False
+            return True
+        elif r.status_code in (401, 403, 404, 410, 500, 502, 503):
+            xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
+            return False
+        return True
+    except Exception as e:
+        xbmc.log("Multi Bridge: comprobación de streaming (%s) omitida por excepción: %s" % (clean_url, e), xbmc.LOGDEBUG)
+        return True
 
 
 def _format_language_display(lang_str, colored=True):
@@ -3265,8 +3304,10 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             if puedes and video_urls:
                 valid_streams = _extract_valid_streams(video_urls)
                 if valid_streams:
-                    prep.video_urls = valid_streams
-                    return prep
+                    first_stream = valid_streams[0][1] if isinstance(valid_streams[0], (list, tuple)) and len(valid_streams[0]) > 1 else (valid_streams[0] if isinstance(valid_streams[0], str) else '')
+                    if _is_stream_url_playable(first_stream, timeout=2.0):
+                        prep.video_urls = valid_streams
+                        return prep
             return None
         except Exception:
             return None
@@ -7531,10 +7572,10 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         _media_url = ''
         try:    _media_url = _res_li[0].getPath()
         except: pass
-        if not _media_url:
+        if not _media_url or not _is_stream_url_playable(_media_url, timeout=2.5):
             try: _prog.close()
             except: pass
-            xbmc.log('Multi Bridge autoplay [%d/%d] %s URL vacía, siguiente...' % (
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s URL vacía o stream no funcional, siguiente...' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             continue
 
@@ -8183,7 +8224,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                     m_url = ''
                     try: m_url = li.getPath()
                     except: pass
-                    if m_url:
+                    if m_url and _is_stream_url_playable(m_url, timeout=2.0):
                         # Asegurar cabeceras de reproduccion en el listitem
                         _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=cand_u or '')
                         fast_link = cand
@@ -8195,6 +8236,8 @@ def _fast_autoplay_search_and_play(engine, handle):
                             )
                         )
                         break
+                    else:
+                        xbmc.log("Multi Bridge Fast Autoplay: candidato %s no superó verificación de stream (bloqueado/caído)" % srv_name, xbmc.LOGINFO)
 
                 if p_dialog.iscanceled():
                     try: p_dialog.close()
@@ -8451,11 +8494,13 @@ def _fast_autoplay_search_and_play(engine, handle):
             with silenced_dialogs():
                 ok, li = _resolve_link_to_listitem(cand, engine, matched_item_holder[0])
             if ok and li and li.getPath():
-                _ensure_playback_headers_on_item(li, server_name=_get_link_server_name(cand), page_url=getattr(cand, 'url', '') or '')
-                next_resolved_link = cand
-                next_resolved_li = li
-                next_resolved_url = li.getPath()
-                break
+                m_url = li.getPath()
+                if _is_stream_url_playable(m_url, timeout=2.0):
+                    _ensure_playback_headers_on_item(li, server_name=_get_link_server_name(cand), page_url=getattr(cand, 'url', '') or '')
+                    next_resolved_link = cand
+                    next_resolved_li = li
+                    next_resolved_url = m_url
+                    break
 
         if not next_resolved_link or not next_resolved_url:
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: no se encontraron más enlaces viables.", xbmc.LOGINFO)
