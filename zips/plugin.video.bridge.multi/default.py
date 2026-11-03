@@ -3092,6 +3092,8 @@ def _get_filter_prefs():
         'servers_discarded': _bcsv('servers_discarded', ['rapidgator', 'directo', 'waaw']) if srv_on else [],
     }
 
+_get_balandro_preferences = _get_filter_prefs
+
 def _filter_and_sort_links(links):
     if not links: return []
 
@@ -8187,7 +8189,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                 if not _is_torrent_link(l) and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
             ]
 
-            b_prefs = _get_balandro_preferences()
+            b_prefs = _get_filter_prefs()
 
             for cand in normal_cand:
                 if not _is_preferred_lang_candidate(cand, b_prefs, all_done=all_done):
