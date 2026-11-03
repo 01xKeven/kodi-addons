@@ -12982,7 +12982,7 @@ def main():
                 if _fast_autoplay_search_and_play(eng, handle):
                     return
 
-                if _bridge_addon.getSetting('autoplay_fallback_normal_search') == 'false':
+                if _bridge_addon.getSetting('autoplay_fallback_normal_search') != 'true':
                     xbmc.log("Multi Bridge: fallback a busqueda normal desactivado por ajuste de usuario", xbmc.LOGINFO)
                     _show_bridge_notification('Multi Bridge', 'Autoplay: no se encontraron enlaces reproducibles', 3000)
                     return
