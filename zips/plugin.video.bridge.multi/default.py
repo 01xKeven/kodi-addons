@@ -5162,6 +5162,11 @@ def _run_parallel_search_impl(engine='alfa'):
     p_tmdb = tmdb_id or get_param('tmdb') or ''
     p_imdb = imdb_id or get_param('imdb') or ''
 
+    global _BG_COLLECTOR_TOKEN
+    with _BG_COLLECTOR_LOCK:
+        _BG_COLLECTOR_TOKEN += 1
+        my_collector_token = _BG_COLLECTOR_TOKEN
+
     is_series = bool(p_season and p_episode)
     if is_series and engine == 'alfa':
         xbmc.log("Multi Bridge: Alfa solo soporta películas. Cambiando motor a Balandro para series.", xbmc.LOGINFO)
@@ -7704,7 +7709,10 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
         return listitem.getPath()
 
 
-def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playing_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links):
+_BG_COLLECTOR_TOKEN = 0
+_BG_COLLECTOR_LOCK = threading.Lock()
+
+def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playing_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, collector_token=0):
     """Continúa la búsqueda de TODOS los canales restantes en segundo plano
     y verifica todos los enlaces de forma suave (bajo consumo CPU), actualizando la
     caché de sesión para que al pausar (¿Cambiar enlace?) o detener el vídeo estén todos disponibles."""
@@ -7750,6 +7758,9 @@ def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playi
     deadline = time.time() + 45.0
 
     while time.time() < deadline and not mon.abortRequested():
+        if collector_token != _BG_COLLECTOR_TOKEN:
+            xbmc.log('Multi Bridge Fast Autoplay BgCollector: nueva sesion activa, cancelando recolector previo.', xbmc.LOGINFO)
+            return
         active_workers = [t for t in active_workers if t.is_alive()]
         while i_rem < len(bg_threads) and len(active_workers) < max_bg_workers:
             th = bg_threads[i_rem]
@@ -7811,6 +7822,9 @@ def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playi
             continue
         final_links.append(l)
 
+    if collector_token != _BG_COLLECTOR_TOKEN:
+        xbmc.log('Multi Bridge Fast Autoplay BgCollector: sesion superada por otra busqueda, omitiendo guardado de cache.', xbmc.LOGINFO)
+        return
     meta_copy = dict(meta)
     meta_copy['verified_only'] = auto_verify
     try:
@@ -8014,8 +8028,19 @@ def _fast_autoplay_search_and_play(engine, handle):
                 lang_raw = _safe_str(getattr(cand, 'language', '') or '')
                 p_dialog.update(min(pct, 90), 'Probando enlace: [B]%s[/B] [%s]...' % (srv_name, lang_raw))
 
-                with silenced_dialogs():
-                    ok, li = _resolve_link_to_listitem(cand, engine, matched_item_holder[0])
+                _res_box = [False, None]
+                def _do_res(c=cand):
+                    with silenced_dialogs():
+                        try:
+                            _r_ok, _r_li = _resolve_link_to_listitem(c, engine, matched_item_holder[0])
+                            _res_box[0] = _r_ok
+                            _res_box[1] = _r_li
+                        except: pass
+
+                _th_res = threading.Thread(target=_do_res, daemon=True)
+                _th_res.start()
+                _th_res.join(timeout=min(8.0, float(_get_int_setting('autoplay_resolve_timeout', 12))))
+                ok, li = _res_box[0], _res_box[1]
 
                 if ok and li:
                     m_url = ''
@@ -8037,8 +8062,26 @@ def _fast_autoplay_search_and_play(engine, handle):
         if fast_link:
             break
 
+        # Actualizar recuento de canales completados y tiempo real
+        now = time.time()
+        for idx in list(started_indices):
+            if idx not in completed_indices and not threads[idx].is_alive():
+                completed_indices.add(idx)
+        completed = len(completed_indices)
+
+        # Comprobar si hay nuevos enlaces descubiertos que todavia no se han probado
+        with results_lock:
+            has_untested = any(
+                not _is_torrent_link(l) and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
+                for l in all_found_links
+            )
+
+        if has_untested:
+            # Continuar en el bucle para probar de inmediato los nuevos enlaces que acaban de llegar
+            continue
+
         elapsed = now - start_time
-        if completed >= total_channels or elapsed > timeout_secs:
+        if (completed >= total_channels and not has_untested) or elapsed > timeout_secs:
             break
 
         channel_event.wait(timeout=0.25)
@@ -8052,6 +8095,18 @@ def _fast_autoplay_search_and_play(engine, handle):
 
     if not fast_link or not fast_li or not fast_url:
         xbmc.log("Multi Bridge Fast Autoplay: no se encontro enlace rapido funcional en los primeros canales. Evaluando fallback...", xbmc.LOGINFO)
+        with results_lock:
+            fallback_batch = list(all_found_links)
+        if fallback_batch:
+            try:
+                _store_ram_search_cache(fallback_batch, matched_item_holder[0], meta, engine)
+                _save_search_cache_atomic({
+                    'item': _serialize_item(matched_item_holder[0]),
+                    'links': [_serialize_item(l) for l in fallback_batch],
+                    'meta': meta,
+                    'engine': engine
+                })
+            except Exception: pass
         return False
 
     # Descartar handle de plugin con guardian para suprimir cualquier dialogo de error espurio de Kodi
@@ -8145,7 +8200,7 @@ def _fast_autoplay_search_and_play(engine, handle):
     # Lanzar el recolector en segundo plano para completar los demás canales suavemente
     th_bg = threading.Thread(
         target=_fast_autoplay_background_collector,
-        args=(engine, meta, matched_item_holder, fast_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links),
+        args=(engine, meta, matched_item_holder, fast_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, my_collector_token),
         daemon=True
     )
     th_bg.name = "FastAutoplayBgCollector"
@@ -13105,7 +13160,19 @@ def main():
                 if _fast_autoplay_search_and_play(eng, handle):
                     return
 
-            links, matched_item = run_parallel_search(engine=eng)
+            _cached = _read_search_cache_atomic()
+            if _cached and isinstance(_cached, dict) and _cached.get('links'):
+                _c_meta = _cached.get('meta', {}) or {}
+                _req_tmdb = str(tmdb_id or get_param('tmdb') or '')
+                _c_tmdb = str(_c_meta.get('tmdb') or '')
+                if _req_tmdb and _c_tmdb and _req_tmdb == _c_tmdb:
+                    xbmc.log("Multi Bridge: reutilizando %d enlaces ya recolectados por canales..." % len(_cached['links']), xbmc.LOGINFO)
+                    links = [_deserialize_item(l) for l in _cached['links']]
+                    matched_item = _deserialize_item(_cached.get('item')) if _cached.get('item') else None
+                else:
+                    links, matched_item = run_parallel_search(engine=eng)
+            else:
+                links, matched_item = run_parallel_search(engine=eng)
             verified_flag = False
             _auto_verify = _bridge_addon.getSetting('auto_verify_links') == 'true'
             xbmc.log(f"Multi Bridge: auto_verify_links={_auto_verify} engine={eng} links={len(links) if links else 0}", xbmc.LOGINFO)
