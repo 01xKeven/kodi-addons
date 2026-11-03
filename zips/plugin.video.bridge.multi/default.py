@@ -1715,13 +1715,13 @@ def get_param(name):
             if '=' in pair:
                 k, v = pair.split('=', 1)
                 if k == name and v:
-                    val = uparse.unquote(v).strip()
+                    val = uparse.unquote_plus(v).strip()
                     if val.lower() in ('none', 'null', 'undefined', '_', ''):
                         return ''
                     return val
         if 'url=' in params:
             nested_part = params.split('url=', 1)[1]
-            unq_nested = uparse.unquote(nested_part)
+            unq_nested = uparse.unquote_plus(nested_part)
             if '?' in unq_nested:
                 inner_q = unq_nested.split('?', 1)[1]
                 for pair in inner_q.split('&'):
@@ -5228,11 +5228,6 @@ def _run_parallel_search_impl(engine='alfa'):
     p_tmdb = tmdb_id or get_param('tmdb') or ''
     p_imdb = imdb_id or get_param('imdb') or ''
 
-    global _BG_COLLECTOR_TOKEN
-    with _BG_COLLECTOR_LOCK:
-        _BG_COLLECTOR_TOKEN += 1
-        my_collector_token = _BG_COLLECTOR_TOKEN
-
     is_series = bool(p_season and p_episode)
     if is_series and engine == 'alfa':
         xbmc.log("Multi Bridge: Alfa solo soporta películas. Cambiando motor a Balandro para series.", xbmc.LOGINFO)
@@ -7602,27 +7597,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 # Esperar a que la ventana de vídeo de Kodi termine de cerrarse
                 xbmc.sleep(600)
 
-                remaining = total_att - (idx + 1)
-                _srv_lang = server + ((' [%s]' % lang_lbl) if lang_lbl else '')
-                if remaining > 0:
-                    xbmc.log('Multi Bridge autoplay: mostrando ventana al usuario (%s)...' % _srv_lang, xbmc.LOGINFO)
-                    # Ventana personalizada (Si/No/Ver enlaces). Devuelve
-                    # 0/1/2 o -1; ante cualquier fallo, volver sin lista.
-                    try:
-                        ans = _show_autoplay_stop_dialog(_srv_lang)
-                    except Exception as _ye:
-                        xbmc.log('Multi Bridge autoplay stop dialog error: ' + str(_ye), xbmc.LOGINFO)
-                        ans = 1
-
-                    xbmc.log('Multi Bridge autoplay: respuesta de usuario sobre siguiente enlace = %s' % str(ans), xbmc.LOGINFO)
-                    if ans == 0:
-                        link_failed = True   # Si → continuar con siguiente
-                    elif ans == 2:
-                        _ver_enlaces = True  # Ver enlaces → abrir lista
-                    else:
-                        user_declined = True  # No o cerrar → parar y volver
-                else:
-                    _ver_enlaces = True  # ultimo enlace: ir a la lista
+                xbmc.log('Multi Bridge autoplay: reproduccion detenida por usuario, cerrando.', xbmc.LOGINFO)
+                user_declined = True
                 break   # salir del while
 
         if user_declined:
@@ -7913,6 +7889,10 @@ def _fast_autoplay_search_and_play(engine, handle):
     como el primer canal devuelva enlaces y el primer enlace preferente funcione.
     En segundo plano y con bajo consumo de CPU, se completa la busqueda del resto de
     canales y la verificacion total para nutrir el dialogo de pausa y la lista."""
+    global _BG_COLLECTOR_TOKEN
+    with _BG_COLLECTOR_LOCK:
+        _BG_COLLECTOR_TOKEN += 1
+        my_collector_token = _BG_COLLECTOR_TOKEN
     p_title = title or get_param('title') or get_param('title_es') or get_param('title_lat') or get_param('title_orig') or get_param('title_en') or ''
     p_showname = showname or get_param('showname') or ''
     p_year = year or get_param('year') or ''
@@ -8254,14 +8234,7 @@ def _fast_autoplay_search_and_play(engine, handle):
     player = xbmc.Player()
     player.play(fast_url, fast_li)
 
-    # Actualizar la pantalla de fondo con la lista de enlaces mientras se reproduce el video
-    _cur_tmdb = str(p_tmdb or meta.get('tmdb') or '')
-    if _cur_tmdb:
-        _ts = int(time.time())
-        _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
-        if is_series and p_season and p_episode:
-            _win_url += '&season=%s&episode=%s' % (p_season, p_episode)
-        _open_links_view(_win_url)
+    # Pantalla limpia: la reproduccion arranca directamente sin colision de ventanas
 
     # Iniciar monitor de reproducción (para bookmarks y detección de pausa)
     start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
@@ -8413,15 +8386,10 @@ def _fast_autoplay_search_and_play(engine, handle):
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: reproduciendo automáticamente siguiente enlace: %s" % _get_link_server_name(active_link), xbmc.LOGINFO)
         player.play(next_resolved_url, next_resolved_li)
 
-    # Si se agotaron los intentos sin éxito, abrir lista de enlaces para no frustrar la experiencia
+    # Si se agotaron los intentos sin exito, devolver False para que el flujo principal gestione el fallback
     if not player.isPlayingVideo():
-        _cur_tmdb = str(meta.get('tmdb') or '')
-        if _cur_tmdb:
-            _ts = int(time.time())
-            _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
-            if meta.get('season') and meta.get('episode'):
-                _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-            _open_links_view(_win_url)
+        xbmc.log("Multi Bridge Fast Autoplay: ningun enlace arranco en autoplay rapido", xbmc.LOGINFO)
+        return False
 
     return True
 
@@ -10259,222 +10227,6 @@ def _show_engine_picker():
     if sel < 0:
         return None
     return 'alfa' if sel == 0 else 'balandro'
-
-
-class _AutoplayStopDialog(xbmcgui.WindowDialog):
-    """Ventana compacta estilo Kodi (titulo + mensaje + fila de 3 botones)
-    con el dorado del selector de motor. Devuelve 0=Si, 1=No, 2=Ver enlaces,
-    -1 si se cierra con Atras."""
-    ACTION_MOVE_LEFT   = 1
-    ACTION_MOVE_RIGHT  = 2
-    ACTION_MOVE_UP     = 3
-    ACTION_MOVE_DOWN   = 4
-    ACTION_SELECT_ITEM = 7
-    ACTION_PREVIOUS_MENU = 10
-    ACTION_STOP          = 13
-    ACTION_NAV_BACK      = 92
-    ACTION_MOUSE_LEFT_CLICK = 100
-    ACTION_MOUSE_DOUBLE_CLICK = 103
-
-    _LABELS = ('Sí', 'No', 'Ver enlaces')
-
-    def __init__(self, server_label):
-        super().__init__()
-        self.selected = -1
-        self.current  = 0
-        self._server_label = server_label or ''
-        self._btn_ids = []
-        self._highlights = []
-        try:
-            self._build()
-        except Exception as e:
-            xbmc.log('BridgeMulti AutoplayStopDialog build error: ' + str(e), xbmc.LOGWARNING)
-
-    @staticmethod
-    def _bg_texture():
-        return _get_addon_white_texture()
-
-    def _build(self):
-        W = self.getWidth()
-        H = self.getHeight()
-
-        # ----- dialogo compacto -----
-        dw, dh = 620, 250
-        dx = (W - dw) // 2
-        dy = (H - dh) // 2
-        border = 4
-        GOLD = 'FFCFA82C'
-        white = self._bg_texture()
-        xbmc.log('BridgeMulti AutoplayStopDialog: bg=%s' % ('ok' if white else 'FALLO'), xbmc.LOGINFO)
-
-        if white:
-            # Borde dorado exterior
-            self.addControl(xbmcgui.ControlImage(
-                dx, dy, dw, dh, white, colorDiffuse='FFCFA82C'))
-            # Fondo oscuro interior
-            self.addControl(xbmcgui.ControlImage(
-                dx+border, dy+border, dw-border*2, dh-border*2,
-                white, colorDiffuse='FF000000'))
-
-        # Titulo
-        self.addControl(xbmcgui.ControlLabel(
-            dx, dy+10, dw, 32,
-            '[B]Multi Bridge — Autoplay[/B]',
-            font='font13', textColor=GOLD, alignment=6))
-
-        # Linea separadora dorada
-        if white:
-            self.addControl(xbmcgui.ControlImage(
-                dx+30, dy+48, dw-60, 2, white, colorDiffuse='55CFA82C'))
-
-        # Mensaje (2 lineas)
-        self.addControl(xbmcgui.ControlLabel(
-            dx+20, dy+60, dw-40, 30,
-            '[B]%s[/B] se detuvo.' % self._server_label,
-            font='font13', textColor='FFFFFFFF', alignment=6))
-        self.addControl(xbmcgui.ControlLabel(
-            dx+20, dy+92, dw-40, 30,
-            '¿Reproducir siguiente enlace disponible?',
-            font='font13', textColor='FFFFFFFF', alignment=6))
-
-        # ----- fila de 3 botones -----
-        widths  = (110, 110, 190)
-        gap     = 24
-        btn_h   = 44
-        total_w = widths[0] + widths[1] + widths[2] + gap*2
-        btn_y   = dy + dh - 44 - btn_h
-        bx = dx + (dw - total_w) // 2
-
-        for i, (label, bw) in enumerate(zip(self._LABELS, widths)):
-            btn = xbmcgui.ControlButton(
-                bx, btn_y, bw, btn_h, label, '', '',
-                font='font13', textColor='FFFFFFFF', focusedColor=GOLD,
-                alignment=6)
-            self.addControl(btn)
-            self._btn_ids.append(btn.getId())
-            # Borde dorado tenue permanente + resaltado brillante con foco
-            hl = []
-            if white:
-                m, t = 5, 2
-                DIM = 'FF8A6D1F'
-                for _bx, _by, _bw, _bh in (
-                        (bx-m, btn_y-m, bw+m*2, t),
-                        (bx-m, btn_y+btn_h+m-t, bw+m*2, t),
-                        (bx-m, btn_y-m, t, btn_h+m*2),
-                        (bx+bw+m-t, btn_y-m, t, btn_h+m*2)):
-                    _base = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=DIM)
-                    self.addControl(_base)
-                m, t = 5, 5
-                hl = [
-                    xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, btn_h+m*2, white, colorDiffuse='44CFA82C'),
-                    xbmcgui.ControlImage(bx-m, btn_y-m, bw+m*2, t, white, colorDiffuse=GOLD),
-                    xbmcgui.ControlImage(bx-m, btn_y+btn_h+m-t, bw+m*2, t, white, colorDiffuse=GOLD),
-                    xbmcgui.ControlImage(bx-m, btn_y-m, t, btn_h+m*2, white, colorDiffuse=GOLD),
-                    xbmcgui.ControlImage(bx+bw+m-t, btn_y-m, t, btn_h+m*2, white, colorDiffuse=GOLD),
-                ]
-                for c in hl:
-                    self.addControl(c)
-            self._highlights.append(hl)
-            bx += bw + gap
-
-        self._update_highlight()
-        try:
-            b0 = self.getControl(self._btn_ids[0])
-            b1 = self.getControl(self._btn_ids[1])
-            b0.controlLeft(b1)
-            b0.controlRight(b1)
-            b1.controlLeft(b0)
-            b1.controlRight(b0)
-            b0.controlUp(b0)
-            b0.controlDown(b0)
-            b1.controlUp(b1)
-            b1.controlDown(b1)
-            self.setFocus(b0)
-        except Exception:
-            try: self.setFocus(self.getControl(self._btn_ids[0]))
-            except: pass
-
-    def _update_highlight(self):
-        for i, hl in enumerate(self._highlights):
-            for c in hl:
-                try: c.setVisible(i == self.current)
-                except: pass
-
-    def _move(self, delta):
-        self.current = (self.current + delta) % 3
-        self._update_highlight()
-        try:
-            self.setFocus(self.getControl(self._btn_ids[self.current]))
-        except Exception:
-            pass
-
-    def onAction(self, action):
-        aid = action.getId()
-        xbmc.log('BridgeMulti AutoplayStopDialog accion=%s' % aid, xbmc.LOGINFO)
-        if aid in (self.ACTION_PREVIOUS_MENU, self.ACTION_NAV_BACK, self.ACTION_STOP, 13):
-            self.selected = -1
-            self.close()
-        elif aid in (self.ACTION_MOVE_LEFT, self.ACTION_MOVE_UP):
-            self._move(-1)
-        elif aid in (self.ACTION_MOVE_RIGHT, self.ACTION_MOVE_DOWN):
-            self._move(1)
-        elif aid == self.ACTION_SELECT_ITEM:
-            self.selected = self.current
-            self.close()
-        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK):
-            # En Kodi el clic de raton/tactil llega como accion (onClick no se
-            # dispara en esta ventana): se elige el boton que tiene el foco,
-            # que Kodi pone bajo el cursor al hacer clic.
-            try:
-                xbmc.sleep(120)
-            except: pass
-            try:
-                fid = self.getFocusId()
-            except Exception:
-                fid = -1
-            for i, bid in enumerate(self._btn_ids):
-                if fid == bid:
-                    self.selected = i
-                    self.close()
-                    return
-
-    def onClick(self, control_id):
-        xbmc.log('BridgeMulti AutoplayStopDialog click=%s' % control_id, xbmc.LOGINFO)
-        # Acepta clics en botones Y en sus resaltados (las imagenes doradas
-        # quedan encima y en tactil el toque cae sobre ellas, no el boton).
-        for i, bid in enumerate(self._btn_ids):
-            if control_id == bid:
-                self.selected = i
-                self.close()
-                return
-        for i, hl in enumerate(self._highlights):
-            for c in hl:
-                try:
-                    if control_id == c.getId():
-                        self.selected = i
-                        self.close()
-                        return
-                except: pass
-
-
-def _show_autoplay_stop_dialog(server_label):
-    """Muestra la ventana compacta (Si/No/Ver enlaces). Devuelve 0/1/2 o -1."""
-    try:
-        dlg = _AutoplayStopDialog(server_label)
-        dlg.doModal()
-        sel = dlg.selected
-        del dlg
-        if sel is None:
-            return -1
-        return sel
-    except Exception as e:
-        xbmc.log('BridgeMulti _show_autoplay_stop_dialog error, fallback a select: ' + str(e), xbmc.LOGWARNING)
-        try:
-            return xbmcgui.Dialog().select(
-                'Multi Bridge — Autoplay: [B]%s[/B] se detuvo' % (server_label or ''),
-                ['Sí, siguiente enlace', 'No, volver', 'Ver enlaces'])
-        except Exception:
-            return -1
 
 
 # ---------------------------------------------------------
@@ -13228,6 +12980,11 @@ def main():
             if autoplay:
                 xbmc.log("Multi Bridge: autoplay activo -> iniciando reproduccion instantanea rapida...", xbmc.LOGINFO)
                 if _fast_autoplay_search_and_play(eng, handle):
+                    return
+
+                if _bridge_addon.getSetting('autoplay_fallback_normal_search') == 'false':
+                    xbmc.log("Multi Bridge: fallback a busqueda normal desactivado por ajuste de usuario", xbmc.LOGINFO)
+                    _show_bridge_notification('Multi Bridge', 'Autoplay: no se encontraron enlaces reproducibles', 3000)
                     return
 
             _cached = _read_search_cache_atomic()
