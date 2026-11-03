@@ -2892,6 +2892,74 @@ def _parse_csv_setting(val):
     if not val: return []
     return [_safe_str(s).strip().lower() for s in str(val).split(',') if s.strip()]
 
+def _get_discarded_servers_list():
+    try:
+        srv_on = _bridge_addon.getSetting('filter_servers_enabled') != 'false'
+        if not srv_on:
+            return []
+        raw = _bridge_addon.getSetting('servers_discarded')
+        if raw is None or raw == '':
+            raw = 'rapidgator,directo,waaw'
+        return [s.strip().lower() for s in str(raw).split(',') if s.strip()]
+    except Exception:
+        return ['rapidgator', 'directo', 'waaw']
+
+
+def _is_server_discarded(it, disc_list=None):
+    if not it:
+        return True
+    if disc_list is None:
+        disc_list = _get_discarded_servers_list()
+    if not disc_list:
+        return False
+
+    if _is_torrent_link(it):
+        return 'torrent' in disc_list
+
+    srv_canon = (_get_link_server_name(it) or '').strip().lower()
+    if srv_canon and srv_canon in disc_list:
+        return True
+
+    srv_raw = _safe_str(getattr(it, 'server', '') or '').strip().lower()
+    if srv_raw and srv_raw in disc_list:
+        return True
+
+    other_raw = _safe_str(getattr(it, 'other', '') or '').strip().lower()
+    if other_raw:
+        for d in disc_list:
+            if d and d in other_raw:
+                return True
+
+    url_raw = _safe_str(getattr(it, 'url', '') or '').strip().lower()
+    if url_raw:
+        for d in disc_list:
+            if d and d in url_raw:
+                return True
+
+    if not srv_canon and not srv_raw:
+        if 'indeterminado' in disc_list or 'directo' in disc_list:
+            return True
+
+    return False
+
+
+def _filter_discarded_links(links, disc_list=None):
+    if not links:
+        return []
+    if disc_list is None:
+        disc_list = _get_discarded_servers_list()
+    if not disc_list:
+        return list(links)
+    valid_links = []
+    for l in links:
+        if _is_server_discarded(l, disc_list):
+            s_name = _get_link_server_name(l) or getattr(l, 'server', '') or 'descartado'
+            xbmc.log("Multi Bridge: enlace [%s] descartado inmediatamente (servidor en lista negra)" % s_name, xbmc.LOGDEBUG)
+            continue
+        valid_links.append(l)
+    return valid_links
+
+
 def _get_filter_prefs():
     def _bi(key, def_val):
         try:
@@ -2956,15 +3024,7 @@ def _filter_and_sort_links(links):
     # PASO 2 de Balandro: filter_and_sort_by_server
     # 2a. Descartar servidores descartados por el usuario
     disc_list = b_prefs.get('servers_discarded', [])
-    if disc_list:
-        def _is_not_discarded(it):
-            if _is_torrent_link(it) and 'torrent' not in disc_list:
-                return True
-            srv = (_get_link_server_name(it) or getattr(it, 'server', '') or '').lower()
-            if not srv:
-                return 'indeterminado' not in disc_list
-            return srv not in disc_list
-        safe_links = [it for it in safe_links if _is_not_discarded(it)]
+    safe_links = _filter_discarded_links(safe_links, disc_list=disc_list)
 
     # 2b. Ordenar preferidos, normales (99) y última opción (999 - index)
     pref_list = b_prefs.get('servers_preferred', [])
@@ -3051,6 +3111,8 @@ def _link_cache_key(lnk):
                                 getattr(lnk, 'title', ''), getattr(lnk, 'language', ''))
 
 def _verify_links_headless(links, engine='alfa', p_dialog=None):
+    if not links: return []
+    links = _filter_discarded_links(links)
     if not links: return []
 
     # Separar enlaces torrent de enlaces directos.
@@ -4597,6 +4659,7 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                         links = canal.findvideos(it)
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
+                        valid = _filter_discarded_links(valid)
                         if valid:
                             # Inyeccion TMDb en vivo: si el match es debil, se
                             # confirma contra la API y se inyecta el tmdb
@@ -5045,6 +5108,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                         links = canal.findvideos(it)
                     if links and isinstance(links, list) and len(links) > 0:
                         valid = [l for l in links if getattr(l, 'url', '') or getattr(l, 'server', '') or getattr(l, 'action', '') == 'play']
+                        valid = _filter_discarded_links(valid)
                         if valid:
                             # Inyeccion TMDb en vivo: si el match es debil, se
                             # confirma contra la API y se inyecta el tmdb
@@ -5133,11 +5197,13 @@ def _search_on_player(player_data_or_file, engine, is_series, target_title, targ
         if p_engine == 'alfa':
             res_it, res_links = _search_channel_alfa(target_channel, target_title, target_year, is_series, s_num, e_num, all_names, base_item=search_item, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
             if res_links:
+                res_links = _filter_discarded_links(res_links)
                 for l in res_links: l.bridge_engine = 'alfa'
             return res_it, res_links
         else:
             res_it, res_links = _search_channel_balandro(target_channel, target_title, target_year, is_series, s_num, e_num, all_names, base_item=search_item, alt_terms=alt_terms, target_tmdb=target_tmdb, target_imdb=target_imdb)
             if res_links:
+                res_links = _filter_discarded_links(res_links)
                 for l in res_links: l.bridge_engine = 'balandro'
             return res_it, res_links
     except Exception as e:
@@ -7732,14 +7798,16 @@ def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playi
                     target_tmdb=p_tmdb, target_imdb=p_imdb
                 )
             if links:
-                for l in links:
-                    try: l.bridge_engine = engine
-                    except: pass
-                with results_lock:
-                    results_dict[ch_key] = (it, links)
-                    if not matched_item_holder[0] and it:
-                        matched_item_holder[0] = it
-                    all_found_links.extend(links)
+                links = _filter_discarded_links(links)
+                if links:
+                    for l in links:
+                        try: l.bridge_engine = engine
+                        except: pass
+                    with results_lock:
+                        results_dict[ch_key] = (it, links)
+                        if not matched_item_holder[0] and it:
+                            matched_item_holder[0] = it
+                        all_found_links.extend(links)
         except Exception:
             pass
 
@@ -7952,15 +8020,17 @@ def _fast_autoplay_search_and_play(engine, handle):
                     target_tmdb=p_tmdb, target_imdb=p_imdb
                 )
             if links:
-                for l in links:
-                    try: l.bridge_engine = engine
-                    except: pass
-                with results_lock:
-                    results_dict[ch_key] = (it, links)
-                    if not matched_item_holder[0] and it:
-                        matched_item_holder[0] = it
-                    all_found_links.extend(links)
-                channel_event.set()
+                links = _filter_discarded_links(links)
+                if links:
+                    for l in links:
+                        try: l.bridge_engine = engine
+                        except: pass
+                    with results_lock:
+                        results_dict[ch_key] = (it, links)
+                        if not matched_item_holder[0] and it:
+                            matched_item_holder[0] = it
+                        all_found_links.extend(links)
+                    channel_event.set()
         except Exception:
             pass
 
