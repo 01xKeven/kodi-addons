@@ -136,7 +136,16 @@ def check_version_bump(target, addon_id, version, source):
 
 
 def mirror_addon(source, target, addon_id):
+    existing_zips = {}
     if os.path.isdir(target):
+        for fname in os.listdir(target):
+            if fname.endswith('.zip') and fname.startswith(addon_id):
+                fpath = os.path.join(target, fname)
+                try:
+                    with open(fpath, 'rb') as zf:
+                        existing_zips[fname] = zf.read()
+                except Exception:
+                    pass
         shutil.rmtree(target)
     os.makedirs(target)
     for root, folders, names in os.walk(source):
@@ -149,7 +158,12 @@ def mirror_addon(source, target, addon_id):
             dst = os.path.join(target, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
-    print("copiado %s -> %s" % (source, os.path.relpath(target, os.path.dirname(target))))
+    for zname, zdata in existing_zips.items():
+        dst_zip = os.path.join(target, zname)
+        if not os.path.exists(dst_zip):
+            with open(dst_zip, 'wb') as zf:
+                zf.write(zdata)
+    print("copiado %s -> %s (conservados %d zips previos)" % (source, os.path.relpath(target, os.path.dirname(target)), len(existing_zips)))
 
 
 def build_zip(target, addon_id, version):
