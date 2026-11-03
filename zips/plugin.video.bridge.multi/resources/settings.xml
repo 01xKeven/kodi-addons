@@ -3,7 +3,7 @@
     <!-- Categoría 1: General -->
     <category label="General">
         <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="2" />
-        <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="false" />
+        <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="true" />
         <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="true" />
         <setting id="links_display_mode" type="enum" label="Mostrar enlaces encontrados en" values="Ventana personalizada|Lista nativa de Kodi (Recomendado)" default="1" />
         <setting id="show_resume_in_links" type="bool" label="Mostrar tiempo de reanudación en nombres de enlaces" default="false" />
@@ -48,7 +48,7 @@
     <!-- Categoría 4: Servidores -->
     <category label="Filtrar Servidores">
         <setting id="filter_servers_enabled" type="bool" label="Opciones" default="true" />
-        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="mega,filemoon,okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
+        <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="mega,okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
         <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="voe,uqload,torrent" visible="eq(-2,true)" />
         <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
     </category>
