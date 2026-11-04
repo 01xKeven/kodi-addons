@@ -2906,7 +2906,7 @@ def _get_discarded_servers_list():
         return ['rapidgator', 'directo', 'waaw']
 
 
-def _is_stream_url_playable(stream_url, timeout=2.5):
+def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
     """Verifica si la URL directa de streaming realmente responde y entrega contenido multimedia,
     evitando que enlaces bloqueados (como Mediafire con 403 o captchas HTML) se intenten
     reproducir en Kodi mostrando la pantalla de carga innecesariamente."""
@@ -2918,6 +2918,18 @@ def _is_stream_url_playable(stream_url, timeout=2.5):
     if not clean_url.startswith(('http://', 'https://')):
         return True
 
+    srv = (server_name or '').lower().strip()
+    cu = clean_url.lower()
+
+    # Si es un servidor de streaming de vídeo estándar o stream HLS/DASH, confiar en el resolver
+    is_streaming_hoster = any(h in srv or h in cu for h in (
+        'dood', 'streamwish', 'okru', 'ok.ru', 'voe', 'vidmoly', 'fastream', 'filelions',
+        'luluvdo', 'mixdrop', 'vidoza', 'upstream', 'gamovideo', 'waaw', 'netu'
+    )) or any(ext in cu for ext in ('.m3u8', '.mpd', '/hls/', '/hls2/', '/hls3/'))
+
+    if is_streaming_hoster and 'mediafire' not in srv and 'mediafire' not in cu:
+        return True
+
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
@@ -2927,20 +2939,22 @@ def _is_stream_url_playable(stream_url, timeout=2.5):
                 headers[hk.strip()] = uparse.unquote_plus(hv.strip())
 
     try:
-        headers['Range'] = 'bytes=0-1024'
         import requests
-        r = requests.get(clean_url, headers=headers, stream=True, timeout=timeout, allow_redirects=True, verify=False)
-        if r.status_code in (200, 206):
-            ct = (r.headers.get('Content-Type') or '').lower()
-            if 'text/html' in ct:
-                xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
-                return False
-            return True
-        elif r.status_code in (401, 403, 404, 410, 500, 502, 503):
+        r = requests.head(clean_url, headers=headers, timeout=timeout, allow_redirects=True, verify=False)
+        if r.status_code == 405:
+            headers['Range'] = 'bytes=0-1'
+            r = requests.get(clean_url, headers=headers, stream=True, timeout=timeout, allow_redirects=True, verify=False)
+
+        if r.status_code in (401, 403, 404, 410):
             xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
+            return False
+        ct = (r.headers.get('Content-Type') or '').lower()
+        if 'text/html' in ct and r.status_code == 200:
+            xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
             return False
         return True
     except Exception as e:
+        # Ante cualquier timeout o excepción de red, confiar en el resolver para no descartar enlaces válidos
         xbmc.log("Multi Bridge: comprobación de streaming (%s) omitida por excepción: %s" % (clean_url, e), xbmc.LOGDEBUG)
         return True
 
@@ -3307,7 +3321,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 valid_streams = _extract_valid_streams(video_urls)
                 if valid_streams:
                     first_stream = valid_streams[0][1] if isinstance(valid_streams[0], (list, tuple)) and len(valid_streams[0]) > 1 else (valid_streams[0] if isinstance(valid_streams[0], str) else '')
-                    if _is_stream_url_playable(first_stream, timeout=2.0):
+                    if _is_stream_url_playable(first_stream, server_name=actual_srv, timeout=3.0):
                         prep.video_urls = valid_streams
                         return prep
             return None
@@ -7574,7 +7588,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         _media_url = ''
         try:    _media_url = _res_li[0].getPath()
         except: pass
-        if not _media_url or not _is_stream_url_playable(_media_url, timeout=2.5):
+        if not _media_url or not _is_stream_url_playable(_media_url, server_name=server, timeout=3.0):
             try: _prog.close()
             except: pass
             xbmc.log('Multi Bridge autoplay [%d/%d] %s URL vacía o stream no funcional, siguiente...' % (
@@ -8219,14 +8233,22 @@ def _fast_autoplay_search_and_play(engine, handle):
 
                 _th_res = threading.Thread(target=_do_res, daemon=True)
                 _th_res.start()
-                _th_res.join(timeout=min(8.0, float(_get_int_setting('autoplay_resolve_timeout', 12))))
+                cand_timeout = max(12.0, float(_get_int_setting('autoplay_resolve_timeout', 12)))
+                res_start = time.time()
+                while _th_res.is_alive() and (time.time() - res_start) < cand_timeout:
+                    if p_dialog.iscanceled():
+                        try: p_dialog.close()
+                        except: pass
+                        return False
+                    xbmc.sleep(150)
+                _th_res.join(timeout=0.2)
                 ok, li = _res_box[0], _res_box[1]
 
                 if ok and li:
                     m_url = ''
                     try: m_url = li.getPath()
                     except: pass
-                    if m_url and _is_stream_url_playable(m_url, timeout=2.0):
+                    if m_url and _is_stream_url_playable(m_url, server_name=srv_name, timeout=3.0):
                         # Asegurar cabeceras de reproduccion en el listitem
                         _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=cand_u or '')
                         fast_link = cand
@@ -8497,7 +8519,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                 ok, li = _resolve_link_to_listitem(cand, engine, matched_item_holder[0])
             if ok and li and li.getPath():
                 m_url = li.getPath()
-                if _is_stream_url_playable(m_url, timeout=2.0):
+                if _is_stream_url_playable(m_url, server_name=_get_link_server_name(cand), timeout=3.0):
                     _ensure_playback_headers_on_item(li, server_name=_get_link_server_name(cand), page_url=getattr(cand, 'url', '') or '')
                     next_resolved_link = cand
                     next_resolved_li = li
