@@ -2860,21 +2860,62 @@ def _format_quality(link):
         if parts:
             return ' '.join(parts)
         return 'N/A'
-    if _has_4k_token(combined): return '4K'
-    if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined: return '1080p'
-    if '720P' in combined or 'HD' in combined: return '720p'
-    if 'RIP' in combined or 'DVD' in combined or 'WEBRIP' in combined or 'DVDRIP' in combined: return 'SD'
-    if 'CAM' in combined or 'TS' in combined or 'TELESYNC' in combined: return 'CAM'
-    return 'N/A'
 
-def _get_link_quality_score(link):
+    # Enlaces directos: si ya se detectó la calidad técnica real del stream, devolverla con máxima prioridad
+    real_q = _safe_str(getattr(link, 'real_quality', '') or getattr(link, 'real_res', '')).strip()
+    if real_q:
+        return real_q
+
+    if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined:
+        return '1080p'
+    if '720P' in combined or 'HD' in combined:
+        return '720p'
+    if '480P' in combined or '480' in combined or 'SD' in combined or 'DVD' in combined or 'WEBRIP' in combined or 'DVDRIP' in combined or 'RIP' in combined:
+        return '480p'
+    if 'CAM' in combined or 'TS' in combined or 'TELESYNC' in combined:
+        return 'CAM'
+    return '720p'
+
+def _get_link_quality_score(link, pref_quality=0):
+    if _is_torrent_link(link):
+        q = _format_quality(link)
+        if '4K' in q or '2160' in q: return 500
+        if '1080' in q: return 400
+        if '720' in q: return 300
+        if 'CAM' in q: return 100
+        if q in ('SD', 'DVD', 'DVDRip') or 'RIP' in q or 'WEBRIP' in q.upper(): return 200
+        return 50
+
     q = _format_quality(link)
-    if '4K' in q or '2160' in q: return 500
-    if '1080' in q: return 400
-    if '720' in q: return 300
-    if 'CAM' in q: return 100
-    if q in ('SD', 'DVD', 'DVDRip') or 'RIP' in q or 'WEBRIP' in q.upper(): return 200
-    return 50
+    is_1080 = ('1080' in q or 'FULLHD' in q or 'FHD' in q)
+    is_720 = ('720' in q or 'HD' in q) and not is_1080
+    is_480 = ('480' in q or 'SD' in q or 'DVD' in q) and not is_1080 and not is_720
+    is_cam = ('CAM' in q or 'TS' in q or 'TELESYNC' in q)
+
+    try:
+        pq = int(pref_quality)
+    except Exception:
+        pq = 0
+
+    if pq == 0:   # Preferir 1080p
+        if is_1080: return 400
+        if is_720:  return 300
+        if is_480:  return 200
+        if is_cam:  return 50
+        return 100
+    elif pq == 1: # Preferir 720p
+        if is_720:  return 400
+        if is_1080: return 300
+        if is_480:  return 200
+        if is_cam:  return 50
+        return 100
+    elif pq == 2: # Preferir 480p
+        if is_480:  return 400
+        if is_720:  return 300
+        if is_1080: return 200
+        if is_cam:  return 50
+        return 100
+    return 100
 
 def _format_channel(link):
     ch = _safe_str(getattr(link, 'channel', ''))
@@ -2906,19 +2947,81 @@ def _get_discarded_servers_list():
         return ['rapidgator', 'directo', 'waaw']
 
 
-def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
-    """Verifica si la URL directa de streaming realmente responde y entrega contenido multimedia,
-    evitando que enlaces bloqueados (como Mediafire con 403 o captchas HTML) o servidores con CDN caído
-    (como Vidhide/Callistanise con error Cloudflare 522 en segmentos) se intenten reproducir en Kodi."""
+def _parse_mp4_resolution(data):
+    """Extrae el ancho y alto en píxeles del encabezado tkhd de un archivo MP4 sin reproducirlo."""
+    import struct
+    pos = 0
+    while True:
+        idx = data.find(b'tkhd', pos)
+        if idx == -1 or idx < 4:
+            break
+        try:
+            version = data[idx + 4]
+            if version == 0:
+                w_offset = idx + 80
+            elif version == 1:
+                w_offset = idx + 92
+            else:
+                pos = idx + 4
+                continue
+            if w_offset + 8 <= len(data):
+                w_int, _, h_int, _ = struct.unpack('>HHHH', data[w_offset:w_offset+8])
+                if 240 <= w_int <= 7680 and 140 <= h_int <= 4320:
+                    return w_int, h_int
+        except Exception:
+            pass
+        pos = idx + 4
+    return None, None
+
+
+def _parse_mkv_resolution(data):
+    """Extrae el ancho y alto en píxeles de los elementos EBML de un contenedor MKV/WebM."""
+    pos = 0
+    while pos < len(data) - 4:
+        idx_w = data.find(b'\xb0', pos)
+        if idx_w == -1:
+            break
+        sz = data[idx_w + 1]
+        length = sz & 0x7F if (sz & 0x80) else (sz & 0x3F if (sz & 0x40) else 0)
+        if length in (1, 2, 4) and idx_w + 2 + length <= len(data):
+            w_val = int.from_bytes(data[idx_w + 2: idx_w + 2 + length], 'big')
+            if 240 <= w_val <= 7680:
+                idx_h = data.find(b'\xba', idx_w + 2 + length, idx_w + 50)
+                if idx_h != -1:
+                    sz_h = data[idx_h + 1]
+                    length_h = sz_h & 0x7F if (sz_h & 0x80) else (sz_h & 0x3F if (sz_h & 0x40) else 0)
+                    if length_h in (1, 2, 4) and idx_h + 2 + length_h <= len(data):
+                        h_val = int.from_bytes(data[idx_h + 2: idx_h + 2 + length_h], 'big')
+                        if 140 <= h_val <= 4320:
+                            return w_val, h_val
+        pos = idx_w + 1
+    return None, None
+
+
+def _classify_resolution_height(h):
+    if not h:
+        return None
+    if h >= 1000:
+        return '1080p'
+    elif h >= 680:
+        return '720p'
+    elif h >= 440:
+        return '480p'
+    return '480p'
+
+
+def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
+    """Verifica si la URL directa responde y entrega multimedia (evitando servidores caídos como 522/404),
+    y detecta la resolución REAL de vídeo (1080p, 720p, 480p) leyendo los metadatos HLS o contenedores MP4/MKV.
+    Retorna (is_playable: bool, detected_res: str|None)."""
     if not stream_url:
-        return False
+        return False, None
     if stream_url.startswith(('magnet:', 'plugin:', 'file:')) or stream_url.endswith('.torrent'):
-        return True
+        return True, None
     clean_url = stream_url.split('|')[0].strip()
     if not clean_url.startswith(('http://', 'https://')):
-        return True
+        return True, None
 
-    srv = (server_name or '').lower().strip()
     cu = clean_url.lower()
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -2931,23 +3034,29 @@ def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
     try:
         import requests
-        # Caso 1: Flujo HLS (.m3u8 o con /hls/)
         is_hls = ('.m3u8' in cu) or ('/hls/' in cu) or ('/hls2/' in cu) or ('/hls3/' in cu)
         if is_hls:
             try:
                 r = requests.get(clean_url, headers=headers, timeout=timeout, verify=False)
             except Exception as e_m3u8:
                 xbmc.log("Multi Bridge: URL HLS inalcanzable (%s): %s" % (clean_url, e_m3u8), xbmc.LOGINFO)
-                return False
+                return False, None
 
             if r.status_code >= 400:
                 xbmc.log("Multi Bridge: URL HLS descartada por HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
-                return False
+                return False, None
 
             manifest_text = r.text or ''
             if '#EXTM3U' not in manifest_text and '#EXT-X' not in manifest_text:
                 xbmc.log("Multi Bridge: URL HLS descartada por contenido inválido: %s" % clean_url, xbmc.LOGINFO)
-                return False
+                return False, None
+
+            # Detectar resolución técnica desde etiquetas HLS (#EXT-X-STREAM-INF: ... RESOLUTION=WxH)
+            detected_res = None
+            res_matches = re.findall(r'RESOLUTION=(\d+)x(\d+)', manifest_text, re.IGNORECASE)
+            if res_matches:
+                heights = [int(m[1]) for m in res_matches]
+                detected_res = _classify_resolution_height(max(heights))
 
             # Buscar sub-manifiesto o segmento
             sub_url = None
@@ -2964,15 +3073,20 @@ def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
                         r_var = requests.get(sub_url, headers=headers, timeout=timeout, verify=False)
                         if r_var.status_code >= 400:
                             xbmc.log("Multi Bridge: sub-playlist HLS falló con HTTP %d: %s" % (r_var.status_code, sub_url), xbmc.LOGINFO)
-                            return False
-                        for line2 in (r_var.text or '').splitlines():
+                            return False, None
+                        var_text = r_var.text or ''
+                        if not detected_res:
+                            var_res = re.findall(r'RESOLUTION=(\d+)x(\d+)', var_text, re.IGNORECASE)
+                            if var_res:
+                                detected_res = _classify_resolution_height(max([int(m[1]) for m in var_res]))
+                        for line2 in var_text.splitlines():
                             line2 = line2.strip()
                             if line2 and not line2.startswith('#'):
                                 sub_url = uparse.urljoin(sub_url, line2)
                                 break
                     except Exception as e_sub:
                         xbmc.log("Multi Bridge: error al leer sub-playlist HLS (%s): %s" % (sub_url, e_sub), xbmc.LOGINFO)
-                        return False
+                        return False, None
 
                 # Probar el segmento con HEAD o GET Range
                 try:
@@ -2981,40 +3095,71 @@ def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
                         h2 = dict(headers)
                         h2['Range'] = 'bytes=0-100'
                         r_seg = requests.get(sub_url, headers=h2, timeout=timeout, verify=False, stream=True)
+                    # Códigos de error de servidor caído / CDN Cloudflare caído (522, 520, etc.) o archivo no encontrado (404)
                     if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
                         xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d (CDN caído): %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
-                        return False
+                        return False, None
                 except Exception as e_seg:
                     xbmc.log("Multi Bridge: segmento HLS falló por error de red/timeout (%s): %s" % (sub_url, e_seg), xbmc.LOGINFO)
-                    return False
+                    return False, None
 
-            return True
+            # Si no se detectó resolución por etiqueta RESOLUTION, buscar patrones en la URL
+            if not detected_res:
+                if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
+                    detected_res = '1080p'
+                elif any(k in cu for k in ('720p', '720', '/hd/')):
+                    detected_res = '720p'
+                elif any(k in cu for k in ('480p', '480', '360p', '360')):
+                    detected_res = '480p'
+
+            return True, detected_res
 
         # Caso 2: Streams HTTP directos (mp4, mkv, etc.)
-        r = requests.head(clean_url, headers=headers, timeout=timeout, allow_redirects=True, verify=False)
-        if r.status_code in (403, 405):
-            h_range = dict(headers)
-            h_range['Range'] = 'bytes=0-100'
-            try:
-                r_get = requests.get(clean_url, headers=h_range, stream=True, timeout=timeout, allow_redirects=True, verify=False)
-                if r_get.status_code in (200, 206):
-                    r = r_get
-            except Exception:
-                pass
+        detected_res = None
+        h_range = dict(headers)
+        h_range['Range'] = 'bytes=0-65535'
+        r = requests.get(clean_url, headers=h_range, stream=True, timeout=timeout, allow_redirects=True, verify=False)
 
         if r.status_code in (401, 403, 404, 410) or r.status_code >= 500:
             xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
-            return False
+            return False, None
 
         ct = (r.headers.get('Content-Type') or '').lower()
-        if 'text/html' in ct and r.status_code == 200:
-            xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
-            return False
+        chunk = b''
+        try:
+            chunk = r.raw.read(65536) if hasattr(r, 'raw') else (r.content[:65536] if r.content else b'')
+        except Exception:
+            pass
 
-        return True
+        if 'text/html' in ct and (b'<!doctype' in chunk[:100].lower() or b'<html' in chunk[:100].lower()):
+            xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
+            return False, None
+
+        if chunk:
+            w, h = _parse_mp4_resolution(chunk)
+            if not h:
+                w, h = _parse_mkv_resolution(chunk)
+            if h:
+                detected_res = _classify_resolution_height(h)
+
+        if not detected_res:
+            if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
+                detected_res = '1080p'
+            elif any(k in cu for k in ('720p', '720')):
+                detected_res = '720p'
+            elif any(k in cu for k in ('480p', '480', '360p', '360', 'sd')):
+                detected_res = '480p'
+
+        return True, detected_res
     except Exception as e:
         xbmc.log("Multi Bridge: comprobación de streaming (%s) falló por excepción: %s" % (clean_url, e), xbmc.LOGINFO)
-        return False
+        return False, None
+
+
+def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
+    """Wrapper retrocompatible: retorna True si la URL es reproducible."""
+    is_ok, _ = _check_stream_url_playable(stream_url, server_name=server_name, timeout=timeout)
+    return is_ok
 
 
 def _format_language_display(lang_str, colored=True):
@@ -3158,7 +3303,7 @@ def _get_filter_prefs():
         'preferencia_idioma_lat': _bi('preferencia_idioma_lat', 1) if lang_on else 1,
         'preferencia_idioma_esp': _bi('preferencia_idioma_esp', 2) if lang_on else 1,
         'preferencia_idioma_vos': _bi('preferencia_idioma_vos', 3) if lang_on else 1,
-        'servers_sort_quality': _bi('servers_sort_quality', 1) if qual_on else 0,
+        'servers_sort_quality': _bi('servers_sort_quality', 0) if qual_on else 0,
         'servers_preferred': _bcsv('servers_preferred', ['mega', 'okru', 'doodstream', 'vidmoly', 'streamwish']) if srv_on else [],
         'servers_unfavored': _bcsv('servers_unfavored', ['uqload', 'torrent']) if srv_on else [],
         'servers_discarded': _bcsv('servers_discarded', ['rapidgator', 'directo', 'waaw']) if srv_on else [],
@@ -3188,13 +3333,10 @@ def _filter_and_sort_links(links):
         safe_links = sorted(safe_links, key=lambda it: -int(getattr(it, 'bridge_score', 0) or 0))
     except: pass
 
-    # PASO 1 de Balandro: filter_and_sort_by_quality
-    # 0: Orden Web, 1: Calidad Alta (descendente), 2: Calidad Baja (ascendente)
-    sort_q = b_prefs.get('servers_sort_quality', 1)
-    if sort_q == 1:
-        safe_links = sorted(safe_links, key=_get_link_quality_score, reverse=True)
-    elif sort_q == 2:
-        safe_links = sorted(safe_links, key=_get_link_quality_score)
+    # PASO 1: filter_and_sort_by_quality
+    # 0: 1080p, 1: 720p, 2: 480p (para enlaces directos; torrents conservan su prioridad máxima)
+    sort_q = b_prefs.get('servers_sort_quality', 0)
+    safe_links = sorted(safe_links, key=lambda it: _get_link_quality_score(it, pref_quality=sort_q), reverse=True)
 
     # PASO 2 de Balandro: filter_and_sort_by_server
     # 2a. Descartar servidores descartados por el usuario
@@ -3379,8 +3521,14 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 valid_streams = _extract_valid_streams(video_urls)
                 if valid_streams:
                     first_stream = valid_streams[0][1] if isinstance(valid_streams[0], (list, tuple)) and len(valid_streams[0]) > 1 else (valid_streams[0] if isinstance(valid_streams[0], str) else '')
-                    if _is_stream_url_playable(first_stream, server_name=actual_srv, timeout=3.0):
+                    is_ok, real_res = _check_stream_url_playable(first_stream, server_name=actual_srv, timeout=3.0)
+                    if is_ok:
                         prep.video_urls = valid_streams
+                        if real_res:
+                            prep.real_quality = real_res
+                            prep.quality = real_res
+                            try: lnk.real_quality = real_res; lnk.quality = real_res
+                            except: pass
                         return prep
             return None
         except Exception:
@@ -7646,12 +7794,19 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         _media_url = ''
         try:    _media_url = _res_li[0].getPath()
         except: pass
-        if not _media_url or not _is_stream_url_playable(_media_url, server_name=server, timeout=3.0):
+        is_ok, real_res = _check_stream_url_playable(_media_url, server_name=server, timeout=3.0)
+        if not _media_url or not is_ok:
             try: _prog.close()
             except: pass
             xbmc.log('Multi Bridge autoplay [%d/%d] %s URL vacía o stream no funcional, siguiente...' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
             continue
+
+        if real_res:
+            link.real_quality = real_res
+            link.quality = real_res
+            try: _res_li[0].setInfo('video', {'quality': real_res})
+            except: pass
 
         # ── Step 2: Start playback ─────────────────────────────────────────
         _prog.update(90, '[%d/%d] Iniciando [B]%s[/B]...' % (idx+1, total_att, _label))
@@ -8306,15 +8461,22 @@ def _fast_autoplay_search_and_play(engine, handle):
                     m_url = ''
                     try: m_url = li.getPath()
                     except: pass
-                    if m_url and _is_stream_url_playable(m_url, server_name=srv_name, timeout=3.0):
+                    is_ok, real_res = _check_stream_url_playable(m_url, server_name=srv_name, timeout=3.0)
+                    if m_url and is_ok:
+                        if real_res:
+                            cand.real_quality = real_res
+                            cand.quality = real_res
+                            try: li.setInfo('video', {'quality': real_res})
+                            except: pass
                         # Asegurar cabeceras de reproduccion en el listitem
                         _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=cand_u or '')
                         fast_link = cand
                         fast_li = li
                         fast_url = li.getPath()
+                        q_show = _format_quality(cand)
                         p_dialog.update(100,
-                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [COLOR gold]%s[/COLOR]  •  %s' % (
-                                target_title, srv_name, lang_colored
+                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [COLOR gold]%s[/COLOR]  •  %s  •  [COLOR springgreen]%s[/COLOR]' % (
+                                target_title, srv_name, lang_colored, q_show
                             )
                         )
                         break
@@ -8577,7 +8739,13 @@ def _fast_autoplay_search_and_play(engine, handle):
                 ok, li = _resolve_link_to_listitem(cand, engine, matched_item_holder[0])
             if ok and li and li.getPath():
                 m_url = li.getPath()
-                if _is_stream_url_playable(m_url, server_name=_get_link_server_name(cand), timeout=3.0):
+                is_ok, real_res = _check_stream_url_playable(m_url, server_name=_get_link_server_name(cand), timeout=3.0)
+                if is_ok:
+                    if real_res:
+                        cand.real_quality = real_res
+                        cand.quality = real_res
+                        try: li.setInfo('video', {'quality': real_res})
+                        except: pass
                     _ensure_playback_headers_on_item(li, server_name=_get_link_server_name(cand), page_url=getattr(cand, 'url', '') or '')
                     next_resolved_link = cand
                     next_resolved_li = li

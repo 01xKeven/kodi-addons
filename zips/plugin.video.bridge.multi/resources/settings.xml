@@ -41,9 +41,9 @@
     </category>
 
     <!-- Categoría 3: Calidad -->
-    <category label="Ordenar por Calidad">
+    <category label="Calidad">
         <setting id="filter_quality_enabled" type="bool" label="Opciones" default="true" />
-        <setting id="servers_sort_quality" type="enum" label="En cada Idioma ordenar los enlaces por" values="Orden Web|Calidad Alta|Calidad Baja" default="1" visible="eq(-1,true)" />
+        <setting id="servers_sort_quality" type="enum" label="Calidad preferida (enlaces directos)" values="1080p|720p|480p" default="0" visible="eq(-1,true)" />
     </category>
 
     <!-- Categoría 4: Servidores -->
