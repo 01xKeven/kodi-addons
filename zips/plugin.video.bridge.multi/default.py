@@ -2908,8 +2908,8 @@ def _get_discarded_servers_list():
 
 def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
     """Verifica si la URL directa de streaming realmente responde y entrega contenido multimedia,
-    evitando que enlaces bloqueados (como Mediafire con 403 o captchas HTML) se intenten
-    reproducir en Kodi mostrando la pantalla de carga innecesariamente."""
+    evitando que enlaces bloqueados (como Mediafire con 403 o captchas HTML) o servidores con CDN caído
+    (como Vidhide/Callistanise con error Cloudflare 522 en segmentos) se intenten reproducir en Kodi."""
     if not stream_url:
         return False
     if stream_url.startswith(('magnet:', 'plugin:', 'file:')) or stream_url.endswith('.torrent'):
@@ -2921,15 +2921,6 @@ def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
     srv = (server_name or '').lower().strip()
     cu = clean_url.lower()
 
-    # Si es un servidor de streaming de vídeo estándar o stream HLS/DASH, confiar en el resolver
-    is_streaming_hoster = any(h in srv or h in cu for h in (
-        'dood', 'streamwish', 'okru', 'ok.ru', 'voe', 'vidmoly', 'fastream', 'filelions',
-        'luluvdo', 'mixdrop', 'vidoza', 'upstream', 'gamovideo', 'waaw', 'netu'
-    )) or any(ext in cu for ext in ('.m3u8', '.mpd', '/hls/', '/hls2/', '/hls3/'))
-
-    if is_streaming_hoster and 'mediafire' not in srv and 'mediafire' not in cu:
-        return True
-
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
@@ -2940,23 +2931,90 @@ def _is_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
     try:
         import requests
-        r = requests.head(clean_url, headers=headers, timeout=timeout, allow_redirects=True, verify=False)
-        if r.status_code == 405:
-            headers['Range'] = 'bytes=0-1'
-            r = requests.get(clean_url, headers=headers, stream=True, timeout=timeout, allow_redirects=True, verify=False)
+        # Caso 1: Flujo HLS (.m3u8 o con /hls/)
+        is_hls = ('.m3u8' in cu) or ('/hls/' in cu) or ('/hls2/' in cu) or ('/hls3/' in cu)
+        if is_hls:
+            try:
+                r = requests.get(clean_url, headers=headers, timeout=timeout, verify=False)
+            except Exception as e_m3u8:
+                xbmc.log("Multi Bridge: URL HLS inalcanzable (%s): %s" % (clean_url, e_m3u8), xbmc.LOGINFO)
+                return False
 
-        if r.status_code in (401, 403, 404, 410):
+            if r.status_code >= 400:
+                xbmc.log("Multi Bridge: URL HLS descartada por HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
+                return False
+
+            manifest_text = r.text or ''
+            if '#EXTM3U' not in manifest_text and '#EXT-X' not in manifest_text:
+                xbmc.log("Multi Bridge: URL HLS descartada por contenido inválido: %s" % clean_url, xbmc.LOGINFO)
+                return False
+
+            # Buscar sub-manifiesto o segmento
+            sub_url = None
+            for line in manifest_text.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    sub_url = uparse.urljoin(clean_url, line)
+                    break
+
+            if sub_url:
+                # Si sub_url es otro playlist m3u8 (variante), obtener el primer segmento real
+                if '.m3u8' in sub_url.lower() or not any(ext in sub_url.lower() for ext in ('.ts', '.m4s', '.mp4')):
+                    try:
+                        r_var = requests.get(sub_url, headers=headers, timeout=timeout, verify=False)
+                        if r_var.status_code >= 400:
+                            xbmc.log("Multi Bridge: sub-playlist HLS falló con HTTP %d: %s" % (r_var.status_code, sub_url), xbmc.LOGINFO)
+                            return False
+                        for line2 in (r_var.text or '').splitlines():
+                            line2 = line2.strip()
+                            if line2 and not line2.startswith('#'):
+                                sub_url = uparse.urljoin(sub_url, line2)
+                                break
+                    except Exception as e_sub:
+                        xbmc.log("Multi Bridge: error al leer sub-playlist HLS (%s): %s" % (sub_url, e_sub), xbmc.LOGINFO)
+                        return False
+
+                # Probar el segmento con HEAD o GET Range
+                try:
+                    r_seg = requests.head(sub_url, headers=headers, timeout=timeout, verify=False, allow_redirects=True)
+                    if r_seg.status_code in (403, 405):
+                        h2 = dict(headers)
+                        h2['Range'] = 'bytes=0-100'
+                        r_seg = requests.get(sub_url, headers=h2, timeout=timeout, verify=False, stream=True)
+                    if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
+                        xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d (CDN caído): %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
+                        return False
+                except Exception as e_seg:
+                    xbmc.log("Multi Bridge: segmento HLS falló por error de red/timeout (%s): %s" % (sub_url, e_seg), xbmc.LOGINFO)
+                    return False
+
+            return True
+
+        # Caso 2: Streams HTTP directos (mp4, mkv, etc.)
+        r = requests.head(clean_url, headers=headers, timeout=timeout, allow_redirects=True, verify=False)
+        if r.status_code in (403, 405):
+            h_range = dict(headers)
+            h_range['Range'] = 'bytes=0-100'
+            try:
+                r_get = requests.get(clean_url, headers=h_range, stream=True, timeout=timeout, allow_redirects=True, verify=False)
+                if r_get.status_code in (200, 206):
+                    r = r_get
+            except Exception:
+                pass
+
+        if r.status_code in (401, 403, 404, 410) or r.status_code >= 500:
             xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
             return False
+
         ct = (r.headers.get('Content-Type') or '').lower()
         if 'text/html' in ct and r.status_code == 200:
             xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
             return False
+
         return True
     except Exception as e:
-        # Ante cualquier timeout o excepción de red, confiar en el resolver para no descartar enlaces válidos
-        xbmc.log("Multi Bridge: comprobación de streaming (%s) omitida por excepción: %s" % (clean_url, e), xbmc.LOGDEBUG)
-        return True
+        xbmc.log("Multi Bridge: comprobación de streaming (%s) falló por excepción: %s" % (clean_url, e), xbmc.LOGINFO)
+        return False
 
 
 def _format_language_display(lang_str, colored=True):
