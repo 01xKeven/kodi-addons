@@ -2872,6 +2872,10 @@ def _format_quality(link):
         return '720p'
     if '480P' in combined or '480' in combined or 'SD' in combined or 'DVD' in combined or 'WEBRIP' in combined or 'DVDRIP' in combined or 'RIP' in combined:
         return '480p'
+    if '360P' in combined or '360' in combined:
+        return '360p'
+    if '240P' in combined or '240' in combined:
+        return '240p'
     if 'CAM' in combined or 'TS' in combined or 'TELESYNC' in combined:
         return 'CAM'
     return '720p'
@@ -2882,7 +2886,10 @@ def _get_link_quality_score(link, pref_quality=0):
         if '4K' in q or '2160' in q: return 500
         if '1080' in q: return 400
         if '720' in q: return 300
-        if 'CAM' in q: return 100
+        if '480' in q: return 200
+        if '360' in q: return 150
+        if '240' in q: return 100
+        if 'CAM' in q: return 50
         if q in ('SD', 'DVD', 'DVDRip') or 'RIP' in q or 'WEBRIP' in q.upper(): return 200
         return 50
 
@@ -2890,6 +2897,8 @@ def _get_link_quality_score(link, pref_quality=0):
     is_1080 = ('1080' in q or 'FULLHD' in q or 'FHD' in q)
     is_720 = ('720' in q or 'HD' in q) and not is_1080
     is_480 = ('480' in q or 'SD' in q or 'DVD' in q) and not is_1080 and not is_720
+    is_360 = ('360' in q) and not is_1080 and not is_720 and not is_480
+    is_240 = ('240' in q) and not is_1080 and not is_720 and not is_480 and not is_360
     is_cam = ('CAM' in q or 'TS' in q or 'TELESYNC' in q)
 
     try:
@@ -2901,21 +2910,27 @@ def _get_link_quality_score(link, pref_quality=0):
         if is_1080: return 400
         if is_720:  return 300
         if is_480:  return 200
+        if is_360:  return 150
+        if is_240:  return 100
         if is_cam:  return 50
-        return 100
+        return 120
     elif pq == 1: # Preferir 720p
         if is_720:  return 400
         if is_1080: return 300
         if is_480:  return 200
+        if is_360:  return 150
+        if is_240:  return 100
         if is_cam:  return 50
-        return 100
+        return 120
     elif pq == 2: # Preferir 480p
         if is_480:  return 400
-        if is_720:  return 300
-        if is_1080: return 200
+        if is_360:  return 350
+        if is_240:  return 300
+        if is_720:  return 200
+        if is_1080: return 150
         if is_cam:  return 50
-        return 100
-    return 100
+        return 120
+    return 120
 
 def _format_channel(link):
     ch = _safe_str(getattr(link, 'channel', ''))
@@ -3007,12 +3022,14 @@ def _classify_resolution_height(h):
         return '720p'
     elif h >= 440:
         return '480p'
-    return '480p'
+    elif h >= 320:
+        return '360p'
+    return '240p'
 
 
 def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
     """Verifica si la URL directa responde y entrega multimedia (evitando servidores caídos como 522/404),
-    y detecta la resolución REAL de vídeo (1080p, 720p, 480p) leyendo los metadatos HLS o contenedores MP4/MKV.
+    y detecta la resolución REAL de vídeo (1080p, 720p, 480p, 360p, 240p) leyendo los metadatos HLS o contenedores MP4/MKV.
     Retorna (is_playable: bool, detected_res: str|None)."""
     if not stream_url:
         return False, None
@@ -3109,8 +3126,12 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                     detected_res = '1080p'
                 elif any(k in cu for k in ('720p', '720', '/hd/')):
                     detected_res = '720p'
-                elif any(k in cu for k in ('480p', '480', '360p', '360')):
+                elif any(k in cu for k in ('480p', '480', 'dvd', 'dvdrip', 'sd')):
                     detected_res = '480p'
+                elif any(k in cu for k in ('360p', '360')):
+                    detected_res = '360p'
+                elif any(k in cu for k in ('240p', '240')):
+                    detected_res = '240p'
 
             return True, detected_res
 
@@ -3147,8 +3168,12 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                 detected_res = '1080p'
             elif any(k in cu for k in ('720p', '720')):
                 detected_res = '720p'
-            elif any(k in cu for k in ('480p', '480', '360p', '360', 'sd')):
+            elif any(k in cu for k in ('480p', '480', 'dvd', 'dvdrip', 'sd')):
                 detected_res = '480p'
+            elif any(k in cu for k in ('360p', '360')):
+                detected_res = '360p'
+            elif any(k in cu for k in ('240p', '240')):
+                detected_res = '240p'
 
         return True, detected_res
     except Exception as e:
