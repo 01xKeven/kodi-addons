@@ -426,6 +426,68 @@ def _get_ram_search_cache(target_tmdb='', target_season='', target_episode='', m
         return None
     return _RAM_SEARCH_CACHE
 
+
+def _update_link_real_quality_in_cache(link_idx=None, real_res='', link_obj=None, media_key=''):
+    """Actualiza la resolucion real verificada de un enlace en el objeto link,
+    en la cache en RAM y en el archivo JSON en disco, de manera sincronizada y atomica."""
+    if not real_res:
+        return
+    global _RAM_SEARCH_CACHE
+
+    # 1. Actualizar objeto directo si fue pasado
+    if link_obj is not None:
+        try:
+            link_obj.real_quality = real_res
+            link_obj.quality = real_res
+        except Exception:
+            pass
+
+    # 2. Actualizar en RAM cache
+    if _RAM_SEARCH_CACHE and isinstance(_RAM_SEARCH_CACHE, dict):
+        r_links = _RAM_SEARCH_CACHE.get('links', [])
+        if link_idx is not None and isinstance(link_idx, int) and 0 <= link_idx < len(r_links):
+            try:
+                r_links[link_idx].real_quality = real_res
+                r_links[link_idx].quality = real_res
+            except Exception:
+                pass
+        elif link_obj is not None:
+            target_u = _safe_str(getattr(link_obj, 'url', ''))
+            for lnk in r_links:
+                if lnk is link_obj or (target_u and _safe_str(getattr(lnk, 'url', '')) == target_u):
+                    try:
+                        lnk.real_quality = real_res
+                        lnk.quality = real_res
+                    except Exception:
+                        pass
+
+    # 3. Actualizar en disco atomicamente
+    try:
+        c_disk = _read_search_cache_atomic(max_attempts=3, delay=0.03)
+        if c_disk and isinstance(c_disk, dict):
+            d_links = c_disk.get('links', [])
+            dirty = False
+            if link_idx is not None and isinstance(link_idx, int) and 0 <= link_idx < len(d_links):
+                try:
+                    if isinstance(d_links[link_idx], dict):
+                        d_links[link_idx]['real_quality'] = real_res
+                        d_links[link_idx]['quality'] = real_res
+                        dirty = True
+                except Exception:
+                    pass
+            elif link_obj is not None:
+                target_u = _safe_str(getattr(link_obj, 'url', ''))
+                for dl in d_links:
+                    if isinstance(dl, dict) and dl.get('url') == target_u:
+                        dl['real_quality'] = real_res
+                        dl['quality'] = real_res
+                        dirty = True
+            if dirty:
+                _save_search_cache_atomic(c_disk)
+    except Exception:
+        pass
+
+
 def _get_media_key(meta, item=None):
     if not meta: meta = {}
     s_val = meta.get('season') if meta.get('season') is not None else _safe_get_item_attr(item, 'season')
@@ -873,6 +935,48 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             return
 
         xbmc.log("Multi Bridge: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
+
+        # Detectar resolucion tecnica real directamente del decodificador de Kodi Player
+        def _detect_and_sync_player_resolution():
+            for _attempt in range(15):
+                if not p.isPlayingVideo() or mon.abortRequested():
+                    break
+                try:
+                    w_str = xbmc.getInfoLabel('VideoPlayer.VideoWidth') or ''
+                    h_str = xbmc.getInfoLabel('VideoPlayer.VideoHeight') or ''
+                    w = int(w_str) if w_str.isdigit() else 0
+                    h = int(h_str) if h_str.isdigit() else 0
+                    if not w or not h:
+                        vt = p.getVideoInfoTag() if hasattr(p, 'getVideoInfoTag') else None
+                        if vt:
+                            w = vt.getVideoWidth() if hasattr(vt, 'getVideoWidth') else 0
+                            h = vt.getVideoHeight() if hasattr(vt, 'getVideoHeight') else 0
+                    if w > 0 or h > 0:
+                        kodi_res = _classify_resolution(w, h)
+                        if kodi_res:
+                            xbmc.log("Multi Bridge: resolucion real confirmada por decodificador de Kodi (%dx%d) -> %s" % (w, h, kodi_res), xbmc.LOGINFO)
+                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
+                            try:
+                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
+                            except Exception:
+                                pass
+                            break
+                    res_lbl = (xbmc.getInfoLabel('VideoPlayer.VideoResolution') or '').strip()
+                    if res_lbl:
+                        kodi_res = _detect_resolution_from_text(res_lbl)
+                        if kodi_res:
+                            xbmc.log("Multi Bridge: resolucion detectada por VideoResolution (%s) -> %s" % (res_lbl, kodi_res), xbmc.LOGINFO)
+                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
+                            try:
+                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
+                            except Exception:
+                                pass
+                            break
+                except Exception:
+                    pass
+                xbmc.sleep(250)
+
+        threading.Thread(target=_detect_and_sync_player_resolution, daemon=True).start()
 
         # Asegurar el cierre inmediato del spinner de carga de Kodi (busydialog / extendedbusydialog)
         # al iniciar la reproducción para que no aparezca sobre el vídeo
@@ -2866,6 +2970,21 @@ def _format_quality(link):
     if real_q:
         return real_q
 
+    # Deteccion de resolucion por texto en URL, nombre de archivo o titulo
+    detected_text = _detect_resolution_from_text(combined)
+    if detected_text:
+        return detected_text
+
+    # Si el canal es conocido por ser de catalogo exclusivo Full HD 1080p (Cinecalidad, Granpelis, SoloEnCine, etc.):
+    ch_name = _safe_str(getattr(link, 'channel', '')).lower()
+    if any(c in ch_name for c in ('cinecalidad', 'granpelis', 'soloencine')):
+        return '1080p'
+
+    # Servidores de alta fidelidad que en sitios de streaming alojan 1080p salvo indicacion contraria:
+    srv_name = (_safe_str(getattr(link, 'server', '')) or _get_link_server_name(link)).lower()
+    if srv_name in ('mega', '1fichier') and ('HD' in combined or not any(x in combined for x in ('720', '480', 'CAM'))):
+        return '1080p'
+
     if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined:
         return '1080p'
     if '720P' in combined or 'HD' in combined:
@@ -3013,18 +3132,145 @@ def _parse_mkv_resolution(data):
     return None, None
 
 
-def _classify_resolution_height(h):
-    if not h:
+def _detect_resolution_from_text(text):
+    """Detecta etiquetas de resolucion tecnica (4K, 1080p, 720p, 480p, 360p, 240p)
+    desde el texto de una URL resuelta, nombre de archivo o titulo de enlace."""
+    if not text:
         return None
-    if h >= 1000:
+    t = str(text).upper()
+    if '2160P' in t or '2160' in t or '4K' in t or 'UHD' in t or '3840X2160' in t:
+        return '4K'
+    if '1080P' in t or '1080' in t or 'FULLHD' in t or 'FHD' in t or '1920X1080' in t or '1920X1088' in t:
         return '1080p'
-    elif h >= 680:
+    if '720P' in t or '720' in t or '1280X720' in t:
         return '720p'
-    elif h >= 440:
+    if '480P' in t or '480' in t or '854X480' in t or '720X480' in t:
         return '480p'
-    elif h >= 320:
+    if '360P' in t or '360' in t or '640X360' in t:
         return '360p'
+    if '240P' in t or '240' in t:
+        return '240p'
+    return None
+
+
+def _classify_resolution(w=None, h=None):
+    """Clasifica la resolucion de video de forma tecnica y precisa,
+    contemplando relaciones de aspecto panoramicas (Cinemascope 2.39:1 / 2.40:1, ej. 1920x800, 1920x1088, 1280x536)."""
+    try: w = int(w) if w else 0
+    except Exception: w = 0
+    try: h = int(h) if h else 0
+    except Exception: h = 0
+
+    if not w and not h:
+        return None
+
+    # 4K / UHD
+    if w >= 3200 or h >= 1800:
+        return '4K'
+
+    # 1080p / Full HD (1920x1080, 1920x1088 H.264 macroblock, o 1920x800 Cinemascope sin barras negras)
+    if w >= 1600 or h >= 750:
+        return '1080p'
+
+    # 720p / HD (1280x720 o 1280x536 Cinemascope sin barras negras)
+    if w >= 1100 or h >= 520:
+        return '720p'
+
+    # 480p / SD (854x480, 720x480, etc.)
+    if w >= 700 or h >= 440:
+        return '480p'
+
+    # 360p (640x360)
+    if w >= 480 or h >= 320:
+        return '360p'
+
     return '240p'
+
+
+def _parse_ts_sps(chunk):
+    """Extrae el ancho y alto en pixeles del Sequence Parameter Set (SPS H.264 / HEVC)
+    en un flujo de paquetes MPEG-TS (188 bytes con sync 0x47)."""
+    if not chunk or len(chunk) < 188:
+        return None, None
+    sync_positions = [i for i in range(min(564, len(chunk))) if chunk[i] == 0x47]
+    is_ts = False
+    for sp in sync_positions:
+        if sp + 188 < len(chunk) and chunk[sp + 188] == 0x47:
+            is_ts = True
+            break
+    if not is_ts:
+        return None, None
+
+    idx = 0
+    limit = len(chunk) - 32
+    while idx < limit:
+        pos = chunk.find(b'\x00\x00\x01', idx, limit)
+        if pos == -1:
+            break
+        nal_header = chunk[pos + 3]
+        if (nal_header & 0x1F) == 7:  # H.264 SPS
+            sps_bytes = chunk[pos + 4: pos + 64]
+            try:
+                rbsp = bytearray()
+                i = 0
+                while i < len(sps_bytes):
+                    if i + 2 < len(sps_bytes) and sps_bytes[i] == 0 and sps_bytes[i+1] == 0 and sps_bytes[i+2] == 3:
+                        rbsp.append(sps_bytes[i]); rbsp.append(sps_bytes[i+1]); i += 3
+                    else:
+                        rbsp.append(sps_bytes[i]); i += 1
+
+                class _BitReader:
+                    def __init__(self, data):
+                        self.data = data; self.b_idx = 0; self.bit_idx = 0
+                    def read_bit(self):
+                        if self.b_idx >= len(self.data): return 0
+                        bit = (self.data[self.b_idx] >> (7 - self.bit_idx)) & 1
+                        self.bit_idx += 1
+                        if self.bit_idx == 8: self.bit_idx = 0; self.b_idx += 1
+                        return bit
+                    def read_bits(self, n):
+                        val = 0
+                        for _ in range(n): val = (val << 1) | self.read_bit()
+                        return val
+                    def read_ue(self):
+                        zeros = 0
+                        while self.read_bit() == 0 and zeros < 32: zeros += 1
+                        if zeros == 0: return 0
+                        return (1 << zeros) - 1 + self.read_bits(zeros)
+
+                reader = _BitReader(rbsp)
+                profile = reader.read_bits(8)
+                reader.read_bits(8); reader.read_bits(8)
+                reader.read_ue()  # sps_id
+                if profile in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+                    chroma = reader.read_ue()
+                    if chroma == 3: reader.read_bit()
+                    reader.read_ue(); reader.read_ue()
+                    reader.read_bit()
+                    if reader.read_bit():
+                        cnt = 12 if chroma == 3 else 8
+                        for _ in range(cnt):
+                            if reader.read_bit(): pass
+                reader.read_ue()
+                poc = reader.read_ue()
+                if poc == 0: reader.read_ue()
+                elif poc == 1:
+                    reader.read_bit(); reader.read_ue(); reader.read_ue()
+                    for _ in range(reader.read_ue()): reader.read_ue()
+                reader.read_ue(); reader.read_bit()
+                w = (reader.read_ue() + 1) * 16
+                h = (reader.read_ue() + 1) * 16 * (2 - reader.read_bit())
+                if 140 <= w <= 8192 and 140 <= h <= 4320:
+                    return w, h
+            except Exception:
+                pass
+        idx = pos + 1
+    return None, None
+
+
+def _classify_resolution_height(h):
+    """Wrapper retrocompatible."""
+    return _classify_resolution(h=h)
 
 
 def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
@@ -3072,8 +3318,9 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
             detected_res = None
             res_matches = re.findall(r'RESOLUTION=(\d+)x(\d+)', manifest_text, re.IGNORECASE)
             if res_matches:
-                heights = [int(m[1]) for m in res_matches]
-                detected_res = _classify_resolution_height(max(heights))
+                max_w = max(int(m[0]) for m in res_matches)
+                max_h = max(int(m[1]) for m in res_matches)
+                detected_res = _classify_resolution(max_w, max_h)
 
             # Buscar sub-manifiesto o segmento
             sub_url = None
@@ -3095,7 +3342,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                         if not detected_res:
                             var_res = re.findall(r'RESOLUTION=(\d+)x(\d+)', var_text, re.IGNORECASE)
                             if var_res:
-                                detected_res = _classify_resolution_height(max([int(m[1]) for m in var_res]))
+                                detected_res = _classify_resolution(max(int(m[0]) for m in var_res), max(int(m[1]) for m in var_res))
                         for line2 in var_text.splitlines():
                             line2 = line2.strip()
                             if line2 and not line2.startswith('#'):
@@ -3107,20 +3354,27 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
                 # Probar el segmento con HEAD o GET Range
                 try:
-                    r_seg = requests.head(sub_url, headers=headers, timeout=timeout, verify=False, allow_redirects=True)
-                    if r_seg.status_code in (403, 405):
-                        h2 = dict(headers)
-                        h2['Range'] = 'bytes=0-100'
-                        r_seg = requests.get(sub_url, headers=h2, timeout=timeout, verify=False, stream=True)
-                    # Códigos de error de servidor caído / CDN Cloudflare caído (522, 520, etc.) o archivo no encontrado (404)
+                    h2 = dict(headers)
+                    h2['Range'] = 'bytes=0-65535'
+                    r_seg = requests.get(sub_url, headers=h2, timeout=timeout, verify=False, stream=True)
                     if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
-                        xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d (CDN caído): %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d: %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
                         return False, None
+                    if not detected_res:
+                        seg_chunk = r_seg.raw.read(65536) if hasattr(r_seg, 'raw') else (r_seg.content[:65536] if r_seg.content else b'')
+                        if seg_chunk:
+                            w_s, h_s = _parse_ts_sps(seg_chunk)
+                            if not h_s:
+                                w_s, h_s = _parse_mp4_resolution(seg_chunk)
+                            if h_s or w_s:
+                                detected_res = _classify_resolution(w_s, h_s)
                 except Exception as e_seg:
-                    xbmc.log("Multi Bridge: segmento HLS falló por error de red/timeout (%s): %s" % (sub_url, e_seg), xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge: segmento HLS fallo (%s): %s" % (sub_url, e_seg), xbmc.LOGINFO)
                     return False, None
 
-            # Si no se detectó resolución por etiqueta RESOLUTION, buscar patrones en la URL
+            # Si no se detecto resolucion por etiqueta RESOLUTION, buscar patrones en la URL
+            if not detected_res:
+                detected_res = _detect_resolution_from_text(clean_url)
             if not detected_res:
                 if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
                     detected_res = '1080p'
@@ -3161,7 +3415,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
             if not h:
                 w, h = _parse_mkv_resolution(chunk)
             if h:
-                detected_res = _classify_resolution_height(h)
+                detected_res = _classify_resolution(w, h)
 
         if not detected_res:
             if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
@@ -9143,6 +9397,16 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             except: pass
             if media_url:
                 xbmc.log(f"Multi Bridge: reproduciendo {server_name} con éxito (url={media_url[:60]})", xbmc.LOGINFO)
+                q_from_url = _detect_resolution_from_text(media_url)
+                if q_from_url:
+                    try:
+                        prepared.real_quality = q_from_url
+                        prepared.quality = q_from_url
+                        link.real_quality = q_from_url
+                        link.quality = q_from_url
+                        _update_link_real_quality_in_cache(None, q_from_url, link_obj=link)
+                    except Exception:
+                        pass
                 sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
@@ -11409,7 +11673,13 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             srv = srv[:12] + '..'
 
         # Encabezado con modo tactil / compacto adaptativo
-        header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
+        qual_active = xbmcgui.Window(10000).getProperty('MultiBridge.ActiveLinkQuality') or ''
+        if not qual_active and hasattr(self, 'current_link') and self.current_link:
+            qual_active = _format_quality(self.current_link)
+        if qual_active and qual_active != 'N/A':
+            header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]  [B][COLOR FFCFA82C]%s[/COLOR][/B]' % (srv, qual_active)
+        else:
+            header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
         hdr_y = dy + (12 if is_touch else 10)
         hdr_h = 22 if is_touch else 20
         self.addControl(xbmcgui.ControlLabel(
