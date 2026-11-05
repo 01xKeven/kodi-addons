@@ -7757,25 +7757,20 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
     }
 
     for idx, link in enumerate(normal_links[:total_att]):
-        server   = _safe_str(getattr(link, 'server',   '') or '').capitalize() or 'servidor'
+        server   = _safe_str(getattr(link, 'server',   '') or '').capitalize() or 'Servidor'
         lang_raw = _safe_str(getattr(link, 'language', '') or '').strip()
-        lang_lbl = _LANG_NAMES.get(lang_raw.lower(), lang_raw) if lang_raw else ''
-        qual     = _safe_str(getattr(link, 'quality',  '') or '').strip()
-        ch       = _safe_str(getattr(link, 'channel',  '') or '')
-
-        # Etiqueta: "Voe [Latino] · HD"
-        _lang_part = (' [%s]' % lang_lbl) if lang_lbl else ''
-        _qual_part = (' · %s' % qual) if qual else ''
-        _label = '%s%s%s' % (server, _lang_part, _qual_part)
+        lang_colored = _format_language_display(lang_raw, colored=True)
+        cand_qual = _format_quality(link)
+        qual_part = ('  •  [COLOR gold]%s[/COLOR]' % cand_qual) if (cand_qual and cand_qual != 'N/A') else ''
+        _label = '[B][COLOR gold]%s[/COLOR][/B]  •  %s%s' % (server, lang_colored, qual_part)
 
         xbmc.log('Multi Bridge autoplay [%d/%d] → %s %s (%s)' % (
-            idx+1, total_att, server, lang_lbl, ch), xbmc.LOGINFO)
-
+            idx+1, total_att, server, lang_raw, ch), xbmc.LOGINFO)
 
         # ── Step 1: Resolve ────────────────────────────────────────────────
         _prog = xbmcgui.DialogProgress()
-        _prog.create('Multi Bridge',
-                     '[%d/%d] Conectando a [B]%s[/B]...\n[COLOR grey]Espere por favor (0.0s / %ds)[/COLOR]' % (idx+1, total_att, _label, _resolve_timeout))
+        _prog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR] [COLOR white]—[/COLOR] [COLOR deepskyblue]Autoplay[/COLOR]',
+                     '[%d/%d] Conectando a %s...\n[COLOR grey]Espere por favor (0.0s / %ds)[/COLOR]' % (idx+1, total_att, _label, _resolve_timeout))
         _prog.update(10)
 
         _res_done  = [None]
@@ -7797,7 +7792,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 break
             xbmc.sleep(100)
             _prog.update(min(10 + int(_s * 70.0 / _resolve_steps), 80),
-                         '[%d/%d] Conectando a [B]%s[/B]...\n[COLOR grey]Espere por favor (%.1fs / %ds)[/COLOR]' % (idx+1, total_att, _label, (_s + 1) * 0.1, _resolve_timeout))
+                         '[%d/%d] Conectando a %s...\n[COLOR grey]Espere por favor (%.1fs / %ds)[/COLOR]' % (idx+1, total_att, _label, (_s + 1) * 0.1, _resolve_timeout))
 
         _rt.join(timeout=1)
 
@@ -7833,8 +7828,12 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             try: _res_li[0].setInfo('video', {'quality': real_res})
             except: pass
 
+        _qual_show = _format_quality(link)
+        _qual_colored = ('  •  [COLOR springgreen]%s[/COLOR]' % _qual_show) if (_qual_show and _qual_show != 'N/A') else ''
+        _label_play = '[B][COLOR gold]%s[/COLOR][/B]  •  %s%s' % (server, lang_colored, _qual_colored)
+
         # ── Step 2: Start playback ─────────────────────────────────────────
-        _prog.update(90, '[%d/%d] Iniciando [B]%s[/B]...' % (idx+1, total_att, _label))
+        _prog.update(90, '[%d/%d] Iniciando %s...' % (idx+1, total_att, _label_play))
         try:
             sync_tmdbhelper_playerstring(meta)
             if _res_li[0] is not None:
@@ -8454,9 +8453,11 @@ def _fast_autoplay_search_and_play(engine, handle):
                 srv_name = _get_link_server_name(cand)
                 lang_raw = _safe_str(getattr(cand, 'language', '') or '')
                 lang_colored = _format_language_display(lang_raw, colored=True)
+                cand_qual = _format_quality(cand)
+                qual_part = ('  •  [COLOR gold]%s[/COLOR]' % cand_qual) if (cand_qual and cand_qual != 'N/A') else ''
                 p_dialog.update(min(pct, 90),
-                    '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR deepskyblue]Verificando:[/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s' % (
-                        target_title, completed, total_channels, srv_name, lang_colored
+                    '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR deepskyblue]Verificando:[/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s%s' % (
+                        target_title, completed, total_channels, srv_name, lang_colored, qual_part
                     )
                 )
 
@@ -8500,7 +8501,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                         fast_url = li.getPath()
                         q_show = _format_quality(cand)
                         p_dialog.update(100,
-                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [COLOR gold]%s[/COLOR]  •  %s  •  [COLOR springgreen]%s[/COLOR]' % (
+                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s  •  [COLOR springgreen]%s[/COLOR]' % (
                                 target_title, srv_name, lang_colored, q_show
                             )
                         )
