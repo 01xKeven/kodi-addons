@@ -97,43 +97,37 @@ def _get_addon_white_texture():
     return 'special://home/addons/plugin.video.bridge.multi/resources/skins/Default/media/white.png'
 
 def _show_bridge_notification(heading, message, time_ms=3500, icon=None):
-    """Muestra una notificación en pantalla de forma infalible en cualquier dispositivo y skin,
-    utilizando el icono oficial del addon o un icono personalizado y Kodi Builtin + _KODI_ORIG_DIALOG."""
+    """Muestra una notificacion en pantalla de forma infalible en cualquier dispositivo y skin."""
     try:
-        icon_path = icon or ''
-        if not icon_path:
-            try:
-                if '_bridge_addon' in globals() and _bridge_addon:
-                    icon_path = _bridge_addon.getAddonInfo('icon') or ''
-            except Exception:
-                pass
-        if not icon_path:
-            try: icon_path = xbmcgui.NOTIFICATION_INFO
-            except Exception: icon_path = ''
-
         clean_h = str(heading).replace('"', "'").replace('\n', ' ')
         clean_m = str(message).replace('"', "'").replace('\n', ' ')
+        clean_plain = re.sub(r'\[/?(?:B|I|COLOR[^\]]*)\]', '', clean_m)
 
-        # Normalizar barras para compatibilidad universal (Windows/Android/Linux)
-        if isinstance(icon_path, str) and '\\' in icon_path:
-            icon_exec = icon_path.replace('\\', '/')
-        else:
-            icon_exec = icon_path
+        icon_path = icon or ''
+        if not icon_path or not os.path.exists(str(icon_path)):
+            try:
+                addon_root = xbmcvfs.translatePath('special://home/addons/plugin.video.bridge.multi/icon.png')
+                if os.path.exists(addon_root):
+                    icon_path = addon_root
+            except Exception:
+                pass
 
-        # 1. Builtin Notification nativo de Kodi (C++, universal y no afectado por _SilentDialog)
+        real_icon = icon_path.replace('\\', '/') if (icon_path and os.path.exists(str(icon_path))) else ''
+
+        # 1. Dialog().notification nativo de Kodi (prioridad maxima)
         try:
-            if icon_exec:
-                xbmc.executebuiltin('Notification("%s", "%s", %d, "%s")' % (clean_h, clean_m, time_ms, icon_exec))
+            real_dlg = _orig_dialog_class or _KODI_ORIG_DIALOG or getattr(xbmcgui, 'Dialog')
+            if real_dlg and real_dlg is not _SilentDialog:
+                real_dlg().notification(clean_h, clean_m, real_icon or xbmcgui.NOTIFICATION_INFO, time_ms, False)
+        except Exception as _e:
+            xbmc.log("Multi Bridge: fallo en Dialog.notification: %s" % _e, xbmc.LOGDEBUG)
+
+        # 2. Respaldo directo con Kodi Builtin Notification
+        try:
+            if real_icon:
+                xbmc.executebuiltin('Notification("%s", "%s", %d, "%s")' % (clean_h, clean_plain, time_ms, real_icon))
             else:
-                xbmc.executebuiltin('Notification("%s", "%s", %d)' % (clean_h, clean_m, time_ms))
-        except Exception:
-            pass
-
-        # 2. Respaldo directo con _KODI_ORIG_DIALOG
-        try:
-            dlg_cls = _KODI_ORIG_DIALOG or getattr(xbmcgui, 'Dialog')
-            if dlg_cls and (not ('_SilentDialog' in globals()) or dlg_cls is not _SilentDialog):
-                dlg_cls().notification(clean_h, clean_m, icon_path or xbmcgui.NOTIFICATION_INFO, time_ms)
+                xbmc.executebuiltin('Notification("%s", "%s", %d)' % (clean_h, clean_plain, time_ms))
         except Exception:
             pass
     except Exception:
@@ -314,7 +308,12 @@ def _read_search_cache_atomic(max_attempts=6, delay=0.05):
         if _mem and _mem.strip():
             _d = json.loads(_mem)
             if isinstance(_d, dict) and _d.get('links'):
-                return _d
+                valid_raw = [l for l in _d['links'] if l and isinstance(l, dict) and l.get('url')]
+                if valid_raw:
+                    _d['links'] = valid_raw
+                    return _d
+                else:
+                    xbmcgui.Window(10000).setProperty('MultiBridge.SearchCacheJson', '')
     except Exception:
         pass
     """Lee SEARCH_CACHE_FILE con reintentos para tolerar escrituras simultaneas
@@ -936,48 +935,6 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         xbmc.log("Multi Bridge: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
 
-        # Detectar resolucion tecnica real directamente del decodificador de Kodi Player
-        def _detect_and_sync_player_resolution():
-            for _attempt in range(15):
-                if not p.isPlayingVideo() or mon.abortRequested():
-                    break
-                try:
-                    w_str = xbmc.getInfoLabel('VideoPlayer.VideoWidth') or ''
-                    h_str = xbmc.getInfoLabel('VideoPlayer.VideoHeight') or ''
-                    w = int(w_str) if w_str.isdigit() else 0
-                    h = int(h_str) if h_str.isdigit() else 0
-                    if not w or not h:
-                        vt = p.getVideoInfoTag() if hasattr(p, 'getVideoInfoTag') else None
-                        if vt:
-                            w = vt.getVideoWidth() if hasattr(vt, 'getVideoWidth') else 0
-                            h = vt.getVideoHeight() if hasattr(vt, 'getVideoHeight') else 0
-                    if w > 0 or h > 0:
-                        kodi_res = _classify_resolution(w, h)
-                        if kodi_res:
-                            xbmc.log("Multi Bridge: resolucion real confirmada por decodificador de Kodi (%dx%d) -> %s" % (w, h, kodi_res), xbmc.LOGINFO)
-                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
-                            try:
-                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
-                            except Exception:
-                                pass
-                            break
-                    res_lbl = (xbmc.getInfoLabel('VideoPlayer.VideoResolution') or '').strip()
-                    if res_lbl:
-                        kodi_res = _detect_resolution_from_text(res_lbl)
-                        if kodi_res:
-                            xbmc.log("Multi Bridge: resolucion detectada por VideoResolution (%s) -> %s" % (res_lbl, kodi_res), xbmc.LOGINFO)
-                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
-                            try:
-                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
-                            except Exception:
-                                pass
-                            break
-                except Exception:
-                    pass
-                xbmc.sleep(250)
-
-        threading.Thread(target=_detect_and_sync_player_resolution, daemon=True).start()
-
         # Asegurar el cierre inmediato del spinner de carga de Kodi (busydialog / extendedbusydialog)
         # al iniciar la reproducción para que no aparezca sobre el vídeo
         try:
@@ -1182,7 +1139,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     open_links = True
                                 else:
                                     curr_srv = _get_link_server_name(c_links[active_idx]) if active_idx < len(c_links) else ""
-                                    prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, meta=c_meta)
+                                    curr_qual = _format_quality(c_links[active_idx]) if active_idx < len(c_links) else ""
+                                    prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, current_quality=curr_qual, meta=c_meta)
                                     prompt_dlg.doModal()
                                     ans = prompt_dlg.selected
                                     next_ep_info = getattr(prompt_dlg, 'next_ep', None)
@@ -1207,7 +1165,10 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         pause_cooldown = time.time() + 4.0
 
                                 if open_links and p.isPlayingVideo():
-                                    dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True)
+                                    cur_mk = _get_media_key(c_meta, c_links[active_idx] if active_idx < len(c_links) else None) or media_key
+                                    cur_failed_sigs = _get_session_failed_signatures(media_key=cur_mk, meta=c_meta)
+                                    cur_failed_links = {l for l in c_links if getattr(l, 'bridge_failed', False) or (_get_link_unique_id(l) in cur_failed_sigs)}
+                                    dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True, failed_links=cur_failed_links)
                                     dlg.doModal()
                                     chosen_idx = dlg.selected
                                     del dlg
@@ -1218,8 +1179,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
                                         switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time)
                                         if switched:
+                                            chosen_l = c_links[chosen_idx]
+                                            srv_n = _get_link_server_name(chosen_l) or 'Servidor'
+                                            is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
+                                            switch_ok = _verify_playback_started(is_torrent=is_t)
+                                            if not switch_ok:
+                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                show_floating_links_dialog()
                                             return
                                     else:
+                                        _clear_session_failed_links(cur_mk)
+                                        for _l in c_links:
+                                            try: setattr(_l, 'bridge_failed', False)
+                                            except Exception: pass
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
                                             try: p.pause()
                                             except: pass
@@ -1269,6 +1241,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             # El usuario pulsó Stop, volvió atrás o vio el final: parada limpia
             xbmc.log("Multi Bridge: parada normal voluntaria o finalizado. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
             remove_continue_watching_record(media_key)
+            _clear_session_failed_links(media_key)
         else:
             # Cierre forzado o interrupción inesperada de Kodi
             xbmc.log("Multi Bridge: parada abrupta/interrupción inesperada detectada. Preservando en Continuar viendo.", xbmc.LOGINFO)
@@ -2894,6 +2867,112 @@ def _get_link_server_name(link):
 
     return srv.capitalize()
 
+# --------------------------------------------------------------------------------------------------
+# Gestion de Enlaces Fallidos Persistentes por Sesion de Medios
+# Permite que un enlace que fallo antes o durante la reproduccion permanezca marcado como [FALLIDO]
+# --------------------------------------------------------------------------------------------------
+_SESSION_FAILED_LINKS = {}
+
+def _get_link_unique_id(link):
+    if not link:
+        return ''
+    url = _safe_str(getattr(link, 'url', '')).strip().lower()
+    srv = _get_link_server_name(link).strip().lower()
+    ch = _safe_str(getattr(link, 'channel', '')).strip().lower()
+    data_url = _safe_str(getattr(link, 'data_url', '')).strip().lower()
+    title = _safe_str(getattr(link, 'title', '')).strip().lower()
+    if url:
+        return '%s|%s|%s' % (srv, ch, url)
+    if data_url:
+        return '%s|%s|%s' % (srv, ch, data_url)
+    return '%s|%s|%s' % (srv, ch, title)
+
+def _get_session_failed_signatures(media_key=None, meta=None):
+    global _SESSION_FAILED_LINKS
+    mk = str(media_key or (meta and _get_media_key(meta)) or '').strip()
+    if not mk:
+        try:
+            mk = str(xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or '').strip()
+        except Exception:
+            pass
+    sigs = set()
+    if mk and mk in _SESSION_FAILED_LINKS:
+        sigs.update(_SESSION_FAILED_LINKS[mk].get('signatures', set()))
+    try:
+        win = xbmcgui.Window(10000)
+        win_mk = win.getProperty('BridgeMulti.FailedMediaKey')
+        if win_mk and (not mk or win_mk == mk):
+            raw = win.getProperty('BridgeMulti.FailedSignatures')
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    sigs.update(data)
+    except Exception:
+        pass
+    return sigs
+
+def _record_session_failed_link(link, index=None, media_key=None, meta=None):
+    global _SESSION_FAILED_LINKS
+    mk = str(media_key or (meta and _get_media_key(meta)) or '').strip()
+    if not mk:
+        try:
+            mk = str(xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or '').strip()
+        except Exception:
+            pass
+    if not link:
+        return
+    try:
+        setattr(link, 'bridge_failed', True)
+    except Exception:
+        pass
+    sig = _get_link_unique_id(link)
+    if not mk:
+        mk = 'default_media'
+
+    if mk not in _SESSION_FAILED_LINKS:
+        _SESSION_FAILED_LINKS[mk] = {'signatures': set(), 'indices': set(), 'objects': set()}
+
+    if sig:
+        _SESSION_FAILED_LINKS[mk]['signatures'].add(sig)
+    if index is not None and isinstance(index, int):
+        _SESSION_FAILED_LINKS[mk]['indices'].add(index)
+    _SESSION_FAILED_LINKS[mk]['objects'].add(link)
+
+    try:
+        win = xbmcgui.Window(10000)
+        win.setProperty('BridgeMulti.FailedMediaKey', mk)
+        win.setProperty('BridgeMulti.FailedSignatures', json.dumps(list(_SESSION_FAILED_LINKS[mk]['signatures'])))
+    except Exception:
+        pass
+
+def _clear_session_failed_links(media_key=None):
+    global _SESSION_FAILED_LINKS, _RAM_SEARCH_CACHE
+    try:
+        if media_key:
+            mk = str(media_key).strip()
+            _SESSION_FAILED_LINKS.pop(mk, None)
+        else:
+            _SESSION_FAILED_LINKS.clear()
+    except Exception:
+        pass
+    try:
+        win = xbmcgui.Window(10000)
+        win.clearProperty('BridgeMulti.FailedMediaKey')
+        win.clearProperty('BridgeMulti.FailedSignatures')
+        win.setProperty('BridgeMulti.FailedMediaKey', '')
+        win.setProperty('BridgeMulti.FailedSignatures', '')
+    except Exception:
+        pass
+    try:
+        if _RAM_SEARCH_CACHE and isinstance(_RAM_SEARCH_CACHE.get('links'), list):
+            for l in _RAM_SEARCH_CACHE['links']:
+                try:
+                    setattr(l, 'bridge_failed', False)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 def _format_language(link):
     lang = getattr(link, 'language', '')
     if isinstance(lang, list): lang = ' / '.join([_safe_str(l) for l in lang])
@@ -2980,24 +3059,40 @@ def _format_quality(link):
     if any(c in ch_name for c in ('cinecalidad', 'granpelis', 'soloencine')):
         return '1080p'
 
-    # Servidores de alta fidelidad que en sitios de streaming alojan 1080p salvo indicacion contraria:
-    srv_name = (_safe_str(getattr(link, 'server', '')) or _get_link_server_name(link)).lower()
-    if srv_name in ('mega', '1fichier') and ('HD' in combined or not any(x in combined for x in ('720', '480', 'CAM'))):
+    # Servidores de alta fidelidad y directos que en sitios de streaming alojan 1080p (Full HD)
+    srv_name = _get_link_server_name(link).strip().lower()
+    streaming_hosts_1080 = (
+        'streamwish', 'strwish', 'swish', 'mega', '1fichier', 'filemoon', 'voe',
+        'vidhide', 'vidhideplus', 'vidhidepro', 'turbovid', 'turboviplay', 'fastream',
+        'doodstream', 'dood', 'mixdrop', 'uqload', 'vidmoly', 'supervideo',
+        'filelions', 'lulustream', 'waaw', 'netu', 'upstream', 'wolfstream',
+        'hexupload', 'okru', 'kinoger', 'gamovideo', 'streamtape'
+    )
+
+    if _has_4k_token(combined) or '2160' in combined:
+        return '4K'
+    if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or re.search(r'\b1080\b', combined):
+        return '1080p'
+    if '720P' in combined or re.search(r'\b720\b', combined):
+        return '720p'
+    if '480P' in combined or re.search(r'\b480\b', combined) or 'SD' in combined or 'DVD' in combined or 'DVDRIP' in combined:
+        return '480p'
+    if '360P' in combined or re.search(r'\b360\b', combined):
+        return '360p'
+    if '240P' in combined or re.search(r'\b240\b', combined):
+        return '240p'
+    if 'CAM' in combined or re.search(r'\bTS\b', combined) or 'TELESYNC' in combined:
+        return 'CAM'
+
+    # En streaming moderno web, 'HD' o 'HDRIP' o 'WEB-DL' sin 720 corresponde a Full HD 1080p
+    if re.search(r'\bHD\b', combined) or 'HDRIP' in combined or 'HD-RIP' in combined or 'WEBRIP' in combined or 'WEB-DL' in combined:
         return '1080p'
 
-    if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or '1080' in combined:
+    # Servidores directos reconocidos: almacenan copias Full HD 1080p por defecto
+    if srv_name in streaming_hosts_1080:
         return '1080p'
-    if '720P' in combined or 'HD' in combined:
-        return '720p'
-    if '480P' in combined or '480' in combined or 'SD' in combined or 'DVD' in combined or 'WEBRIP' in combined or 'DVDRIP' in combined or 'RIP' in combined:
-        return '480p'
-    if '360P' in combined or '360' in combined:
-        return '360p'
-    if '240P' in combined or '240' in combined:
-        return '240p'
-    if 'CAM' in combined or 'TS' in combined or 'TELESYNC' in combined:
-        return 'CAM'
-    return '720p'
+
+    return '1080p'
 
 def _get_link_quality_score(link, pref_quality=0):
     if _is_torrent_link(link):
@@ -6313,9 +6408,14 @@ def _serialize_item(it):
         except: pass
     return d
 
-def _deserialize_item(d, engine='alfa'):
-    if not d: return None
+def _deserialize_item(d, engine=None):
+    if not d or not isinstance(d, dict): return None
+    if not engine or engine not in ('alfa', 'balandro'):
+        engine = 'balandro' if (_is_engine_installed('balandro') and not _is_engine_installed('alfa')) else 'alfa'
     mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
+    if not mods:
+        alt = 'balandro' if engine == 'alfa' else 'alfa'
+        mods = _get_balandro_modules() if alt == 'balandro' else _get_alfa_modules()
     if not mods: return None
     Item = mods['Item']
     InfoLabels = mods['InfoLabels']
@@ -6325,13 +6425,14 @@ def _deserialize_item(d, engine='alfa'):
         try: setattr(it, k, v)
         except: pass
     if 'infoLabels' in it.__dict__ and not isinstance(it.__dict__['infoLabels'], InfoLabels):
-        it.__dict__['infoLabels'] = InfoLabels(it.__dict__['infoLabels'])
+        try: it.__dict__['infoLabels'] = InfoLabels(it.__dict__['infoLabels'])
+        except Exception: pass
     return it
 
 def _deserialize_item_fast(Item, InfoLabels, d):
     """Igual que _deserialize_item pero con las clases ya resueltas: evita
     recargar los modulos del motor una vez por enlace al pintar la lista."""
-    if not d or not Item: return None
+    if not d or not isinstance(d, dict) or not Item: return None
     it = Item()
     it.__dict__.update(d)
     if 'infoLabels' in it.__dict__ and InfoLabels and not isinstance(it.__dict__['infoLabels'], InfoLabels):
@@ -7398,427 +7499,17 @@ def _verify_remaining_preloaded_impl():
 
 
 def show_links_as_directory():
+    """Redirecciona siempre a la ventana personalizada flotante para 0% carga de CPU."""
     global _search_in_progress, _links_view_active
     _search_in_progress = False
     _links_view_active = True
     _apply_silence_all()
-    xbmc.log("Multi Bridge: show_links_as_directory llamado", xbmc.LOGINFO)
-    links = []
-    matched_item = None
-    meta = {}
-    engine = 'alfa'
-
-    _req_tmdb = get_param('tmdb') or tmdb_id or ''
-    _req_s = get_param('season') or season
-    _req_e = get_param('episode') or episode
-
-    # 1. Acceso instantáneo a caché en RAM (0ms disk lag)
-    ram_hit = _get_ram_search_cache(_req_tmdb, _req_s, _req_e)
-    if ram_hit and ram_hit.get('links'):
-        links = list(ram_hit.get('links', []))
-        matched_item = ram_hit.get('matched_item')
-        meta = dict(ram_hit.get('meta', {}))
-        engine = ram_hit.get('engine', 'alfa') or 'alfa'
-        xbmc.log("Multi Bridge: show_links_as_directory usando RAM cache directa (0ms disk, %d enlaces)" % len(links), xbmc.LOGINFO)
-    else:
-        # Fallback a disco con lectura atómica y reintentos automáticos
-        cache = _read_search_cache_atomic(max_attempts=6, delay=0.05)
-        if cache and isinstance(cache, dict):
-            try:
-                engine = cache.get('engine', 'alfa') or 'alfa'
-                _raw_links = cache.get('links', []) or []
-                _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
-                if _d_mods:
-                    _d_Item, _d_Info = _d_mods['Item'], _d_mods['InfoLabels']
-                    links = [_deserialize_item_fast(_d_Item, _d_Info, lnk) for lnk in _raw_links]
-                    matched_item = _deserialize_item_fast(_d_Item, _d_Info, cache.get('item'))
-                else:
-                    links = [_deserialize_item(lnk, engine) for lnk in _raw_links]
-                    matched_item = _deserialize_item(cache.get('item'), engine)
-                links = [l for l in links if l is not None]
-                meta = cache.get('meta', {}) or {}
-                if links:
-                    _store_ram_search_cache(links, matched_item, meta, engine)
-                    xbmc.log("Multi Bridge: show_links_as_directory cargo %d enlaces desde cache de disco" % len(links), xbmc.LOGINFO)
-            except Exception as e:
-                xbmc.log("Multi Bridge: error deserializando cache de disco: %s" % e, xbmc.LOGWARNING)
-
-    # Rescate de emergencia desde RAM cache si no coincidieron estrictamente los parametros
-    if not links and _RAM_SEARCH_CACHE and _RAM_SEARCH_CACHE.get('links'):
-        links = list(_RAM_SEARCH_CACHE.get('links', []))
-        matched_item = _RAM_SEARCH_CACHE.get('matched_item')
-        meta = dict(_RAM_SEARCH_CACHE.get('meta', {}))
-        engine = _RAM_SEARCH_CACHE.get('engine', 'alfa') or 'alfa'
-        xbmc.log("Multi Bridge: show_links_as_directory rescate desde RAM cache global (%d enlaces)" % len(links), xbmc.LOGINFO)
-
-    # Si por colisión de refresco simultáneo aún no se leyeron enlaces, reintentar con micro-espera
-    if not links:
-        for _retry in range(5):
-            time.sleep(0.08)
-            if _RAM_SEARCH_CACHE and _RAM_SEARCH_CACHE.get('links'):
-                links = list(_RAM_SEARCH_CACHE.get('links', []))
-                matched_item = _RAM_SEARCH_CACHE.get('matched_item')
-                meta = dict(_RAM_SEARCH_CACHE.get('meta', {}))
-                engine = _RAM_SEARCH_CACHE.get('engine', 'alfa') or 'alfa'
-                xbmc.log("Multi Bridge: show_links_as_directory recuperado en reintento %d (%d enlaces)" % (_retry + 1, len(links)), xbmc.LOGINFO)
-                break
-            _retry_cache = _read_search_cache_atomic(max_attempts=3, delay=0.04)
-            if _retry_cache and _retry_cache.get('links'):
-                try:
-                    engine = _retry_cache.get('engine', 'alfa') or 'alfa'
-                    _d_mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
-                    _raw = _retry_cache.get('links', []) or []
-                    if _d_mods:
-                        links = [_deserialize_item_fast(_d_mods['Item'], _d_mods['InfoLabels'], l) for l in _raw]
-                        matched_item = _deserialize_item_fast(_d_mods['Item'], _d_mods['InfoLabels'], _retry_cache.get('item'))
-                    else:
-                        links = [_deserialize_item(l, engine) for l in _raw]
-                        matched_item = _deserialize_item(_retry_cache.get('item'), engine)
-                    links = [l for l in links if l is not None]
-                    meta = _retry_cache.get('meta', {}) or {}
-                    if links:
-                        _store_ram_search_cache(links, matched_item, meta, engine)
-                        xbmc.log("Multi Bridge: show_links_as_directory recuperado desde disco en reintento %d (%d enlaces)" % (_retry + 1, len(links)), xbmc.LOGINFO)
-                        break
-                except Exception: pass
-
-    if not links:
-        xbmcgui.Dialog().notification('Multi Bridge', 'No hay enlaces en caché', '', 3000)
-        xbmcplugin.endOfDirectory(handle, succeeded=False)
-        return
-
-    _max_list = _get_int_setting('max_links_list', 40)
-    if _max_list < 5: _max_list = 5
-    _total_links = len(links)
-    _has_more = _total_links > _max_list
-    _remaining_links = _total_links - _max_list if _has_more else 0
-    if _has_more:
-        xbmc.log(f"Multi Bridge: mostrando primeros {_max_list} de {_total_links} enlaces nativos ({_remaining_links} restantes en ventana flotante)", xbmc.LOGINFO)
-        links = links[:_max_list]
-
-    # 2. Plantilla compartida de metadatos y arte (calculada 1 sola vez fuera del bucle)
-    s_int = int(meta.get('season')) if meta.get('season') and str(meta.get('season')).isdigit() else None
-    e_int = int(meta.get('episode')) if meta.get('episode') and str(meta.get('episode')).isdigit() else None
-    is_s = bool(s_int is not None and e_int is not None)
-    media_type = 'episode' if is_s else 'movie'
-
-    poster_val = meta.get('poster') or meta.get('thumbnail') or getattr(matched_item, 'thumbnail', '') or alfa_icon
-    fanart_val = meta.get('fanart') or getattr(matched_item, 'fanart', '') or ''
-    thumb_val = meta.get('thumbnail') or meta.get('poster') or getattr(matched_item, 'thumbnail', '') or alfa_icon
-    if len(_safe_str(thumb_val)) > 1000: thumb_val = alfa_icon
-    if len(_safe_str(poster_val)) > 1000: poster_val = alfa_icon
-    if len(_safe_str(fanart_val)) > 1000: fanart_val = ''
-
-    tmdb_val = meta.get('tmdb') or getattr(matched_item, 'tmdb', '') or _req_tmdb or ''
-    episode_still_val = ''
-    if is_s and tmdb_val and s_int is not None and e_int is not None:
+    show_floating_links_dialog()
+    if handle >= 0:
         try:
-            episode_still_val = _get_episode_still(tmdb_val, s_int, e_int)
-        except Exception:
-            episode_still_val = ''
-    if episode_still_val:
-        thumb_val = episode_still_val
-        meta['thumbnail'] = episode_still_val
-    imdb_val = meta.get('imdb') or getattr(matched_item, 'imdb', '') or ''
-    tvdb_val = meta.get('tvdb') or getattr(matched_item, 'tvdb', '') or ''
-    showname_val = _safe_str(meta.get('showname') or getattr(matched_item, 'showname', '') or '')
-    year_val = meta.get('year') or meta.get('showyear') or getattr(matched_item, 'year', None)
-    try: year_int = int(year_val) if year_val else None
-    except: year_int = None
-
-    duration_val = meta.get('duration') or meta.get('runtime') or getattr(matched_item, 'duration', 0)
-    try: duration_int = int(duration_val) if duration_val else None
-    except: duration_int = None
-
-    clearlogo_val = meta.get('clearlogo') or get_param('clearlogo') or getattr(matched_item, 'clearlogo', '') or ''
-    if clearlogo_val in ('_', 'None', 'none') or len(_safe_str(clearlogo_val)) > 1000:
-        clearlogo_val = ''
-    if not clearlogo_val:
-        clearlogo_val = xbmcgui.Window(10000).getProperty('MultiBridge.ClearLogo') or xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.ClearLogo') or ''
-    if not clearlogo_val and tmdb_val and not links:
-        clearlogo_val = _get_clearlogo(tmdb_val, is_s)
-
-    genres_val = meta.get('genre') or get_param('genre') or getattr(matched_item, 'genre', '') or ''
-    genres_list = []
-    if isinstance(genres_val, list):
-        genres_list = [str(g).strip() for g in genres_val if str(g).strip() and str(g).strip() not in ('_', 'None')]
-    elif isinstance(genres_val, str) and genres_val.strip() and genres_val.strip() not in ('_', 'None'):
-        if '/' in genres_val:
-            genres_list = [g.strip() for g in genres_val.split('/') if g.strip()]
-        elif ',' in genres_val:
-            genres_list = [g.strip() for g in genres_val.split(',') if g.strip()]
-        else:
-            genres_list = [genres_val.strip()]
-    if not genres_list and tmdb_val:
-        try:
-            genres_list = _get_genres(tmdb_val, is_s)
-        except Exception:
-            genres_list = []
-    genres_str = " / ".join(genres_list) if genres_list else ""
-
-    director_val = _clean_single_director(meta.get('director') or get_param('director') or getattr(matched_item, 'director', ''))
-    if not director_val and tmdb_val:
-        try:
-            _d_list = _get_directors(tmdb_val, is_s)
-            if _d_list:
-                director_val = _clean_single_director(_d_list[0])
-        except Exception:
-            director_val = ""
-    director_str = director_val or ""
-    director_list = [director_str] if director_str else []
-
-    if is_s and (episode_still_val or thumb_val):
-        ep_dir_art = episode_still_val or thumb_val
-        base_art = {
-            'thumb': ep_dir_art,
-            'icon': ep_dir_art,
-            'poster': ep_dir_art,
-            'still': ep_dir_art,
-            'landscape': ep_dir_art,
-            'fanart': fanart_val
-        }
-        if poster_val:
-            base_art['tvshow.poster'] = poster_val
-            base_art['season.poster'] = poster_val
-    else:
-        base_art = {'thumb': thumb_val, 'icon': thumb_val, 'poster': poster_val, 'fanart': fanart_val}
-    if clearlogo_val:
-        base_art['clearlogo'] = clearlogo_val
-        base_art['logo'] = clearlogo_val
-        if is_s:
-            base_art['tvshow.clearlogo'] = clearlogo_val
-            base_art['tvshow.logo'] = clearlogo_val
-
-    plot_text = _safe_str(meta.get('plot') or getattr(matched_item, 'plot', '') or '')[:2000]
-    tagline_text = _safe_str(meta.get('tagline') or '')
-
-    main_title = _safe_str(meta.get('title') or meta.get('title_es') or meta.get('title_lat') or getattr(matched_item, 'title', '') or getattr(matched_item, 'contentTitle', '') or '')
-    header_title = showname_val if (is_s and showname_val) else main_title
-
-    base_unique = {}
-    if tmdb_val:
-        base_unique['tmdb'] = str(tmdb_val)
-        if is_s: base_unique['tvshow.tmdb'] = str(tmdb_val)
-    if imdb_val:
-        base_unique['imdb'] = str(imdb_val)
-        if is_s: base_unique['tvshow.imdb'] = str(imdb_val)
-    if tvdb_val:
-        base_unique['tvdb'] = str(tvdb_val)
-        if is_s: base_unique['tvshow.tvdb'] = str(tvdb_val)
-
-    # Marcador de reanudación
-    media_key_main = _get_media_key(meta, matched_item)
-    saved_bm = get_bookmark(media_key_main, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
-    bm_str = ''
-    show_bm_in_links = (_bridge_addon.getSetting('show_resume_in_links') == 'true')
-    if saved_bm and show_bm_in_links:
-        r_sec = float(saved_bm.get('resume_time', 0))
-        m_mins = int(r_sec // 60); m_secs = int(r_sec % 60); m_hrs = m_mins // 60; m_mins = m_mins % 60
-        bm_str = (' [COLOR orange][Reanudar: %d:%02d:%02d][/COLOR]' % (m_hrs, m_mins, m_secs)) if m_hrs else (' [COLOR orange][Reanudar: %d:%02d][/COLOR]' % (m_mins, m_secs))
-
-    # Menú contextual pre-armado
-    _other_engine = 'balandro' if engine == 'alfa' else 'alfa'
-    _other_name   = 'Balandro' if engine == 'alfa' else 'Alfa'
-    _rs_url  = 'plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s' % _other_engine
-    _v_url   = 'plugin://plugin.video.bridge.multi/?action=verify_links'
-    _force_url = 'plugin://plugin.video.bridge.multi/?action=force_search'
-    verified_only = meta.get('verified_only', False)
-
-    base_ctx_items = []
-    base_ctx_items.append(('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'RunPlugin(%s)' % _force_url))
-    if not (is_s and _other_engine == 'alfa') and _is_engine_installed(_other_engine):
-        base_ctx_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % _other_name, 'RunPlugin(%s)' % _rs_url))
-    if not verified_only:
-        base_ctx_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'RunPlugin(%s)' % _v_url))
-
-    # 3. Construcción ultra-rápida de ListItems
-    _dir_listing = []
-    for idx, lnk in enumerate(links):
-        try:
-            _url = _safe_str(getattr(lnk, 'url', ''))
-            if len(_url) > 1500:
-                continue
-            srv = _get_link_server_name(lnk)
-            lang = _format_language(lnk)
-            qual = _format_quality(lnk)
-            ch = _format_channel(lnk)
-            _weak_str = ' [COLOR orange][Dudoso][/COLOR]' if getattr(lnk, 'bridge_weak', False) else ''
-
-            is_tor = (srv.strip().lower() == 'torrent' or _is_torrent_link(lnk))
-            if is_tor:
-                srv_tag = '[B][COLOR cyan]TORRENT[/COLOR][/B]'
-                if srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', ''):
-                    srv_tag += '  [B][COLOR deepskyblue]%s[/COLOR][/B]' % srv
-            else:
-                srv_tag = '[B][COLOR deepskyblue]%s[/COLOR][/B]' % (srv or 'Directo')
-
-            mid_parts = []
-            if lang: mid_parts.append('[COLOR lime]%s[/COLOR]' % lang)
-            if qual and qual != 'N/A': mid_parts.append('[COLOR gold]%s[/COLOR]' % qual)
-            mid = ' | '.join(mid_parts)
-            if mid:
-                lbl = '%s | %s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, mid, ch, _weak_str, bm_str)
-            else:
-                lbl = '%s | [COLOR grey](%s)[/COLOR]%s%s' % (srv_tag, ch, _weak_str, bm_str)
-
-            media_key_val = media_key_main or _get_media_key(meta, matched_item) or ''
-            play_url = 'plugin://plugin.video.bridge.multi/?action=play_single_link&index=%d&engine=%s&media_key=%s' % (idx, engine, media_key_val)
-            li = xbmcgui.ListItem(label=lbl)
-            li.setPath(play_url)
-            li.setArt(base_art)
-            li.setLabel(lbl)
-            li.setLabel2(ch)
-            li.setProperty('title', lbl)
-            li.setProperty('IsPlayable', 'true')
-            if not saved_bm:
-                li.setProperty('StartOffset', '0')
-                li.setProperty('ResumeTime', '0')
-            if is_s and (episode_still_val or thumb_val):
-                _lp_art = episode_still_val or thumb_val
-                li.setProperty('thumbnail', _lp_art)
-                li.setProperty('Art(thumb)', _lp_art)
-                li.setProperty('poster', _lp_art)
-                li.setProperty('Art(poster)', _lp_art)
-                li.setProperty('still', _lp_art)
-                li.setProperty('Art(still)', _lp_art)
-                li.setProperty('landscape', _lp_art)
-                li.setProperty('Art(landscape)', _lp_art)
-            if clearlogo_val:
-                li.setProperty('clearlogo', clearlogo_val)
-                li.setProperty('Art(clearlogo)', clearlogo_val)
-                li.setProperty('logo', clearlogo_val)
-                li.setProperty('Art(logo)', clearlogo_val)
-                if is_s:
-                    li.setProperty('tvshow.clearlogo', clearlogo_val)
-                    li.setProperty('Art(tvshow.clearlogo)', clearlogo_val)
-            if genres_str:
-                li.setProperty('genre', genres_str)
-                li.setProperty('Genre', genres_str)
-            if director_str:
-                li.setProperty('director', director_str)
-                li.setProperty('Director', director_str)
-            if header_title:
-                li.setProperty('TvShowTitle', header_title)
-                li.setProperty('tvshowtitle', header_title)
-            if not is_s:
-                li.setProperty('DBTYPE', 'movie')
-            else:
-                li.setProperty('DBTYPE', 'episode')
-            if base_ctx_items:
-                li.addContextMenuItems(base_ctx_items)
-
-            try:
-                vt = li.getVideoInfoTag()
-                if vt:
-                    vt.setTitle(lbl)
-                    vt.setMediaType(media_type)
-                    if plot_text: vt.setPlot(plot_text)
-                    if year_int: vt.setYear(year_int)
-                    if duration_int: vt.setDuration(duration_int)
-                    if tagline_text: vt.setTagLine(tagline_text)
-                    if is_s:
-                        if showname_val: vt.setTvShowTitle(showname_val)
-                        if s_int is not None: vt.setSeason(s_int)
-                        if e_int is not None: vt.setEpisode(e_int)
-                    else:
-                        if header_title: vt.setTvShowTitle(header_title)
-                    if base_unique:
-                        vt.setUniqueIDs(base_unique, 'tmdb' if tmdb_val else 'imdb')
-                    if genres_list:
-                        try: vt.setGenres(genres_list)
-                        except Exception: pass
-                    if director_list:
-                        try: vt.setDirectors(director_list)
-                        except Exception: pass
-            except Exception:
-                pass
-
-            _dir_listing.append((play_url, li, False))
-        except Exception:
-            continue
-
-    if clearlogo_val:
-        try:
-            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
-            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.CropImage', clearlogo_val)
-            xbmcgui.Window(10000).setProperty('TMDbHelper.Player.ClearLogo', clearlogo_val)
-            xbmcgui.Window(10000).setProperty('Player.Art(clearlogo)', clearlogo_val)
-            xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', clearlogo_val)
+            xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
         except Exception:
             pass
-
-    if episode_still_val:
-        try:
-            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Thumb', episode_still_val)
-            xbmcgui.Window(10000).setProperty('Player.Art(thumb)', episode_still_val)
-            xbmcgui.Window(10000).setProperty('Player.Art(poster)', episode_still_val)
-            xbmcgui.Window(10000).setProperty('VideoPlayer.Cover', episode_still_val)
-            xbmcgui.Window(10000).setProperty('MultiBridge.EpisodeStill', episode_still_val)
-        except Exception:
-            pass
-    if genres_str:
-        try:
-            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Genre', genres_str)
-            xbmcgui.Window(10000).setProperty('VideoPlayer.Genre', genres_str)
-            xbmcgui.Window(10000).setProperty('MultiBridge.Genre', genres_str)
-        except Exception:
-            pass
-    if director_str:
-        try:
-            xbmcgui.Window(10000).setProperty('TMDbHelper.ListItem.Director', director_str)
-            xbmcgui.Window(10000).setProperty('VideoPlayer.Director', director_str)
-            xbmcgui.Window(10000).setProperty('MultiBridge.Director', director_str)
-        except Exception:
-            pass
-
-    # Si hay mas enlaces que el limite max_links_list, anadir elemento para abrir en la ventana personalizada
-    if _has_more:
-        _floating_url = 'plugin://plugin.video.bridge.multi/?action=floating_links&offset=%d' % _max_list
-        _li_more = xbmcgui.ListItem(label='[COLOR deepskyblue][B]Siguientes enlaces (%d restantes) >> [COLOR gold](Ver en ventana)[/COLOR][/B][/COLOR]' % _remaining_links)
-        _li_more.setProperty('IsPlayable', 'false')
-        try: _li_more.setArt(base_art)
-        except: pass
-        _dir_listing.append((_floating_url, _li_more, False))
-
-    # Opción 3: Si proviene de sesión precargada o autoplay y hay enlaces sin verificar, añadir fila interactiva al final
-    try:
-        _pending_raw = []
-        if _RAM_SEARCH_CACHE and _RAM_SEARCH_CACHE.get('unverified_links'):
-            _pending_raw = _RAM_SEARCH_CACHE.get('unverified_links')
-        else:
-            _c_disk = _read_search_cache_atomic()
-            if _c_disk and isinstance(_c_disk, dict):
-                _pending_raw = _c_disk.get('unverified_links', [])
-        if _pending_raw:
-            _verify_more_url = 'plugin://plugin.video.bridge.multi/?action=verify_remaining_preloaded'
-            _more_lbl = '[COLOR gold][B]Comprobar y cargar más enlaces (%d disponibles)...[/B][/COLOR]' % len(_pending_raw)
-            _li_verify_more = xbmcgui.ListItem(label=_more_lbl)
-            _li_verify_more.setProperty('IsPlayable', 'false')
-            _li_verify_more.setArt(base_art)
-            _dir_listing.append((_verify_more_url, _li_verify_more, False))
-    except Exception as _vme:
-        xbmc.log('Multi Bridge: error comprobando unverified_links: %s' % str(_vme), xbmc.LOGDEBUG)
-
-    if _dir_listing:
-        try:
-            xbmcplugin.addDirectoryItems(handle, _dir_listing)
-        except Exception:
-            for _u, _li, _f in _dir_listing:
-                try: xbmcplugin.addDirectoryItem(handle, _u, _li, _f)
-                except: pass
-
-    xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
-    if header_title:
-        try: xbmcplugin.setPluginCategory(handle, header_title)
-        except Exception: pass
-    xbmcplugin.setContent(handle, 'episodes')
-    _apply_saved_view_mode()
-    # Si la ventana 10025 ya está visible y en nuestro listado, es un refresco dinámico: updateListing=True
-    _is_refresh = _in_own_list()
-    xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=_is_refresh, cacheToDisc=False)
-    _apply_saved_view_mode()
-    _start_view_mode_monitor()
-
 # ---------------------------------------------------------
 # Playback Handler (Native Delegates for Alfa & Balandro)
 # ---------------------------------------------------------
@@ -8895,15 +8586,6 @@ def _fast_autoplay_search_and_play(engine, handle):
     xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
     player = xbmc.Player()
     player.play(fast_url, fast_li)
-
-    # Actualizar la pantalla de fondo con la lista de enlaces mientras se reproduce el video
-    _cur_tmdb = str(p_tmdb or meta.get('tmdb') or '')
-    if _cur_tmdb:
-        _ts = int(time.time())
-        _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
-        if is_series and p_season and p_episode:
-            _win_url += '&season=%s&episode=%s' % (p_season, p_episode)
-        _open_links_view(_win_url)
 
     # Iniciar monitor de reproducción (para bookmarks y detección de pausa)
     start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
@@ -11498,12 +11180,13 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     ACTION_MOUSE_MOVE       = 107
     ACTION_BACKSPACE   = 110
 
-    def __init__(self, current_server_name="", meta=None, is_test=False):
+    def __init__(self, current_server_name="", current_quality="", meta=None, is_test=False):
         super().__init__()
         self._is_closed = False
         self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, 2=Siguiente capitulo, -1=Cerrar/Atras
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
         self.server_name = current_server_name or "Actual"
+        self.current_quality = current_quality or ""
         self.meta = meta or {}
         self.is_test = is_test
         self.next_ep = _get_next_episode_info(self.meta)
@@ -11673,7 +11356,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             srv = srv[:12] + '..'
 
         # Encabezado con modo tactil / compacto adaptativo
-        qual_active = xbmcgui.Window(10000).getProperty('MultiBridge.ActiveLinkQuality') or ''
+        qual_active = getattr(self, 'current_quality', '') or ''
         if not qual_active and hasattr(self, 'current_link') and self.current_link:
             qual_active = _format_quality(self.current_link)
         if qual_active and qual_active != 'N/A':
@@ -11940,12 +11623,14 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
     def __init__(self, links, current_index=0, meta=None, engine='alfa', is_playback=False, failed_links=None, initial_tab=None, offset=0):
         super().__init__()
         self._is_closed = False
-        self.all_links = list(links or [])
+        self.all_links = [l for l in (links or []) if l is not None and getattr(l, 'url', None)]
         self.meta = meta or {}
         self.engine = engine or 'alfa'
         self.is_playback = is_playback
         self.selected = -1
         self.failed_links = set(failed_links or [])
+        mk = _get_media_key(self.meta) if self.meta else None
+        self.failed_signatures = _get_session_failed_signatures(media_key=mk, meta=self.meta)
         self.offset_count = offset
 
         # Separar en dos pestañas: 0 = Servidores Directos, 1 = Torrents
@@ -12084,12 +11769,22 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         return _get_addon_white_texture()
 
     def _format_link(self, lnk, is_playing=False, is_failed=False):
+        if not lnk:
+            return '[COLOR red]Directo[/COLOR]', 'N/A', '[COLOR red][FALLIDO][/COLOR]'
         srv = _get_link_server_name(lnk)
         lang = _format_language(lnk)
         qual = _format_quality(lnk)
         ch = _format_channel(lnk)
         weak = getattr(lnk, 'bridge_weak', False)
         is_tor = (srv.lower() == 'torrent' or _is_torrent_link(lnk))
+
+        if not is_failed:
+            sig = _get_link_unique_id(lnk)
+            is_failed = bool(
+                (lnk in self.failed_links) or
+                getattr(lnk, 'bridge_failed', False) or
+                (sig and sig in self.failed_signatures)
+            )
 
         if is_failed:
             if is_tor:
@@ -12604,7 +12299,13 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                 opts_items = [('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'force_search')]
                 if not (is_series and other_eng_id == 'alfa') and _is_engine_installed(other_eng_id):
                     opts_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name, 'other_engine'))
-                opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
+                is_already_verified = (
+                    _bridge_addon.getSetting('auto_verify_links') == 'true' or
+                    bool(self.meta.get('verified_only')) or
+                    not self.direct_links
+                )
+                if not is_already_verified:
+                    opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
 
                 sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', [o[0] for o in opts_items])
                 if 0 <= sel < len(opts_items):
@@ -12789,15 +12490,17 @@ def _load_cached_links_for_dialog(offset=0):
     try:
         ram = _get_ram_search_cache()
         if ram and ram.get('links'):
-            c_links = list(ram['links'])
-            c_matched = ram.get('matched_item')
-            c_meta = ram.get('meta', {}) or {}
-            c_engine = ram.get('engine', 'alfa') or 'alfa'
-            valid_links = [l for l in c_links if len(_safe_str(getattr(l, 'url', ''))) <= 1500]
-            if offset > 0 and offset < len(valid_links):
-                valid_links = valid_links[offset:]
-            xbmc.log("Multi Bridge: _load_cached_links_for_dialog RAM HIT -> %d enlaces (offset=%d)" % (len(valid_links), offset), xbmc.LOGINFO)
-            return valid_links, c_matched, c_meta, c_engine
+            c_links = [l for l in ram['links'] if l is not None and getattr(l, 'url', None)]
+            if c_links:
+                c_matched = ram.get('matched_item')
+                c_meta = ram.get('meta', {}) or {}
+                c_engine = ram.get('engine', 'alfa') or 'alfa'
+                valid_links = [l for l in c_links if len(_safe_str(getattr(l, 'url', ''))) <= 1500]
+                if offset > 0 and offset < len(valid_links):
+                    valid_links = valid_links[offset:]
+                if valid_links:
+                    xbmc.log("Multi Bridge: _load_cached_links_for_dialog RAM HIT -> %d enlaces (offset=%d)" % (len(valid_links), offset), xbmc.LOGINFO)
+                    return valid_links, c_matched, c_meta, c_engine
     except Exception as _re:
         xbmc.log("Multi Bridge: _load_cached_links_for_dialog ram check error: %s" % _re, xbmc.LOGDEBUG)
 
@@ -12810,11 +12513,17 @@ def _load_cached_links_for_dialog(offset=0):
         c_meta = cache.get('meta', {}) or {}
 
         raw_links = cache.get('links', []) or []
-        raw_valid = [l for l in raw_links if len(_safe_str((l or {}).get('url', ''))) <= 1500]
+        raw_valid = [l for l in raw_links if isinstance(l, dict) and l.get('url') and len(_safe_str(l.get('url', ''))) <= 1500]
+        if not raw_valid:
+            return [], None, {}, c_engine
         if offset > 0 and offset < len(raw_valid):
             raw_valid = raw_valid[offset:]
 
         _d_mods = _get_alfa_modules() if c_engine == 'alfa' else _get_balandro_modules()
+        if not _d_mods:
+            alt_eng = 'balandro' if c_engine == 'alfa' else 'alfa'
+            _d_mods = _get_balandro_modules() if alt_eng == 'balandro' else _get_alfa_modules()
+
         if _d_mods:
             _Item, _Info = _d_mods['Item'], _d_mods['InfoLabels']
             c_links = [_deserialize_item_fast(_Item, _Info, l) for l in raw_valid]
@@ -12823,6 +12532,7 @@ def _load_cached_links_for_dialog(offset=0):
             c_links = [_deserialize_item(l, c_engine) for l in raw_valid]
             c_matched = _deserialize_item(cache.get('item'), c_engine)
 
+        c_links = [l for l in (c_links or []) if l is not None and getattr(l, 'url', None)]
         return c_links, c_matched, c_meta, c_engine
     except Exception as e:
         xbmc.log('Multi Bridge: _load_cached_links_for_dialog error: ' + str(e), xbmc.LOGINFO)
@@ -12922,50 +12632,46 @@ def _verify_playback_started(is_torrent=False, timeout=None):
     p = xbmc.Player()
     mon = xbmc.Monitor()
     if timeout is None:
-        timeout = 35.0 if is_torrent else 22.0
+        timeout = 80.0 if is_torrent else 55.0
     start_t = time.time()
 
     while (time.time() - start_t) < timeout:
         if mon.abortRequested():
             return False
 
-        # Vídeo ya en reproducción real activa: éxito inmediato
+        # 1. Video ya en reproduccion real activa: exito inmediato
         if p.isPlayingVideo():
             return True
 
-        # Rastrear indicadores de que Kodi está activamente ocupado o cargando el stream
-        is_buffering = bool(xbmc.getCondVisibility("Player.Buffering"))
-        is_busy = bool(xbmc.getCondVisibility(
-            "Window.IsVisible(busydialog) | Window.IsVisible(busydialognocancel) | Window.IsVisible(progressdialog)"
-        ))
-        has_media = bool(xbmc.getCondVisibility("Player.HasMedia") or xbmc.getCondVisibility("Player.HasAudio") or xbmc.getCondVisibility("Player.HasVideo"))
-        is_playing = bool(p.isPlaying())
-        try:
-            has_playlist = (xbmc.PlayList(xbmc.PLAYLIST_VIDEO).size() > 0)
-        except Exception:
-            has_playlist = False
+        # 2. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
+        # Kodi muestra este dialogo modal nativo al fallar la reproduccion.
+        if xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
+            xbmc.log("Multi Bridge: detectada ventana de error de reproduccion de Kodi. Esperando a que el usuario presione Aceptar / OK...", xbmc.LOGINFO)
+            # Mantenerse en espera silenciosa mientras el cartel de Kodi siga en pantalla
+            while xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
+                if mon.abortRequested():
+                    return False
+                xbmc.sleep(80)
 
-        # Si Kodi está en búfer o mostrando la rueda de carga/progreso, continuar esperando
-        if is_buffering or is_busy:
-            if mon.waitForAbort(0.25):
-                return False
-            continue
-
-        # Solo abortar anticipadamente si ya pasó un tiempo mínimo prudencial (10s en directo, 15s en torrent)
-        # y Kodi ya no tiene nada en cola, ni en reproducción, ni ocupado
-        elapsed = time.time() - start_t
-        min_wait = 15.0 if is_torrent else 10.0
-        if elapsed > min_wait:
-            if not is_buffering and not is_busy and not has_media and not is_playing and not has_playlist:
-                xbmc.log("Multi Bridge: _verify_playback_started detecta fin de intento tras %.1fs (sin actividad ni medio)" % elapsed, xbmc.LOGINFO)
-                return False
-
-        if mon.waitForAbort(0.25):
+            # En el instante exacto en que el usuario presiona Aceptar / OK, el dialogo se cierra.
+            # Retornamos False de inmediato para que el llamador notifique y reabra la lista al instante.
+            xbmc.sleep(100)
+            xbmc.log("Multi Bridge: el usuario presiono Aceptar en la ventana de error de Kodi. Retornando fallo para reabrir ventana...", xbmc.LOGINFO)
             return False
 
+        if mon.waitForAbort(0.15):
+            return False
+
+    # Al expirar el tiempo de espera maximo, verificar si justo esta visible el dialogo
+    if xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
+        while xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
+            if mon.abortRequested():
+                return False
+            xbmc.sleep(80)
+        xbmc.sleep(100)
+        return False
+
     return bool(p.isPlayingVideo())
-
-
 def show_floating_links_dialog(offset=0):
     global _search_in_progress, _links_view_active
     _search_in_progress = False
@@ -13002,8 +12708,15 @@ def _show_floating_links_dialog_impl(offset=0):
         _show_bridge_notification('Multi Bridge', 'No hay enlaces disponibles', 3000)
         return False
 
+    media_key = _get_media_key(c_meta, c_links[0] if c_links else None)
+    failed_signatures = _get_session_failed_signatures(media_key=media_key, meta=c_meta)
     failed_links = set()
     failed_indices = set()
+    for idx, l in enumerate(c_links):
+        sig = _get_link_unique_id(l)
+        if getattr(l, 'bridge_failed', False) or (sig and sig in failed_signatures):
+            failed_links.add(l)
+            failed_indices.add(idx)
     last_tab = None
     next_suggested_idx = _current_playing_link_index if (is_playing and 0 <= _current_playing_link_index < len(c_links)) else 0
     was_playback = is_playing
@@ -13015,6 +12728,10 @@ def _show_floating_links_dialog_impl(offset=0):
         # Si todos los enlaces disponibles han fallado, notificar y salir
         if len(failed_indices) >= len(c_links) and len(c_links) > 0:
             _show_bridge_notification('Multi Bridge', 'Todos los enlaces probados han fallado', 3500)
+            _clear_session_failed_links(media_key)
+            for _l in c_links:
+                try: setattr(_l, 'bridge_failed', False)
+                except Exception: pass
             if was_playback and xbmc.getCondVisibility("Player.Paused") and p.isPlayingVideo():
                 try: p.pause()
                 except: pass
@@ -13049,7 +12766,11 @@ def _show_floating_links_dialog_impl(offset=0):
             return True
 
         if not (isinstance(chosen_idx, int) and chosen_idx >= 0):
-            # El usuario canceló o presionó Atrás
+            # El usuario canceló o presionó Atrás (cierre manual: limpiar fallidos para apertura limpia posterior)
+            _clear_session_failed_links(media_key)
+            for _l in c_links:
+                try: setattr(_l, 'bridge_failed', False)
+                except Exception: pass
             if was_playback and xbmc.getCondVisibility("Player.Paused") and p.isPlayingVideo():
                 try: p.pause()
                 except: pass
@@ -13079,11 +12800,12 @@ def _show_floating_links_dialog_impl(offset=0):
             return False
 
         # Enlace fallido: registrar y reabrir
-        failed_links.add(chosen_link)
-        failed_indices.add(chosen_idx)
+        if chosen_link:
+            failed_links.add(chosen_link)
+            failed_indices.add(chosen_idx)
+            _record_session_failed_link(chosen_link, index=chosen_idx, media_key=media_key, meta=c_meta)
 
         xbmc.log("Multi Bridge: enlace %d (%s) falló al reproducir. Reabriendo ventana..." % (chosen_idx + 1, srv_name), xbmc.LOGWARNING)
-        _show_bridge_notification('Multi Bridge', 'Fallo en [B]%s[/B]. Reabriendo lista...' % srv_name, 3000)
 
         # Buscar el siguiente enlace no fallido en la pestaña activa
         active_list = []
@@ -13109,29 +12831,16 @@ def _show_floating_links_dialog_impl(offset=0):
         elif next_suggested_idx >= len(c_links):
             next_suggested_idx = 0
 
-        xbmc.sleep(300)
+        xbmc.sleep(100)
 
 
 def _open_links_view(win_url=""):
+    """Abre la ventana flotante personalizada instantanea (0% carga de CPU)."""
     global _search_in_progress, _links_view_active
     _search_in_progress = False
     _links_view_active = True
     _apply_silence_all()
-    disp_mode = str(_bridge_addon.getSetting('links_display_mode') or '').strip().lower()
-    if disp_mode in ('1', 'native'):
-        if not win_url:
-            _ts = int(time.time())
-            win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&t=%s' % _ts
-        if xbmc.getCondVisibility("Window.IsVisible(10025)"):
-            xbmc.log("Multi Bridge: abriendo list_links via Container.Update -> " + win_url, xbmc.LOGINFO)
-            xbmc.executebuiltin('Container.Update("%s")' % win_url)
-        else:
-            xbmc.log("Multi Bridge: abriendo list_links via ActivateWindow -> " + win_url, xbmc.LOGINFO)
-            xbmc.executebuiltin('ActivateWindow(10025, "%s", return)' % win_url)
-    else:
-        show_floating_links_dialog()
-
-
+    show_floating_links_dialog()
 # ---------------------------------------------------------
 # Main Execution Entry Point
 # ---------------------------------------------------------
@@ -13188,14 +12897,10 @@ def main():
         elif view == 'update_cloud': update_players_from_cloud()
         elif view == 'settings': _bridge_addon.openSettings(); (show_player_manager_home() if handle >= 0 else None)
         elif view == 'list_links':
-            disp_mode = str(_bridge_addon.getSetting('links_display_mode') or '').strip().lower()
-            if disp_mode in ('1', 'native'):
-                show_links_as_directory()
-            else:
-                show_floating_links_dialog()
-                if handle >= 0:
-                    try: xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
-                    except: pass
+            show_floating_links_dialog()
+            if handle >= 0:
+                try: xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+                except Exception: pass
         else: show_player_manager_home()
         return
 
@@ -13603,7 +13308,12 @@ def main():
                     pass
                 _c = _cached_payload
                 _cached_engine  = _c.get('engine', 'alfa') or 'alfa'
-                _cached_links   = [_deserialize_item(l, _cached_engine) for l in _c.get('links', [])]
+                _raw_c_links    = [l for l in _c.get('links', []) if isinstance(l, dict) and l.get('url')]
+                _cached_links   = [_deserialize_item(l, _cached_engine) for l in _raw_c_links]
+                _cached_links   = [l for l in _cached_links if l is not None and getattr(l, 'url', None)]
+                if not _cached_links:
+                    xbmc.log("Multi Bridge: cache reciente sin enlaces deserializables válidos, descartando", xbmc.LOGINFO)
+                    _use_cache = False
                 _cached_item    = _deserialize_item(_c.get('item'), _cached_engine)
                 _cached_meta    = _c.get('meta', {})
                 _cached_tmdb_v  = str(_c.get('meta', {}).get('tmdb') or '')
@@ -13701,9 +13411,15 @@ def main():
                 _req_tmdb = str(tmdb_id or get_param('tmdb') or '')
                 _c_tmdb = str(_c_meta.get('tmdb') or '')
                 if _req_tmdb and _c_tmdb and _req_tmdb == _c_tmdb:
-                    xbmc.log("Multi Bridge: reutilizando %d enlaces ya recolectados por canales..." % len(_cached['links']), xbmc.LOGINFO)
-                    links = [_deserialize_item(l) for l in _cached['links']]
-                    matched_item = _deserialize_item(_cached.get('item')) if _cached.get('item') else None
+                    _c_raw_links = [l for l in _cached.get('links', []) if isinstance(l, dict) and l.get('url')]
+                    if _c_raw_links:
+                        xbmc.log("Multi Bridge: reutilizando %d enlaces ya recolectados por canales..." % len(_c_raw_links), xbmc.LOGINFO)
+                        _c_eng = _cached.get('engine', eng) or eng
+                        links = [_deserialize_item(l, _c_eng) for l in _c_raw_links]
+                        links = [l for l in links if l is not None and getattr(l, 'url', None)]
+                        matched_item = _deserialize_item(_cached.get('item'), _c_eng) if _cached.get('item') else None
+                    if not links:
+                        links, matched_item = run_parallel_search(engine=eng)
                 else:
                     links, matched_item = run_parallel_search(engine=eng)
             else:
