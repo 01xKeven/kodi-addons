@@ -5,6 +5,16 @@ Es la UNICA forma correcta de publicar: copia el addon, construye el zip,
 actualiza addons.xml (sin BOM ni declaraciones sueltas), regenera el md5,
 valida todo y solo entonces hace commit/push.
 
+REGLAS ESTRICTAS PARA ASISTENTES IA Y DESARROLLADORES (LEER ATENTAMENTE):
+1. LIMPIEZA DE ZIPS OBSOLETOS: En la carpeta 'zips/<addon_id>/' SOLO debe
+   existir UN archivo .zip: el correspondiente a la versión ACTUAL y activa
+   (ejemplo: 'plugin.video.bridge.multi-1.0.82.zip').
+2. NUNCA CONSERVAR VERSIONES ANTERIORES: Jamás acumules ni re-generes archivos
+   .zip de versiones viejas (ej. 1.0.63, 1.0.64, ..., 1.0.81). Kodi solo lee
+   la versión actual listada en addons.xml; los zips antiguos son basura que
+   ensucia el repositorio de GitHub.
+3. PURGA OBLIGATORIA: Cualquier zip antiguo debe ser eliminado automáticamente.
+
 Ejemplos:
   python tools/publish_addon.py --id service.guiaparental
   python tools/publish_addon.py --id service.guiaparental --message "arregla el HUD de 1 s"
@@ -136,16 +146,7 @@ def check_version_bump(target, addon_id, version, source):
 
 
 def mirror_addon(source, target, addon_id):
-    existing_zips = {}
     if os.path.isdir(target):
-        for fname in os.listdir(target):
-            if fname.endswith('.zip') and fname.startswith(addon_id):
-                fpath = os.path.join(target, fname)
-                try:
-                    with open(fpath, 'rb') as zf:
-                        existing_zips[fname] = zf.read()
-                except Exception:
-                    pass
         shutil.rmtree(target)
     os.makedirs(target)
     for root, folders, names in os.walk(source):
@@ -158,12 +159,30 @@ def mirror_addon(source, target, addon_id):
             dst = os.path.join(target, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
-    for zname, zdata in existing_zips.items():
-        dst_zip = os.path.join(target, zname)
-        if not os.path.exists(dst_zip):
-            with open(dst_zip, 'wb') as zf:
-                zf.write(zdata)
-    print("copiado %s -> %s (conservados %d zips previos)" % (source, os.path.relpath(target, os.path.dirname(target)), len(existing_zips)))
+    print("copiado %s -> %s" % (source, os.path.relpath(target, os.path.dirname(target))))
+
+
+def purge_obsolete_zips(target, addon_id, current_version):
+    """Garantiza que SOLO exista el zip de la versión actual en zips/<addon_id>/.
+
+    REGLA ESTRICTA: En este repositorio NUNCA se conservan zips antiguos.
+    Kodi solo descarga la versión activa especificada en addons.xml; los zips
+    de versiones previas son obsoletos, aumentan el tamaño del clon y ensucian
+    la vista del repositorio en GitHub. Deben ser purgados siempre.
+    """
+    current_zip_name = "%s-%s.zip" % (addon_id, current_version)
+    if not os.path.isdir(target):
+        return
+    removed = []
+    for name in os.listdir(target):
+        if name.endswith(".zip") and name.startswith(addon_id) and name != current_zip_name:
+            try:
+                os.remove(os.path.join(target, name))
+                removed.append(name)
+            except Exception as e:
+                print("aviso: no se pudo eliminar zip obsoleto %s: %s" % (name, e))
+    if removed:
+        print("limpieza: eliminados %d zip(s) obsoletos (%s)" % (len(removed), ", ".join(removed[:5])))
 
 
 def build_zip(target, addon_id, version):
@@ -181,6 +200,7 @@ def build_zip(target, addon_id, version):
             arcname = "%s/%s" % (addon_id, os.path.relpath(path, target).replace("\\", "/"))
             archive.write(path, arcname)
     print("creado %s (%d entradas)" % (os.path.basename(zip_path), len(files)))
+    purge_obsolete_zips(target, addon_id, version)
     return zip_path
 
 
