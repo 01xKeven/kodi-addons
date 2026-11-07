@@ -1009,6 +1009,61 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
         try:
+            vt = p.getVideoInfoTag()
+            if vt:
+                _t_id = str(_m_dict.get('tmdb') or '')
+                _i_id = str(_m_dict.get('imdb') or '')
+                _tv_id = str(_m_dict.get('tvdb') or '')
+                _tr_id = str(_m_dict.get('trakt') or '')
+                _is_s = bool(_m_dict.get('season') and _m_dict.get('episode'))
+                _uids = {}
+                if _t_id:
+                    _uids['tmdb'] = _t_id
+                    if _is_s: _uids['tvshow.tmdb'] = _t_id
+                if _i_id:
+                    _uids['imdb'] = _i_id
+                    if _is_s: _uids['tvshow.imdb'] = _i_id
+                if _tv_id:
+                    _uids['tvdb'] = _tv_id
+                    if _is_s: _uids['tvshow.tvdb'] = _tv_id
+                if _tr_id:
+                    _uids['trakt'] = _tr_id
+                if _uids:
+                    try: vt.setUniqueIDs(_uids, 'tmdb' if _t_id else ('imdb' if _i_id else ''))
+                    except: pass
+                if _i_id:
+                    try: vt.setIMDbNumber(_i_id)
+                    except: pass
+                vt.setMediaType('episode' if _is_s else 'movie')
+                if _is_s:
+                    _sh = str(_m_dict.get('showname') or '')
+                    _ti = str(_m_dict.get('title') or '')
+                    _se = _m_dict.get('season')
+                    _ep = _m_dict.get('episode')
+                    if _sh: vt.setTvShowTitle(_sh)
+                    if _ti: vt.setTitle(_ti)
+                    elif _sh and _se and _ep:
+                        try: vt.setTitle(f"{_sh} {int(_se)}x{int(_ep):02d}")
+                        except: vt.setTitle(f"{_sh} {_se}x{_ep}")
+                    if _se:
+                        try: vt.setSeason(int(_se))
+                        except: pass
+                    if _ep:
+                        try: vt.setEpisode(int(_ep))
+                        except: pass
+                else:
+                    _ti = str(_m_dict.get('title') or '')
+                    if _ti: vt.setTitle(_ti)
+                _yr = _m_dict.get('showyear' if _is_s else 'year') or _m_dict.get('year')
+                if _yr:
+                    try: vt.setYear(int(_yr))
+                    except: pass
+                _pl_str = _m_dict.get('plot')
+                if _pl_str: vt.setPlot(str(_pl_str))
+                xbmc.log("Multi Bridge: VideoInfoTag del Player actualizado tras arranque de reproduccion", xbmc.LOGINFO)
+        except Exception as _e_tag:
+            xbmc.log("Multi Bridge: error inyectando VideoInfoTag en Player: %s" % _e_tag, xbmc.LOGINFO)
+        try:
             _pl = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
             _pos = _pl.getposition()
             if 0 <= _pos < _pl.size():
@@ -2812,51 +2867,70 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     if not meta:
         _cf = _read_search_cache_atomic()
         if _cf and isinstance(_cf, dict):
-            meta = _cf.get('meta', {}) or {}
+            meta = dict(_cf.get('meta', {}) or {})
+        else:
+            meta = {}
+    else:
+        meta = dict(meta)
+
+    # Enriquecer meta exhaustivamente desde matched_item si este posee infoLabels
+    if matched_item:
+        _info = getattr(matched_item, 'infoLabels', {}) or {}
+        if not meta.get('tmdb'): meta['tmdb'] = str(_info.get('tmdb_id', '') or _info.get('tmdb', '') or '')
+        if not meta.get('imdb'): meta['imdb'] = str(_info.get('imdb_id', '') or _info.get('imdb', '') or _info.get('code', '') or '')
+        if not meta.get('tvdb'): meta['tvdb'] = str(_info.get('tvdb_id', '') or _info.get('tvdb', '') or '')
+        if not meta.get('trakt'): meta['trakt'] = str(_info.get('trakt_id', '') or _info.get('trakt', '') or '')
+        if not meta.get('season'): meta['season'] = str(getattr(matched_item, 'contentSeason', '') or _info.get('season', '') or '')
+        if not meta.get('episode'): meta['episode'] = str(getattr(matched_item, 'contentEpisode', '') or _info.get('episode', '') or '')
+        if not meta.get('showname'): meta['showname'] = str(getattr(matched_item, 'contentSerieName', '') or _info.get('tvshowtitle', '') or '')
+        if not meta.get('title'): meta['title'] = str(getattr(matched_item, 'contentTitle', '') or _info.get('title', '') or '')
+        if not meta.get('year'): meta['year'] = str(_info.get('year', '') or '')
+        if not meta.get('plot'): meta['plot'] = str(_info.get('plot', '') or '')
+        if not meta.get('poster'): meta['poster'] = str(_info.get('poster', '') or _info.get('thumbnail', '') or '')
+        if not meta.get('fanart'): meta['fanart'] = str(_info.get('fanart', '') or '')
+        if not meta.get('thumbnail'): meta['thumbnail'] = str(_info.get('thumbnail', '') or _info.get('poster', '') or '')
+        if not meta.get('clearlogo'): meta['clearlogo'] = str(_info.get('clearlogo', '') or '')
+        if not meta.get('genre'): meta['genre'] = str(_info.get('genre', '') or '')
+        if not meta.get('director'): meta['director'] = str(_info.get('director', '') or '')
+
+    _tmdb   = str(meta.get('tmdb', '') or '')
+    _imdb   = str(meta.get('imdb', '') or '')
+    _tvdb   = str(meta.get('tvdb', '') or '')
+    _trakt  = str(meta.get('trakt', '') or '')
+    _season = str(meta.get('season', '') or '')
+    _epnum  = str(meta.get('episode', '') or '')
+    _show   = str(meta.get('showname', '') or meta.get('title', '') or '')
+    _title  = str(meta.get('title', '') or '')
+    _year   = str(meta.get('showyear' if (_season and _epnum) else 'year') or meta.get('year', '') or '')
+    _ctype  = 'episode' if (_season and _epnum) else 'movie'
+
+    # Guardar metadatos activos en Window(10000) para inyeccion inmediata por BridgePlayerService (service.py) y PlayerMonitor
+    try:
+        xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackMeta', json.dumps(meta))
+        xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackTime', str(time.time()))
+        xbmcgui.Window(10000).setProperty('MultiBridge.IsTorrentPlayback', 'true')
+    except Exception:
+        pass
 
     # ── Enriquecimiento TMDb para Elementum / Quasar ───────────────────────
     _tor_name = _tor_id.rsplit('.', 1)[-1].lower()   # 'elementum', 'quasar', ...
     if _tor_name in ('elementum', 'quasar'):
-        _tmdb   = ''
-        _ctype  = 'movie'
-        _season = ''
-        _epnum  = ''
-        _show   = ''
-
-        # Fuente 1: matched_item (Item de Balandro)
-        if matched_item:
-            _info  = getattr(matched_item, 'infoLabels', {}) or {}
-            _tmdb  = str(_info.get('tmdb_id', '') or '')
-            _ctype = str(getattr(matched_item, 'contentType', '') or 'movie')
-            _season= str(getattr(matched_item, 'contentSeason', '')
-                         or _info.get('season', '') or '')
-            _epnum = str(getattr(matched_item, 'contentEpisode', '')
-                         or _info.get('episode', '') or '')
-            _show  = str(getattr(matched_item, 'contentSerieName', '')
-                         or _info.get('tvshowtitle', '') or '')
-
-        # Fuente 2: meta dict (del handler principal)
-        if not _tmdb and meta:
-            _tmdb  = str(meta.get('tmdb', '') or '')
-        if not _ctype or _ctype == 'movie':
-            if meta and meta.get('season') and meta.get('episode'):
-                _ctype = 'episode'
-        if meta and not _season:
-            _season = str(meta.get('season', '') or '')
-        if meta and not _epnum:
-            _epnum  = str(meta.get('episode', '') or '')
-        if meta and not _show:
-            _show   = str(meta.get('showname', '') or meta.get('title', '') or '')
-
-        if _tmdb:
+        if _tmdb or _imdb:
             if _ctype == 'episode' and _season and _epnum:
                 play_url += ('&episode=%s&library=&season=%s&show=%s&tmdb=%s&type=episode'
-                             % (_epnum, _season, _tmdb, _tmdb))
-                xbmc.log('Multi Bridge: torrent enriquecido [serie] tmdb=%s S%sE%s' % (
-                    _tmdb, _season, _epnum), xbmc.LOGINFO)
+                             % (_epnum, _season, _tmdb or _imdb, _tmdb or _imdb))
+                if _imdb: play_url += '&imdb=%s' % uparse.quote_plus(_imdb)
+                if _tvdb: play_url += '&tvdb=%s' % uparse.quote_plus(_tvdb)
+                if _show: play_url += '&showname=%s' % uparse.quote_plus(_show)
+                if _title: play_url += '&title=%s' % uparse.quote_plus(_title)
+                xbmc.log('Multi Bridge: torrent enriquecido [serie] tmdb=%s imdb=%s S%sE%s' % (
+                    _tmdb, _imdb, _season, _epnum), xbmc.LOGINFO)
             else:
-                play_url += '&library=&tmdb=%s&type=movie' % _tmdb
-                xbmc.log('Multi Bridge: torrent enriquecido [peli] tmdb=%s' % _tmdb, xbmc.LOGINFO)
+                play_url += '&library=&tmdb=%s&type=movie' % (_tmdb or _imdb)
+                if _imdb: play_url += '&imdb=%s' % uparse.quote_plus(_imdb)
+                if _title: play_url += '&title=%s' % uparse.quote_plus(_title)
+                if _year: play_url += '&year=%s' % uparse.quote_plus(_year)
+                xbmc.log('Multi Bridge: torrent enriquecido [peli] tmdb=%s imdb=%s' % (_tmdb, _imdb), xbmc.LOGINFO)
 
     xbmc.log('Multi Bridge: torrent → %s' % _tor_id, xbmc.LOGINFO)
     sync_tmdbhelper_playerstring(meta)
@@ -7297,6 +7371,34 @@ def sync_tmdbhelper_playerstring(meta=None):
                 xbmcgui.Window(10000).setProperty('MultiBridge.ClearLogo', _c_logo)
             except Exception: pass
 
+        # Sincronizar etiquetas de reproduccion nativas para VideoPlayer (Trakt scrobbler y OSD de skins)
+        try:
+            w_sync = xbmcgui.Window(10000)
+            _s_title = str(meta.get('title') or '')
+            _s_show = str(meta.get('showname') or '')
+            _s_year = str(meta.get('showyear' if is_series else 'year') or meta.get('year') or '')
+            _s_plot = str(meta.get('plot') or '')
+            _s_thumb = str(meta.get('poster') or meta.get('thumbnail') or '')
+
+            if is_series:
+                if _s_show: w_sync.setProperty('VideoPlayer.TVShowTitle', _s_show)
+                if s_val: w_sync.setProperty('VideoPlayer.Season', str(s_val))
+                if e_val: w_sync.setProperty('VideoPlayer.Episode', str(e_val))
+                if _s_title: w_sync.setProperty('VideoPlayer.EpisodeName', _s_title)
+                _disp_t = f"{_s_show} {int(s_val)}x{int(e_val):02d} - {_s_title}" if (_s_show and s_val and e_val and _s_title) else (_s_title or _s_show)
+                w_sync.setProperty('VideoPlayer.Title', _disp_t)
+            else:
+                if _s_title: w_sync.setProperty('VideoPlayer.Title', _s_title)
+
+            if _s_year: w_sync.setProperty('VideoPlayer.Year', _s_year)
+            if _s_plot: w_sync.setProperty('VideoPlayer.Plot', _s_plot)
+            if _s_thumb:
+                w_sync.setProperty('VideoPlayer.Cover', _s_thumb)
+                w_sync.setProperty('Player.Art(poster)', _s_thumb)
+                w_sync.setProperty('Player.Art(thumb)', _s_thumb)
+        except Exception:
+            pass
+
         _c_genres = meta.get('genre') or ''
         if not _c_genres and t_id:
             try:
@@ -9473,7 +9575,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             xbmcplugin.setResolvedUrl(handle, False, _absorb)
             return False
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
-        return _play_torrent_link(_tl, matched_item=matched_item, meta=getattr(link, 'meta', None))
+        return _play_torrent_link(_tl, matched_item=matched_item, meta=_read_search_cache_atomic().get('meta', {}) or getattr(link, 'meta', None))
 
 
     server_name = (_safe_str(getattr(link, 'server', '') or '').strip().capitalize()

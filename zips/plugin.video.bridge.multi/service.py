@@ -122,6 +122,175 @@ def _network_monitor_loop(monitor):
             _show_network_notification(True)
 
 
+import json
+import time
+
+class BridgePlayerService(xbmc.Player):
+    def onAVStarted(self):
+        try:
+            _inject_active_playback_metadata(self)
+        except Exception as e:
+            xbmc.log("Multi Bridge PlayerService: error en onAVStarted: " + str(e), xbmc.LOGWARNING)
+
+    def onPlayBackStopped(self):
+        try:
+            xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+        except Exception:
+            pass
+
+
+def _inject_active_playback_metadata(player):
+    raw_meta = xbmcgui.Window(10000).getProperty('MultiBridge.ActivePlaybackMeta')
+    if not raw_meta:
+        return
+    try:
+        t_str = xbmcgui.Window(10000).getProperty('MultiBridge.ActivePlaybackTime') or '0'
+        if time.time() - float(t_str) > 300: # Más de 5 minutos
+            return
+    except Exception:
+        pass
+
+    try:
+        meta = json.loads(raw_meta)
+    except Exception:
+        return
+
+    if not isinstance(meta, dict) or not meta:
+        return
+
+    tmdb_id = str(meta.get('tmdb') or '')
+    imdb_id = str(meta.get('imdb') or '')
+    tvdb_id = str(meta.get('tvdb') or '')
+    trakt_id = str(meta.get('trakt') or '')
+    s_val = meta.get('season')
+    e_val = meta.get('episode')
+    is_series = bool(s_val and e_val)
+
+    title_val = str(meta.get('title') or '')
+    showname_val = str(meta.get('showname') or '')
+    year_val = meta.get('showyear' if is_series else 'year') or meta.get('year')
+    plot_val = str(meta.get('plot') or '')
+    poster_val = str(meta.get('poster') or meta.get('thumbnail') or '')
+    fanart_val = str(meta.get('fanart') or '')
+    clearlogo_val = str(meta.get('clearlogo') or '')
+    genre_val = str(meta.get('genre') or '')
+    director_val = str(meta.get('director') or '')
+
+    # 1. Inyectar directamente en el VideoInfoTag del Player de Kodi (Nexus/Omega 20/21)
+    try:
+        vt = player.getVideoInfoTag()
+        if vt:
+            uids = {}
+            if tmdb_id:
+                uids['tmdb'] = str(tmdb_id)
+                if is_series: uids['tvshow.tmdb'] = str(tmdb_id)
+            if imdb_id:
+                uids['imdb'] = str(imdb_id)
+                if is_series: uids['tvshow.imdb'] = str(imdb_id)
+            if tvdb_id:
+                uids['tvdb'] = str(tvdb_id)
+                if is_series: uids['tvshow.tvdb'] = str(tvdb_id)
+            if trakt_id:
+                uids['trakt'] = str(trakt_id)
+            if uids:
+                try: vt.setUniqueIDs(uids, 'tmdb' if tmdb_id else ('imdb' if imdb_id else ''))
+                except: pass
+            if imdb_id:
+                try: vt.setIMDbNumber(imdb_id)
+                except: pass
+            vt.setMediaType('episode' if is_series else 'movie')
+            if is_series:
+                if showname_val: vt.setTvShowTitle(showname_val)
+                if title_val: vt.setTitle(title_val)
+                elif showname_val and s_val and e_val:
+                    try: vt.setTitle(f"{showname_val} {int(s_val)}x{int(e_val):02d}")
+                    except: vt.setTitle(f"{showname_val} {s_val}x{e_val}")
+                if s_val:
+                    try: vt.setSeason(int(s_val))
+                    except: pass
+                if e_val:
+                    try: vt.setEpisode(int(e_val))
+                    except: pass
+            else:
+                if title_val: vt.setTitle(title_val)
+            if year_val:
+                try: vt.setYear(int(year_val))
+                except: pass
+            if plot_val: vt.setPlot(plot_val)
+            if genre_val:
+                g_list = [g.strip() for g in genre_val.split('/') if g.strip()]
+                try: vt.setGenres(g_list)
+                except: pass
+            if director_val:
+                d_list = [d.strip() for d in director_val.split('/') if d.strip()]
+                try: vt.setDirectors(d_list)
+                except: pass
+            xbmc.log("Multi Bridge PlayerService: VideoInfoTag de Kodi inyectado con exito", xbmc.LOGINFO)
+    except Exception as _e_vt:
+        xbmc.log("Multi Bridge PlayerService: error inyectando VideoInfoTag: " + str(_e_vt), xbmc.LOGINFO)
+
+    # 2. Sincronizar Window(10000) para script.trakt, TMDb Helper y skins
+    try:
+        w = xbmcgui.Window(10000)
+        # Trakt
+        tr_ids = {}
+        if tmdb_id: tr_ids['tmdb'] = int(tmdb_id) if str(tmdb_id).isdigit() else tmdb_id
+        if imdb_id: tr_ids['imdb'] = imdb_id
+        if tvdb_id: tr_ids['tvdb'] = int(tvdb_id) if str(tvdb_id).isdigit() else tvdb_id
+        if trakt_id: tr_ids['trakt'] = int(trakt_id) if str(trakt_id).isdigit() else trakt_id
+        if tr_ids:
+            w.setProperty('script.trakt.ids', json.dumps(tr_ids))
+
+        # TMDb Helper PlayerInfoString
+        p_dict = {
+            'tmdb_type': 'episode' if is_series else 'movie',
+            'tmdb_id': int(tmdb_id) if str(tmdb_id).isdigit() else tmdb_id,
+        }
+        if imdb_id: p_dict['imdb_id'] = imdb_id
+        if tvdb_id:
+            try: p_dict['tvdb_id'] = int(tvdb_id)
+            except: p_dict['tvdb_id'] = tvdb_id
+        if is_series:
+            try: p_dict['season'] = int(s_val)
+            except: p_dict['season'] = str(s_val)
+            try: p_dict['episode'] = int(e_val)
+            except: p_dict['episode'] = str(e_val)
+        w.setProperty('TMDbHelper.PlayerInfoString', json.dumps(p_dict))
+
+        # OSD / Skin labels
+        if is_series:
+            if showname_val: w.setProperty('VideoPlayer.TVShowTitle', showname_val)
+            if s_val: w.setProperty('VideoPlayer.Season', str(s_val))
+            if e_val: w.setProperty('VideoPlayer.Episode', str(e_val))
+            if title_val: w.setProperty('VideoPlayer.EpisodeName', title_val)
+            full_title = f"{showname_val} {int(s_val)}x{int(e_val):02d} - {title_val}" if (showname_val and s_val and e_val and title_val) else (title_val or showname_val)
+            w.setProperty('VideoPlayer.Title', full_title)
+        else:
+            if title_val: w.setProperty('VideoPlayer.Title', title_val)
+
+        if year_val: w.setProperty('VideoPlayer.Year', str(year_val))
+        if plot_val: w.setProperty('VideoPlayer.Plot', plot_val)
+        if poster_val:
+            w.setProperty('VideoPlayer.Cover', poster_val)
+            w.setProperty('Player.Art(poster)', poster_val)
+            w.setProperty('Player.Art(thumb)', poster_val)
+            w.setProperty('TMDbHelper.Player.Thumb', poster_val)
+        if fanart_val:
+            w.setProperty('Player.Art(fanart)', fanart_val)
+        if clearlogo_val:
+            w.setProperty('Player.Art(clearlogo)', clearlogo_val)
+            w.setProperty('TMDbHelper.ListItem.ClearLogo', clearlogo_val)
+            w.setProperty('TMDbHelper.Player.ClearLogo', clearlogo_val)
+        if genre_val:
+            w.setProperty('VideoPlayer.Genre', genre_val)
+            w.setProperty('TMDbHelper.ListItem.Genre', genre_val)
+        if director_val:
+            w.setProperty('VideoPlayer.Director', director_val)
+            w.setProperty('TMDbHelper.ListItem.Director', director_val)
+    except Exception as _e_win:
+        xbmc.log("Multi Bridge PlayerService: error configurando Window properties: " + str(_e_win), xbmc.LOGINFO)
+
+
 def run_service():
     # Limpieza inicial de variables y locks de busqueda
     try:
@@ -143,6 +312,9 @@ def run_service():
             default.check_orphan_players()
     except Exception as e:
         xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
+
+    # Mantener vivo el listener de eventos de reproduccion en el servicio 24/7
+    player_service = BridgePlayerService()
 
     # Iniciar monitor de conexion a internet continuo
     monitor = xbmc.Monitor()
