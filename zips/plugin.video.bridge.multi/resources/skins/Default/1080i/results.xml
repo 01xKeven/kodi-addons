@@ -49,7 +49,7 @@
                 <font>font14</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <align>left</align><aligny>center</aligny>
-                <label>[UPPERCASE][B]$INFO[Window.Property(bridge.title)][/B][/UPPERCASE]</label>
+                <label>[UPPERCASE][B]$INFO[Window.Property(bridge.title)][/B][/UPPERCASE][COLOR yellow][B]  $INFO[Window.Property(bridge.episode_label)][/B][/COLOR]</label>
                 <visible>String.IsEmpty(Window.Property(bridge.clearlogo))</visible>
             </control>
 

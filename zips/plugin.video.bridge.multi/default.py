@@ -2537,8 +2537,12 @@ def match_title(result_title, target_year, all_names, target_tmdb=None, item=Non
 def _is_torrent_link(link):
     if not link: return False
 
-    # 1. Server check
     srv = _safe_str(getattr(link, 'server', '')).lower().strip()
+    direct_servers = ('doodstream', 'streamtape', 'mixdrop', 'gamovideo', 'voe', 'vudeo', 'waaw', 'streamwish', 'filelions', 'vidhide', 'luluvdo', 'uqload')
+    if srv and any(ds in srv for ds in direct_servers):
+        return False
+
+    # 1. Server check
     if srv:
         if srv in ('torrent', 'magnet', 'torrents', 'bittorrent', 'utorrent', 'elementum'):
             return True
@@ -2612,6 +2616,35 @@ def _get_torrent_client(is_magnet=False):
     try:
         bal_addon = xbmcaddon.Addon('plugin.video.balandro')
         cliente = (bal_addon.getSetting('cliente_torrent') or '').strip().lower()
+
+        # Si el cliente no está configurado o está en 'seleccionar':
+        if not cliente or cliente in ('ninguno', 'seleccionar', ''):
+            try:
+                _switch_engine_environment('balandro')
+                from modules import filters
+                from core.item import Item
+                dummy_item = Item()
+                dummy_item.no_obsoletes = True
+                ret = filters.show_clients_torrent_no_obsoletes(dummy_item)
+                if ret and ret != -1 and isinstance(ret, (list, tuple)) and len(ret) >= 2:
+                    c_name = ret[0]
+                    c_id = str(ret[1]).split()[0]
+                    if xbmc.getCondVisibility('System.HasAddon("%s")' % c_id):
+                        try:
+                            dlg_yesno = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().yesno(
+                                'Multi Bridge — Cliente Torrent',
+                                'Seleccionado: [COLOR yellow][B]%s[/B][/COLOR]\n\n¿Deseas guardar este cliente como habitual en Balandro para no volver a seleccionarlo?' % c_name,
+                                nolabel='Solo por ahora',
+                                yeslabel='Guardar habitual'
+                            )
+                            if dlg_yesno:
+                                bal_addon.setSetting('cliente_torrent', str(c_name).capitalize())
+                        except Exception:
+                            pass
+                        cliente = str(c_name).lower()
+            except Exception as _fe:
+                xbmc.log("Multi Bridge: selector de clientes Balandro no disponible: %s" % _fe, xbmc.LOGINFO)
+
         if not cliente or cliente in ('ninguno', 'seleccionar', ''):
             return None, None
 
@@ -2650,34 +2683,50 @@ def _resolve_torrent_url(link, engine='balandro'):
     """Resuelve la URL real (magnet/.torrent) de un enlace torrent.
     1) Decodifica data_url (cinecalidad* guardan ahi el magnet con url vacia).
     2) Si sigue sin ser magnet/.torrent, pide al play() del canal con un
-       presupuesto de _TORRENT_PLAY_BUDGET segundos y dialogo de progreso
-       (el play() del canal puede colgarse en red sin avisar; antes eso
-       dejaba a Kodi en silencio).
+       presupuesto de _TORRENT_PLAY_BUDGET segundos y dialogo de progreso.
     Devuelve (url, detalle_fallo). No lanza reproduccion."""
     fail_detail = ''
+    actual_engine = getattr(link, 'bridge_engine', '') or engine or 'balandro'
     try:
-        prep = _prepare_playable_link(link, engine=engine)
+        prep = _prepare_playable_link(link, engine=actual_engine)
     except Exception:
         prep = None
     torrent_url = _safe_str(getattr(prep, 'url', '') or '') if prep is not None else ''
     if not torrent_url:
         torrent_url = _safe_str(getattr(link, 'url', '') or '')
-    if (not torrent_url or (not torrent_url.startswith('magnet:') and not torrent_url.endswith('.torrent'))) \
-            and _safe_str(getattr(link, 'data_url', '') or ''):
+
+    # Si todavía no es magnet ni .torrent:
+    if not (torrent_url.startswith('magnet:') or torrent_url.endswith('.torrent')):
+        # 1. Comprobar si data_url contiene el enlace en base64
+        d_url = _safe_str(getattr(link, 'data_url', '') or '')
+        if d_url:
+            try:
+                dec = base64.b64decode(d_url).decode('utf-8')
+                if dec.startswith('magnet:') or dec.endswith('.torrent'):
+                    return dec, ''
+            except Exception:
+                pass
+
+        # 2. Invocar play() del canal correspondiente
         try:
-            _switch_engine_environment(engine)
+            _switch_engine_environment(actual_engine)
             _ch_dbg = _safe_str(getattr(link, 'channel', '') or '').strip()
             if _ch_dbg:
                 _ch_mod = __import__('channels.' + _ch_dbg, fromlist=[''])
                 if hasattr(_ch_mod, 'play'):
                     _play_holder = [None]
                     _play_err = [None]
+                    _item_to_play = link.clone() if hasattr(link, 'clone') else link
+                    if not getattr(_item_to_play, 'server', None):
+                        _item_to_play.server = 'torrent'
+
                     def _do_play():
                         try:
                             with silenced_dialogs():
-                                _play_holder[0] = _ch_mod.play(link.clone() if hasattr(link, 'clone') else link)
+                                _play_holder[0] = _ch_mod.play(_item_to_play)
                         except Exception as _ex:
                             _play_err[0] = _ex
+
                     _pt = threading.Thread(target=_do_play, daemon=True)
                     _pt.start()
                     try:
@@ -2698,18 +2747,20 @@ def _resolve_torrent_url(link, engine='balandro'):
                             _pdlg.close()
                     except Exception:
                         pass
+
                     if _pt.is_alive():
                         xbmc.log("Multi Bridge: torrent %s canal.play supero %ds, se abandona" % (_ch_dbg, _TORRENT_PLAY_BUDGET), xbmc.LOGWARNING)
                         fail_detail = 'El canal tardó demasiado en responder'
                         _p_res = None
                     elif _play_err[0] is not None:
                         xbmc.log("Multi Bridge: torrent canal.play error: %s" % _play_err[0], xbmc.LOGINFO)
+                        fail_detail = str(_play_err[0])
                         _p_res = None
                     else:
                         _p_res = _play_holder[0]
+
                     if _p_res is not None:
                         if isinstance(_p_res, str) and _p_res.strip():
-                            # El canal devuelve texto (ej. 'Tiene Acortador del enlace')
                             fail_detail = re.sub(r'\[/?COLOR[^\]]*\]|\[/?B\]|\[CR\]', '', _p_res).strip()
                         else:
                             _cand = None
@@ -2720,11 +2771,14 @@ def _resolve_torrent_url(link, engine='balandro'):
                             elif hasattr(_p_res, 'url'):
                                 _cand = _p_res
                             if _cand is not None and _safe_str(getattr(_cand, 'url', '') or ''):
-                                torrent_url = _safe_str(getattr(_cand, 'url', '') or '')
+                                cand_url = _safe_str(getattr(_cand, 'url', '') or '')
+                                torrent_url = cand_url
                                 xbmc.log("Multi Bridge: torrent %s resuelto via canal.play (%s...)" % (_ch_dbg, torrent_url[:30]), xbmc.LOGINFO)
         except Exception as _e:
             xbmc.log("Multi Bridge: torrent canal.play error: %s" % _e, xbmc.LOGINFO)
+
     return torrent_url, fail_detail
+
 
 def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     """Reproduce un link torrent usando el cliente configurado en Balandro.
@@ -2732,13 +2786,11 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     Enriquece la URL con datos TMDb (tmdb_id, type, season, episode, show)
     para que Elementum/Quasar puedan identificar el contenido correctamente.
 
-    Returns True si se lanzó la reproducción, False si no hay cliente configurado.
+    Returns True si se lanzó la reproducción, 'no_client' si no hay cliente configurado, False si fallo.
     """
     if not torrent_url:
         return False
 
-    # Defensa: solo magnets o .torrent llegan al cliente (una pagina web o un
-    # acortador darian "Invalid input" en Elementum).
     _tl = torrent_url.strip()
     if not (_tl.startswith('magnet:') or _tl.endswith('.torrent')):
         xbmc.log('Multi Bridge: _play_torrent_link rechaza URL no-torrent: %s...' % _tl[:80], xbmc.LOGWARNING)
@@ -2752,7 +2804,7 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
             'Multi Bridge',
             'Configura un cliente torrent en Ajustes → Balandro → Torrents',
             '', 5000)
-        return False
+        return 'no_client'
 
     encoded = uparse.quote_plus(torrent_url)
     play_url = _tor_tpl % encoded
@@ -2798,8 +2850,6 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
 
         if _tmdb:
             if _ctype == 'episode' and _season and _epnum:
-                # Elementum navigation getInfoLabels() expects show=<tmdb_id> when resolving episode infolabels:
-                # url = "%s/show/%s/season/%s/episode/%s/infolabels" % (ELEMENTUMD_HOST, tmdb_id, query['season'][0], query['episode'][0])
                 play_url += ('&episode=%s&library=&season=%s&show=%s&tmdb=%s&type=episode'
                              % (_epnum, _season, _tmdb, _tmdb))
                 xbmc.log('Multi Bridge: torrent enriquecido [serie] tmdb=%s S%sE%s' % (
@@ -2811,17 +2861,13 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     xbmc.log('Multi Bridge: torrent → %s' % _tor_id, xbmc.LOGINFO)
     sync_tmdbhelper_playerstring(meta)
 
-    # Crear y enriquecer ListItem completo para que Kodi OSD y Trakt tengan los metadatos completos
     try:
-        _t_label = (meta.get('title') or getattr(matched_item, 'title', '') or _show or 'Torrent') if meta or matched_item else 'Torrent'
-        _li = xbmcgui.ListItem(label=_t_label)
-        set_listitem_info(_li, meta=meta)
-        xbmc.Player().play(play_url, _li)
+        xbmc.log('Multi Bridge: lanzando torrent via PlayMedia: %s' % play_url, xbmc.LOGINFO)
+        xbmc.executebuiltin('PlayMedia("%s")' % play_url)
     except Exception as _pe:
-        xbmc.log('Multi Bridge: error reproduciendo torrent con ListItem: %s, usando fallback PlayMedia' % _pe, xbmc.LOGWARNING)
-        xbmc.executebuiltin('PlayMedia(%s)' % play_url)
+        xbmc.log('Multi Bridge: error en PlayMedia torrent: %s' % _pe, xbmc.LOGWARNING)
+        return False
     return True
-
 
 
 def _offer_elementum_search(meta):
@@ -3099,12 +3145,25 @@ def _format_quality(link):
 
     # Enlaces directos: si ya se detectó la calidad técnica real del stream, devolverla con máxima prioridad
     real_q = _safe_str(getattr(link, 'real_quality', '') or getattr(link, 'real_res', '')).strip()
+    srv_name = _get_link_server_name(link).strip().lower()
+    streaming_hosts_no_4k = (
+        'voe', 'streamwish', 'strwish', 'swish', 'vidhide', 'vidhideplus', 'vidhidepro',
+        'turbovid', 'turboviplay', 'fastream', 'doodstream', 'dood', 'mixdrop', 'uqload',
+        'vidmoly', 'supervideo', 'filelions', 'lulustream', 'waaw', 'netu', 'upstream',
+        'wolfstream', 'hexupload', 'okru', 'kinoger', 'gamovideo', 'streamtape'
+    )
+    is_cyberlocker = any(h in srv_name for h in streaming_hosts_no_4k)
+
     if real_q:
+        if is_cyberlocker and real_q == '4K':
+            real_q = '1080p'
         return real_q
 
     # Deteccion de resolucion por texto en URL, nombre de archivo o titulo
     detected_text = _detect_resolution_from_text(combined)
     if detected_text:
+        if is_cyberlocker and detected_text == '4K':
+            detected_text = '1080p'
         return detected_text
 
     # Si el canal es conocido por ser de catalogo exclusivo Full HD 1080p (Cinecalidad, Granpelis, SoloEnCine, etc.):
@@ -3122,7 +3181,7 @@ def _format_quality(link):
         'hexupload', 'okru', 'kinoger', 'gamovideo', 'streamtape'
     )
 
-    if _has_4k_token(combined) or '2160' in combined:
+    if not is_cyberlocker and (_has_4k_token(combined) or '2160' in combined):
         return '4K'
     if '1080P' in combined or 'FULLHD' in combined or 'FHD' in combined or re.search(r'\b1080\b', combined):
         return '1080p'
@@ -3198,6 +3257,32 @@ def _get_link_quality_score(link, pref_quality=0):
         if is_cam:  return 50
         return 120
     return 120
+
+def _stream_quality_score(entry):
+    """Calcula la puntuación ordinal de calidad técnica de un flujo o etiqueta (4K > 1080p > 720p > 480p > SD)."""
+    if not entry:
+        return 0
+    lbl = ''
+    url = ''
+    if isinstance(entry, (list, tuple)):
+        lbl = _safe_str(entry[0]) if len(entry) > 0 else ''
+        url = _safe_str(entry[1]) if len(entry) > 1 else ''
+    elif isinstance(entry, str):
+        lbl = entry
+    comb = (lbl + ' ' + url).upper()
+    if _has_4k_token(comb) or any(k in comb for k in ('2160P', '2160', '4K', 'UHD', '3840X2160')):
+        return 400
+    if any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD', '1920X1080', '1920X1088')):
+        return 300
+    if any(k in comb for k in ('720P', '720', 'HD', '1280X720')) and not any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD')):
+        return 200
+    if any(k in comb for k in ('480P', '480', 'SD', 'DVD', '854X480', '720X480')):
+        return 100
+    if any(k in comb for k in ('360P', '360', '640X360')):
+        return 50
+    if any(k in comb for k in ('240P', '240')):
+        return 20
+    return 10
 
 def _format_channel(link):
     ch = _safe_str(getattr(link, 'channel', ''))
@@ -3286,7 +3371,7 @@ def _detect_resolution_from_text(text):
     if not text:
         return None
     t = str(text).upper()
-    if '2160P' in t or '2160' in t or '4K' in t or 'UHD' in t or '3840X2160' in t:
+    if re.search(r'\b(?:2160P?|3840X2160|4K|UHD)\b', t):
         return '4K'
     if '1080P' in t or '1080' in t or 'FULLHD' in t or 'FHD' in t or '1920X1080' in t or '1920X1088' in t:
         return '1080p'
@@ -3854,7 +3939,13 @@ def _extract_valid_streams(video_urls):
                     res.append(entry)
             elif isinstance(entry, str) and (entry.startswith('http') or entry.startswith('rtmp')):
                 res.append(['', entry])
-    return res if res else None
+    if not res:
+        return None
+    try:
+        res.sort(key=_stream_quality_score, reverse=True)
+    except Exception:
+        pass
+    return res
 
 def _link_cache_key(lnk):
     """Huella estable de un enlace para reutilizar su resolucion.
@@ -3922,16 +4013,27 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
         if puedes and video_urls:
             valid_streams = _extract_valid_streams(video_urls)
             if valid_streams:
-                first_stream = valid_streams[0][1] if isinstance(valid_streams[0], (list, tuple)) and len(valid_streams[0]) > 1 else (valid_streams[0] if isinstance(valid_streams[0], str) else '')
-                is_ok, real_res = _check_stream_url_playable(first_stream, server_name=actual_srv, timeout=3.0)
-                if is_ok:
-                    prep.video_urls = valid_streams
-                    if real_res:
-                        prep.real_quality = real_res
-                        prep.quality = real_res
-                        try: lnk.real_quality = real_res; lnk.quality = real_res
-                        except: pass
-                    return prep
+                for stream_entry in valid_streams:
+                    st_url = stream_entry[1] if isinstance(stream_entry, (list, tuple)) and len(stream_entry) > 1 else (stream_entry if isinstance(stream_entry, str) else '')
+                    if not st_url:
+                        continue
+                    is_ok, real_res = _check_stream_url_playable(st_url, server_name=actual_srv, timeout=3.0)
+                    if is_ok:
+                        prep.video_urls = valid_streams
+                        st_lbl = stream_entry[0] if isinstance(stream_entry, (list, tuple)) and len(stream_entry) > 0 else ''
+                        label_res = _detect_resolution_from_text(st_lbl) or _detect_resolution_from_text(st_url)
+                        final_res = real_res
+                        if label_res and (not final_res or _stream_quality_score(label_res) > _stream_quality_score(final_res)):
+                            final_res = label_res
+                        elif real_res and label_res and _stream_quality_score(real_res) >= _stream_quality_score(label_res):
+                            final_res = real_res
+
+                        if final_res:
+                            prep.real_quality = final_res
+                            prep.quality = final_res
+                            try: lnk.real_quality = final_res; lnk.quality = final_res
+                            except: pass
+                        return prep
         return None
     except Exception:
         return None
@@ -3942,7 +4044,7 @@ class _PipelineLinkVerifier:
         mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
         self.servertools = mods.get('servertools') if mods else None
         
-        self.max_workers = min(12, max(2, _get_int_setting('verify_threads_max', 8)))
+        self.max_workers = min(20, max(2, _get_int_setting('verify_threads_max', 16)))
         self.verify_timeout = _get_int_setting('verify_timeout', 10)
         if self.verify_timeout < 3: self.verify_timeout = 3
         self.verify_max_functional = _get_int_setting('verify_max_functional', 12)
@@ -3973,6 +4075,9 @@ class _PipelineLinkVerifier:
     def start(self):
         if not self.servertools:
             return
+        try:
+            xbmc.log("Multi Bridge: Pipeline verifier iniciado con %d hilos de verificación" % self.max_workers, xbmc.LOGINFO)
+        except Exception: pass
         for i in range(self.max_workers):
             t = threading.Thread(target=self._worker_loop, daemon=True, name="PipelineVerifier-%d" % i)
             self.threads.append(t)
@@ -4078,7 +4183,7 @@ class _PipelineLinkVerifier:
                 self.global_stop.set()
                 return
 
-        max_wait = min(25, max(10, self.verify_timeout))
+        max_wait = min(35, max(15, self.verify_timeout * 2))
         start_wait = time.time()
         _dialog_cooldown = 0.0
 
@@ -4106,10 +4211,11 @@ class _PipelineLinkVerifier:
             if p_dialog and (now - _dialog_cooldown > 0.15):
                 _dialog_cooldown = now
                 if self.verify_max_functional > 0:
-                    pct = min(99, int((n_dir / float(self.verify_max_functional)) * 100))
+                    v_frac = min(1.0, n_dir / float(self.verify_max_functional))
+                    pct = min(98, int(85 + v_frac * 13))
                     meta_str = "/%d directos" % self.verify_max_functional
                 else:
-                    pct = 90
+                    pct = 95
                     meta_str = " directos"
 
                 parts = []
@@ -4121,11 +4227,19 @@ class _PipelineLinkVerifier:
                 l1 = '%s (%d%s)' % (target_title, n_dir, meta_str)
                 l2 = status_str
                 l3 = '[COLOR grey]Cancelar para abrir los enlaces disponibles ahora[/COLOR]'
+                if hasattr(p_dialog, 'set_metrics'):
+                    p_dialog.set_metrics(
+                        n_dir=n_dir, n_tor=n_tor, n_ver=n_act + q_size,
+                        status_line=status_str
+                    )
                 try: p_dialog.update(pct, '%s\n%s\n%s' % (l1, l2, l3))
                 except: pass
 
             time.sleep(0.08)
 
+        if p_dialog:
+            try: p_dialog.update(100)
+            except: pass
         self.global_stop.set()
 
     def get_results(self, fallback_links=None):
@@ -4168,7 +4282,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     lock = threading.Lock()
     stop_event = threading.Event()
 
-    max_workers = _get_int_setting('verify_threads_max', 8)
+    max_workers = min(20, max(2, _get_int_setting('verify_threads_max', 16)))
     verify_timeout = _get_int_setting('verify_timeout', 30)
     verify_max_functional = _get_int_setting('verify_max_functional', 10)
     if verify_max_functional < 0: verify_max_functional = 0
@@ -6192,6 +6306,189 @@ def _search_on_player(player_data_or_file, engine, is_series, target_title, targ
 # ---------------------------------------------------------
 # Master Parallel Search Execution
 # ---------------------------------------------------------
+class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
+    PROGRESS_CTRL = 20
+    CANCEL_BTN = 200
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_canceled = False
+
+    def onInit(self):
+        try:
+            btn = self.getControl(self.CANCEL_BTN)
+            self.setFocus(btn)
+        except Exception:
+            try:
+                self.setFocusId(self.CANCEL_BTN)
+            except Exception:
+                pass
+        try:
+            xbmc.executebuiltin("SetFocus(200)")
+        except:
+            pass
+
+    def onAction(self, action):
+        try:
+            aid = action.getId() if hasattr(action, 'getId') else action
+            if aid not in (1, 2, 3, 4):
+                self.is_canceled = True
+                try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+                except: pass
+        except Exception:
+            pass
+
+    def onClick(self, control_id):
+        self.is_canceled = True
+        try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+        except: pass
+
+    def onControl(self, control):
+        self.is_canceled = True
+        try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+        except: pass
+
+
+class _RadialSearchProgressDialog(object):
+    """Controlador nativo en C++ para el diálogo de progreso con Anillo Radial (progress_radial.xml)."""
+
+    def __init__(self, target_title="", poster_url="", fanart_url="", engine="balandro"):
+        self.target_title = target_title or ""
+        self.poster_url = poster_url or ""
+        self.fanart_url = fanart_url or ""
+        self.engine_name = "Alfa" if str(engine).lower() == "alfa" else "Balandro"
+        self._dlg = None
+        self._canceled = False
+        self._last_pct = 0
+
+    def _set_prop(self, k, v):
+        try:
+            xbmcgui.Window(10000).setProperty(k, str(v if v is not None else ''))
+        except Exception:
+            pass
+
+    def create(self, heading="", line1="", line2="", line3=""):
+        try:
+            try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "")
+            except: pass
+            self._canceled = False
+            skin_dir = "Default"
+            xml_file = "progress_radial.xml"
+            addon_path = _bridge_addon.getAddonInfo("path")
+            self._dlg = _RadialSearchProgressWindow(xml_file, addon_path, skin_dir, "1080i")
+
+            self._set_prop("bridge.search_title", _safe_str(self.target_title))
+            self._set_prop("bridge.search_engine", self.engine_name.upper())
+            self._set_prop("bridge.search_poster", _safe_str(self.poster_url))
+            self._set_prop("bridge.search_fanart", _safe_str(self.fanart_url))
+            self._set_prop("bridge.search_pct", "0")
+            self._set_prop("bridge.search_channels_count", "0/0")
+            self._set_prop("bridge.count_directos", "0")
+            self._set_prop("bridge.count_torrents", "0")
+            self._set_prop("bridge.count_verificando", "0")
+            self._set_prop("bridge.search_status_line", _safe_str(line1 or "Preparando búsqueda..."))
+
+            self._dlg.show()
+            try:
+                xbmc.executebuiltin("SetFocus(200)")
+            except: pass
+        except Exception as e:
+            xbmc.log("Multi Bridge: error abriendo progress_radial.xml: %s (fallback a DialogProgress)" % e, xbmc.LOGWARNING)
+            self._dlg = xbmcgui.DialogProgress()
+            self._dlg.create(heading or "Multi Bridge", line1, line2, line3)
+
+    def set_metrics(self, completed_str="", n_dir=0, n_tor=0, n_ver=0, status_line=""):
+        try:
+            if completed_str:
+                self._set_prop("bridge.search_channels_count", str(completed_str))
+            self._set_prop("bridge.count_directos", str(n_dir))
+            self._set_prop("bridge.count_torrents", str(n_tor))
+            self._set_prop("bridge.count_verificando", str(n_ver))
+            if status_line:
+                clean_s = _clean_dialog_text(str(status_line)).strip()
+                if clean_s:
+                    self._set_prop("bridge.search_status_line", clean_s)
+        except Exception:
+            pass
+
+    def update(self, pct, message=""):
+        if not self._dlg:
+            return
+        if isinstance(self._dlg, xbmcgui.DialogProgress):
+            try: self._dlg.update(pct, message)
+            except: pass
+            return
+
+        try:
+            pct_int = max(getattr(self, '_last_pct', 0), max(0, min(100, int(pct))))
+            self._last_pct = pct_int
+            self._set_prop("bridge.search_pct", str(pct_int))
+
+            if self._dlg and not getattr(self, '_canceled', False):
+                try:
+                    p_ctrl = self._dlg.getControl(20)
+                    if p_ctrl:
+                        p_ctrl.setPercent(pct_int)
+                except Exception:
+                    pass
+
+            if message:
+                lines = message.splitlines() if isinstance(message, str) else []
+                header_line = lines[0] if len(lines) > 0 else ""
+
+                m_ch = re.search(r'\((\d+/\d+)\s*canales\)', header_line)
+                if m_ch:
+                    self._set_prop("bridge.search_channels_count", m_ch.group(1))
+
+                m_dir = re.search(r'(\d+)\s*(?:funcionales|directos)(?!/)', header_line, re.IGNORECASE)
+                if m_dir:
+                    self._set_prop("bridge.count_directos", m_dir.group(1))
+
+                m_tor = re.search(r'(\d+)\s*torrents', header_line, re.IGNORECASE)
+                if m_tor:
+                    self._set_prop("bridge.count_torrents", m_tor.group(1))
+
+                m_ver = re.search(r'(?:verificando|comprobando)\s*\((\d+)\)', header_line, re.IGNORECASE)
+                if m_ver:
+                    self._set_prop("bridge.count_verificando", m_ver.group(1))
+
+                status_txt = ""
+                for l in lines[1:]:
+                    l_clean = _clean_dialog_text(l).strip()
+                    if l_clean and not l_clean.startswith("Buscando:") and not l_clean.startswith("Cancelar"):
+                        status_txt = l_clean
+                        break
+                if not status_txt and len(lines) > 3:
+                    status_txt = _clean_dialog_text(lines[-1]).strip()
+                if status_txt:
+                    self._set_prop("bridge.search_status_line", status_txt)
+        except Exception:
+            pass
+
+    def iscanceled(self):
+        try:
+            if xbmcgui.Window(10000).getProperty("bridge.search_canceled") == "true":
+                self._canceled = True
+                return True
+        except: pass
+        if self._canceled:
+            return True
+        if not self._dlg:
+            return False
+        if isinstance(self._dlg, xbmcgui.DialogProgress):
+            try: return self._dlg.iscanceled()
+            except: return self._canceled
+        return bool(getattr(self._dlg, "is_canceled", False))
+
+    def close(self):
+        dlg = self._dlg
+        self._dlg = None
+        if dlg:
+            try:
+                dlg.close()
+            except Exception:
+                pass
+
 def _run_parallel_search_impl(engine='alfa'):
     if not _is_engine_installed(engine):
         xbmc.log("Multi Bridge: El motor %s no está instalado. Cancelando búsqueda." % engine, xbmc.LOGWARNING)
@@ -6278,7 +6575,47 @@ def _run_parallel_search_impl(engine='alfa'):
 
     total_channels = len(enabled_players)
     engine_name = 'Alfa' if engine == 'alfa' else 'Balandro'
-    p_dialog = xbmcgui.DialogProgress()
+
+    p_poster = poster or get_param('poster') or thumbnail or get_param('thumbnail') or get_param('thumb') or ''
+    p_fanart = fanart or get_param('fanart') or ''
+    if not p_poster:
+        try: p_poster = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Poster') or xbmc.getInfoLabel('ListItem.Art(poster)') or xbmc.getInfoLabel('ListItem.Art(thumb)') or xbmc.getInfoLabel('ListItem.Thumb') or xbmc.getInfoLabel('Container.ListItem.Art(poster)')
+        except: pass
+    if not p_fanart:
+        try: p_fanart = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Fanart') or xbmc.getInfoLabel('ListItem.Art(fanart)') or xbmc.getInfoLabel('Container.ListItem.Art(fanart)')
+        except: pass
+    if not p_poster and target_tmdb and str(target_tmdb).strip().isdigit():
+        try:
+            import urllib.request as _ureq
+            import json as _json
+            import ssl as _ssl
+            _ctx = _ssl._create_unverified_context() if hasattr(_ssl, '_create_unverified_context') else None
+            _api_k = "a1ab8b8669da03637a4b98fa39c39228"
+            _t_type = "tv" if is_series else "movie"
+            _u_art = f"https://api.themoviedb.org/3/{_t_type}/{target_tmdb}?api_key={_api_k}"
+            _req = _ureq.Request(_u_art, headers={'User-Agent': 'Mozilla/5.0'})
+            with _ureq.urlopen(_req, timeout=1.5, context=_ctx) as _resp:
+                _dart = _json.loads(_resp.read().decode('utf-8'))
+                _pp = _dart.get('poster_path')
+                _bp = _dart.get('backdrop_path')
+                if _pp: p_poster = f"https://image.tmdb.org/t/p/w500{_pp}"
+                if _bp and not p_fanart: p_fanart = f"https://image.tmdb.org/t/p/w1280{_bp}"
+        except Exception:
+            pass
+
+    dlg_display_title = target_title
+    if is_series and p_season and p_episode:
+        try:
+            ep_tag = 'S%02dE%02d' % (int(p_season), int(p_episode))
+        except (ValueError, TypeError):
+            ep_tag = 'S%sE%s' % (p_season, p_episode)
+        dlg_display_title = ('%s • %s' % (target_title, ep_tag)) if target_title else ep_tag
+
+    dlg_style = _bridge_addon.getSetting('search_dialog_style')
+    if str(dlg_style) == '1':
+        p_dialog = xbmcgui.DialogProgress()
+    else:
+        p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine)
     p_dialog.create('Multi Bridge (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
@@ -6397,7 +6734,10 @@ def _run_parallel_search_impl(engine='alfa'):
                     finished_channels.append((clean_name(ch_info), found))
 
         completed = len(completed_indices)
-        pct = int((completed / float(total_channels)) * 100) if total_channels else 100
+        if pipeline_verifier:
+            pct = min(85, int((completed / float(total_channels)) * 85)) if total_channels else 85
+        else:
+            pct = int((completed / float(total_channels)) * 100) if total_channels else 100
         lines = []
         recent = finished_channels[-4:]
         for ch_name, found in recent:
@@ -6417,8 +6757,20 @@ def _run_parallel_search_impl(engine='alfa'):
             if v_act > 0 or v_q > 0:
                 v_parts.append('[COLOR yellow]verificando (%d)[/COLOR]' % (v_act + v_q))
             v_tag = (' • ' + ' | '.join(v_parts)) if v_parts else ''
+            if hasattr(p_dialog, 'set_metrics'):
+                p_dialog.set_metrics(
+                    completed_str='%d/%d' % (completed, total_channels),
+                    n_dir=v_dir, n_tor=v_tor, n_ver=v_act + v_q,
+                    status_line=lines[0] or active_str
+                )
             p_dialog.update(pct, '%s (%d/%d canales)%s\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, v_tag, lines[0], lines[1], active_str))
         else:
+            if hasattr(p_dialog, 'set_metrics'):
+                p_dialog.set_metrics(
+                    completed_str='%d/%d' % (completed, total_channels),
+                    n_dir=0, n_tor=0, n_ver=0,
+                    status_line=lines[0] or active_str
+                )
             p_dialog.update(pct, '%s (%d/%d canales)\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, lines[0], lines[1], active_str))
 
         elapsed = now - start_time
@@ -6426,12 +6778,15 @@ def _run_parallel_search_impl(engine='alfa'):
             break
 
         if p_dialog.iscanceled():
-            if elapsed > 4 or len(results_dict) > 0:
-                break
+            xbmc.log("Multi Bridge: búsqueda cancelada por el usuario", xbmc.LOGINFO)
+            break
         time.sleep(0.1)
 
     if pipeline_verifier:
-        pipeline_verifier.finish_post_search(target_title=target_title, p_dialog=p_dialog)
+        if p_dialog.iscanceled():
+            pipeline_verifier.global_stop.set()
+        else:
+            pipeline_verifier.finish_post_search(target_title=target_title, p_dialog=p_dialog)
 
     try:
         p_dialog.close()
@@ -6440,17 +6795,23 @@ def _run_parallel_search_impl(engine='alfa'):
     try:
         xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
     except: pass
-    try:
-        xbmc.sleep(400)
-    except:
-        time.sleep(0.4)
 
-    if not results_dict:
-        _grace_start = time.time()
-        while time.time() - _grace_start < 2.0:
-            if results_dict or xbmc.Monitor().abortRequested():
-                break
-            time.sleep(0.1)
+    _is_user_canceled = False
+    try:
+        _is_user_canceled = (xbmcgui.Window(10000).getProperty("bridge.search_canceled") == "true")
+    except: pass
+
+    if not _is_user_canceled:
+        try:
+            xbmc.sleep(200)
+        except:
+            time.sleep(0.2)
+        if not results_dict:
+            _grace_start = time.time()
+            while time.time() - _grace_start < 2.0:
+                if results_dict or xbmc.Monitor().abortRequested() or (xbmcgui.Window(10000).getProperty("bridge.search_canceled") == "true"):
+                    break
+                time.sleep(0.1)
 
     all_links = []
     matched_item = None
@@ -9249,7 +9610,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             xbmc.log("Multi Bridge: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
             xbmcgui.Dialog().notification('Multi Bridge', msg, '', 4000)
             return False
-        return _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
+        res = _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
+        return res
 
     # 2. Preparar enlace (resolver canal.play y data_url)
     prepared = _prepare_playable_link(link, engine=engine)
@@ -9307,7 +9669,14 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
 
         def _cap_sel(heading="", options=None, *args, **kwargs):
             if options and isinstance(options, (list, tuple)):
-                return len(options) - 1
+                best_idx = 0
+                best_score = -1
+                for idx, opt in enumerate(options):
+                    score = _stream_quality_score(opt)
+                    if score > best_score:
+                        best_score = score
+                        best_idx = idx
+                return best_idx
             return 0
 
         def _do_resolve():
@@ -12610,6 +12979,8 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=cur_time)
+    if played in ('cancel', 'no_client'):
+        return played
     if played:
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx, meta=meta)
         return True
@@ -12645,6 +13016,8 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=seek_to_time, start_beginning=start_beginning)
+    if played in ('cancel', 'no_client'):
+        return played
     if played:
         mon_idx = global_idx if global_idx is not None else chosen_idx
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta, force_beginning=start_beginning)
@@ -12818,7 +13191,7 @@ def _show_floating_links_dialog_impl(offset=0):
         else:
             played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, global_idx=(chosen_idx + offset))
 
-        if played == 'cancel':
+        if played in ('cancel', 'no_client'):
             continue
 
         playback_ok = False
@@ -13159,6 +13532,8 @@ def main():
                     return
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, seek_to_time=seek_to_time, start_beginning=start_beginning)
+            if played in ('cancel', 'no_client'):
+                return
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta, force_beginning=start_beginning)
             else:
@@ -13478,9 +13853,7 @@ def main():
             _cached = _read_search_cache_atomic()
             if _cached and isinstance(_cached, dict) and _cached.get('links'):
                 _c_meta = _cached.get('meta', {}) or {}
-                _req_tmdb = str(tmdb_id or get_param('tmdb') or '')
-                _c_tmdb = str(_c_meta.get('tmdb') or '')
-                if _req_tmdb and _c_tmdb and _req_tmdb == _c_tmdb:
+                if _is_same_media_item(_c_meta, _init_meta):
                     _c_raw_links = [l for l in _cached.get('links', []) if isinstance(l, dict) and l.get('url')]
                     if _c_raw_links:
                         xbmc.log("Multi Bridge: reutilizando %d enlaces ya recolectados por canales..." % len(_c_raw_links), xbmc.LOGINFO)
@@ -13498,11 +13871,7 @@ def main():
             _auto_verify = _bridge_addon.getSetting('auto_verify_links') == 'true'
             xbmc.log(f"Multi Bridge: auto_verify_links={_auto_verify} engine={eng} links={len(links) if links else 0} pipeline_verified={verified_flag}", xbmc.LOGINFO)
             if links and _auto_verify and not verified_flag:
-                p_diag = xbmcgui.DialogProgress()
-                p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores...')
-                v_links = _verify_links_headless(links, engine=eng, p_dialog=p_diag)
-                try: p_diag.close()
-                except: pass
+                v_links = _verify_links_headless(links, engine=eng, p_dialog=None)
                 if v_links:
                     links = _filter_and_sort_links(v_links)
                     verified_flag = True
@@ -13688,11 +14057,7 @@ def main():
             _auto_verify2 = _bridge_addon.getSetting('auto_verify_links') == 'true'
             xbmc.log(f"Multi Bridge: auto_verify_links={_auto_verify2} engine={eng} links={len(links) if links else 0} pipeline_verified={verified_flag}", xbmc.LOGINFO)
             if _auto_verify2 and not verified_flag:
-                p_diag = xbmcgui.DialogProgress()
-                p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores...')
-                v_links = _verify_links_headless(links, engine=eng, p_dialog=p_diag)
-                try: p_diag.close()
-                except: pass
+                v_links = _verify_links_headless(links, engine=eng, p_dialog=None)
                 if v_links:
                     links = v_links
                     verified_flag = True

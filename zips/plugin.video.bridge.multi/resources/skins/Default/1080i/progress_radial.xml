@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog">
+    <defaultcontrol always="true">200</defaultcontrol>
+    <zorder>100</zorder>
+    <coordinates>
+        <system>1</system>
+        <left>0</left>
+        <top>0</top>
+    </coordinates>
+    <controls>
+        <!-- Oscurecimiento de pantalla de fondo -->
+        <control type="image">
+            <left>0</left><top>0</top>
+            <width>1920</width><height>1080</height>
+            <texture colordiffuse="C0000000">white.png</texture>
+            <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
+            <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
+        </control>
+
+        <!-- TARJETA PRINCIPAL DEL DIALOGO (1080 x 440) -->
+        <control type="group">
+            <animation effect="zoom" start="90" end="100" center="auto" time="250" tween="quadratic" easing="out">WindowOpen</animation>
+            <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
+            <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
+
+            <!-- Fondo oscuro con textura -->
+            <control type="image">
+                <left>420</left><top>315</top>
+                <width>1080</width><height>440</height>
+                <texture border="16">texture.png</texture>
+                <colordiffuse>F00D1117</colordiffuse>
+            </control>
+
+            <!-- Capa de Fanart sutil dentro del cuadro -->
+            <control type="image">
+                <left>420</left><top>315</top>
+                <width>1080</width><height>440</height>
+                <texture background="true">$INFO[Window(10000).Property(bridge.search_fanart)]</texture>
+                <colordiffuse>18FFFFFF</colordiffuse>
+                <aspectratio aligny="center">scale</aspectratio>
+            </control>
+
+            <!-- Borde tenue dorado permanente -->
+            <control type="image">
+                <left>420</left><top>315</top>
+                <width>1080</width><height>2</height>
+                <texture colordiffuse="50D4AF37">white.png</texture>
+            </control>
+            <control type="image">
+                <left>420</left><top>753</top>
+                <width>1080</width><height>2</height>
+                <texture colordiffuse="50D4AF37">white.png</texture>
+            </control>
+            <control type="image">
+                <left>420</left><top>315</top>
+                <width>2</width><height>440</height>
+                <texture colordiffuse="50D4AF37">white.png</texture>
+            </control>
+            <control type="image">
+                <left>1498</left><top>315</top>
+                <width>2</width><height>440</height>
+                <texture colordiffuse="50D4AF37">white.png</texture>
+            </control>
+
+            <!-- POSTER DE LA PELICULA (Centrado verticalmente: 348..723) -->
+            <control type="image">
+                <left>445</left><top>348</top>
+                <width>250</width><height>375</height>
+                <texture background="true" diffuse="thumbs/movieposter_mask.png">$INFO[Window(10000).Property(bridge.search_poster)]</texture>
+                <fallback>DefaultVideo.png</fallback>
+                <aspectratio aligny="top">scale</aspectratio>
+            </control>
+
+            <!-- ANILLO RADIAL (715, 440, 170x170 - Centrado armonicamente) -->
+            <control type="image">
+                <left>715</left><top>440</top>
+                <width>170</width><height>170</height>
+                <texture>radial_glow_v2.png</texture>
+                <animation effect="rotate" start="360" end="0" center="auto" time="2200" loop="true" condition="true">Conditional</animation>
+            </control>
+
+            <!-- Disco circular interior oscuro -->
+            <control type="image">
+                <left>725</left><top>450</top>
+                <width>150</width><height>150</height>
+                <texture>radial_circle.png</texture>
+            </control>
+
+            <!-- Porcentaje en el centro del anillo (bloque centrado verticalmente) -->
+            <control type="label" id="2001">
+                <left>715</left><top>475</top>
+                <width>170</width><height>36</height>
+                <font>font30_title</font>
+                <textcolor>FFD4AF37</textcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <label>[B]$INFO[Window(10000).Property(bridge.search_pct)]%[/B]</label>
+            </control>
+
+            <!-- Conteo de canales dentro del anillo (centrado con espacio armonico) -->
+            <control type="label" id="2002">
+                <left>715</left><top>517</top>
+                <width>170</width><height>24</height>
+                <font>font20_title</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <label>[B]$INFO[Window(10000).Property(bridge.search_channels_count)][/B]</label>
+            </control>
+
+            <!-- Etiqueta CANALES (centrado en la base del circulo) -->
+            <control type="label">
+                <left>715</left><top>545</top>
+                <width>170</width><height>18</height>
+                <font>font_flag</font>
+                <textcolor>FFAAAAAA</textcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <label>CANALES</label>
+            </control>
+
+            <!-- ZONA DERECHA: INFORMACION, ESTADISTICAS Y CONTROLES -->
+            <!-- Etiqueta del motor -->
+            <control type="label">
+                <left>905</left><top>370</top>
+                <width>570</width><height>20</height>
+                <font>font11</font>
+                <textcolor>FFD4AF37</textcolor>
+                <label>[B]MULTI BRIDGE • $INFO[Window(10000).Property(bridge.search_engine)][/B]</label>
+            </control>
+
+            <!-- Titulo de la Pelicula / Serie -->
+            <control type="label" id="100">
+                <left>905</left><top>412</top>
+                <width>570</width><height>36</height>
+                <font>font15</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>[B]$INFO[Window(10000).Property(bridge.search_title)][/B]</label>
+            </control>
+
+            <!-- TARJETA 1: ENLACES FUNCIONALES (Con mayuscula en Enlaces y Funcionales) -->
+            <control type="image">
+                <left>905</left><top>466</top>
+                <width>570</width><height>34</height>
+                <texture colordiffuse="1500FF88">white.png</texture>
+            </control>
+            <control type="label">
+                <left>920</left><top>466</top>
+                <width>400</width><height>34</height>
+                <font>font12</font>
+                <textcolor>FF00FF88</textcolor>
+                <aligny>center</aligny>
+                <label>[B]● Enlaces Funcionales[/B]</label>
+            </control>
+            <control type="label" id="2010">
+                <left>1340</left><top>466</top>
+                <width>120</width><height>34</height>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>right</align><aligny>center</aligny>
+                <label>[B]$INFO[Window(10000).Property(bridge.count_directos)][/B]</label>
+            </control>
+
+            <!-- TARJETA 2: TORRENTS ENCONTRADOS -->
+            <control type="image">
+                <left>905</left><top>508</top>
+                <width>570</width><height>34</height>
+                <texture colordiffuse="1500D0FF">white.png</texture>
+            </control>
+            <control type="label">
+                <left>920</left><top>508</top>
+                <width>400</width><height>34</height>
+                <font>font12</font>
+                <textcolor>FF00D0FF</textcolor>
+                <aligny>center</aligny>
+                <label>[B]● Torrents Encontrados[/B]</label>
+            </control>
+            <control type="label" id="2011">
+                <left>1340</left><top>508</top>
+                <width>120</width><height>34</height>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>right</align><aligny>center</aligny>
+                <label>[B]$INFO[Window(10000).Property(bridge.count_torrents)][/B]</label>
+            </control>
+
+            <!-- TARJETA 3: EN COLA DE VERIFICACION -->
+            <control type="image">
+                <left>905</left><top>550</top>
+                <width>570</width><height>34</height>
+                <texture colordiffuse="15FFB000">white.png</texture>
+            </control>
+            <control type="label">
+                <left>920</left><top>550</top>
+                <width>400</width><height>34</height>
+                <font>font12</font>
+                <textcolor>FFFFB000</textcolor>
+                <aligny>center</aligny>
+                <label>[B]● En cola de verificación[/B]</label>
+            </control>
+            <control type="label" id="2012">
+                <left>1340</left><top>550</top>
+                <width>120</width><height>34</height>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>right</align><aligny>center</aligny>
+                <label>[B]$INFO[Window(10000).Property(bridge.count_verificando)][/B]</label>
+            </control>
+
+            <!-- BARRA DE PROGRESO LINEAL (ID 20) -->
+            <control type="progress" id="20">
+                <left>905</left><top>606</top>
+                <width>570</width><height>6</height>
+                <texturebg colordiffuse="33FFFFFF">white.png</texturebg>
+                <midtexture colordiffuse="FFFFB000">white.png</midtexture>
+            </control>
+
+            <!-- BOTON CANCELAR (ID 200) - Sin directivas onback conflictivas -->
+            <control type="button" id="200">
+                <left>1250</left><top>626</top>
+                <width>225</width><height>60</height>
+                <label>Cancelar</label>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFB000</focusedcolor>
+                <texturefocus colordiffuse="70FFB000">white.png</texturefocus>
+                <texturenofocus colordiffuse="30FFFFFF">white.png</texturenofocus>
+                <align>center</align>
+                <aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>200</onleft>
+                <onright>200</onright>
+                <onup>200</onup>
+                <ondown>200</ondown>
+                <onclick>SetProperty(bridge.search_canceled,true,home)</onclick>
+                <onclick>Action(Close)</onclick>
+                <onback>SetProperty(bridge.search_canceled,true,home)</onback>
+            </control>
+        </control>
+    </controls>
+</window>
