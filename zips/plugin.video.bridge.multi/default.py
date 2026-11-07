@@ -1006,6 +1006,42 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                     threading.Thread(target=_start_next_episode_preloader, args=(_m_dict, my_token), daemon=True).start()
                 except Exception as _pre_e:
                     xbmc.log("Multi Bridge: error lanzando precarga de siguiente episodio: %s" % str(_pre_e), xbmc.LOGWARNING)
+        # Detectar resolucion tecnica real directamente del decodificador de Kodi Player (ffmpeg)
+        def _detect_and_sync_player_resolution():
+            for _attempt in range(25):
+                if not p.isPlayingVideo() or mon.abortRequested():
+                    break
+                try:
+                    w_str = xbmc.getInfoLabel('VideoPlayer.VideoWidth') or ''
+                    h_str = xbmc.getInfoLabel('VideoPlayer.VideoHeight') or ''
+                    w = int(w_str) if w_str.isdigit() else 0
+                    h = int(h_str) if h_str.isdigit() else 0
+                    if not w or not h:
+                        vt = p.getVideoInfoTag() if hasattr(p, 'getVideoInfoTag') else None
+                        if vt:
+                            w = vt.getVideoWidth() if hasattr(vt, 'getVideoWidth') else 0
+                            h = vt.getVideoHeight() if hasattr(vt, 'getVideoHeight') else 0
+                    if w > 0 or h > 0:
+                        kodi_res = _classify_resolution(w, h)
+                        if kodi_res:
+                            xbmc.log("Multi Bridge: resolucion real confirmada por decodificador de Kodi (%dx%d) -> %s" % (w, h, kodi_res), xbmc.LOGINFO)
+                            active_idx = current_link_index
+                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
+                            try:
+                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
+                            except Exception:
+                                pass
+                            break
+                except Exception:
+                    pass
+                if mon.waitForAbort(0.4):
+                    break
+
+        try:
+            threading.Thread(target=_detect_and_sync_player_resolution, daemon=True).start()
+        except Exception as _e_res:
+            xbmc.log("Multi Bridge: error iniciando hilo de resolucion real de Kodi: %s" % _e_res, xbmc.LOGINFO)
+
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
         try:
@@ -3333,7 +3369,8 @@ def _get_link_quality_score(link, pref_quality=0):
     return 120
 
 def _stream_quality_score(entry):
-    """Calcula la puntuación ordinal de calidad técnica de un flujo o etiqueta (4K > 1080p > 720p > 480p > SD)."""
+    """Calcula la puntuacion ordinal de calidad tecnica de un flujo o etiqueta (4K > 1080p > 720p > 480p > SD).
+    Soporta resoluciones nativas de Okru (ultra > full > hd > sd > low > lowest), Streamwish y CDNs con parametro type=."""
     if not entry:
         return 0
     lbl = ''
@@ -3344,17 +3381,17 @@ def _stream_quality_score(entry):
     elif isinstance(entry, str):
         lbl = entry
     comb = (lbl + ' ' + url).upper()
-    if _has_4k_token(comb) or any(k in comb for k in ('2160P', '2160', '4K', 'UHD', '3840X2160')):
+    if _has_4k_token(comb) or any(k in comb for k in ('2160P', '2160', '4K', 'UHD', '3840X2160', 'ULTRA')) or 'TYPE=7' in comb:
         return 400
-    if any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD', '1920X1080', '1920X1088')):
+    if any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD', '1920X1080', '1920X1088', 'QUAD')) or re.search(r'\bFULL\b', comb) or 'TYPE=5' in comb or 'TYPE=6' in comb:
         return 300
-    if any(k in comb for k in ('720P', '720', 'HD', '1280X720')) and not any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD')):
+    if (any(k in comb for k in ('720P', '720', '1280X720')) or re.search(r'\bHD\b', comb) or 'TYPE=4' in comb) and not any(k in comb for k in ('1080P', '1080', 'FHD', 'FULLHD', 'QUAD', 'ULTRA')):
         return 200
-    if any(k in comb for k in ('480P', '480', 'SD', 'DVD', '854X480', '720X480')):
+    if any(k in comb for k in ('480P', '480', 'DVD', '854X480', '720X480')) or re.search(r'\bSD\b', comb) or 'TYPE=3' in comb:
         return 100
-    if any(k in comb for k in ('360P', '360', '640X360')):
+    if any(k in comb for k in ('360P', '360', '640X360')) or re.search(r'\bLOW\b', comb) or 'TYPE=2' in comb:
         return 50
-    if any(k in comb for k in ('240P', '240')):
+    if any(k in comb for k in ('240P', '240')) or re.search(r'\b(?:LOWEST|MOBILE)\b', comb) or 'TYPE=1' in comb:
         return 20
     return 10
 
@@ -3441,21 +3478,23 @@ def _parse_mkv_resolution(data):
 
 def _detect_resolution_from_text(text):
     """Detecta etiquetas de resolucion tecnica (4K, 1080p, 720p, 480p, 360p, 240p)
-    desde el texto de una URL resuelta, nombre de archivo o titulo de enlace."""
+    desde el texto de una URL resuelta, nombre de archivo, etiquetas de servidor (Okru, Streamwish) o titulo de enlace."""
     if not text:
         return None
     t = str(text).upper()
-    if re.search(r'\b(?:2160P?|3840X2160|4K|UHD)\b', t):
+    if re.search(r'\b(?:2160P?|3840X2160|4K|UHD|ULTRA)\b', t) or 'TYPE=7' in t:
         return '4K'
-    if '1080P' in t or '1080' in t or 'FULLHD' in t or 'FHD' in t or '1920X1080' in t or '1920X1088' in t:
+    if re.search(r'\b(?:1440P?|QUAD|2K)\b', t) or 'TYPE=6' in t:
         return '1080p'
-    if '720P' in t or '720' in t or '1280X720' in t:
+    if '1080P' in t or '1080' in t or 'FULLHD' in t or 'FHD' in t or '1920X1080' in t or '1920X1088' in t or re.search(r'\bFULL\b', t) or 'TYPE=5' in t:
+        return '1080p'
+    if '720P' in t or '720' in t or '1280X720' in t or re.search(r'\bHD\b', t) or 'TYPE=4' in t:
         return '720p'
-    if '480P' in t or '480' in t or '854X480' in t or '720X480' in t:
+    if '480P' in t or '480' in t or '854X480' in t or '720X480' in t or re.search(r'\bSD\b', t) or 'TYPE=3' in t:
         return '480p'
-    if '360P' in t or '360' in t or '640X360' in t:
+    if '360P' in t or '360' in t or '640X360' in t or re.search(r'\bLOW\b', t) or 'TYPE=2' in t:
         return '360p'
-    if '240P' in t or '240' in t:
+    if '240P' in t or '240' in t or re.search(r'\b(?:LOWEST|MOBILE)\b', t) or 'TYPE=1' in t:
         return '240p'
     return None
 
@@ -3725,15 +3764,15 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                 detected_res = _classify_resolution(w, h)
 
         if not detected_res:
-            if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
+            if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')) or 'type=5' in cu or 'type=6' in cu:
                 detected_res = '1080p'
-            elif any(k in cu for k in ('720p', '720')):
+            elif any(k in cu for k in ('720p', '720', '/hd/')) or 'type=4' in cu:
                 detected_res = '720p'
-            elif any(k in cu for k in ('480p', '480', 'dvd', 'dvdrip', 'sd')):
+            elif re.search(r'(?:[._\-/]480p?|dvd|dvdrip|\bsd\b)', cu) or 'type=3' in cu:
                 detected_res = '480p'
-            elif any(k in cu for k in ('360p', '360')):
+            elif any(k in cu for k in ('360p', '360')) or 'type=2' in cu:
                 detected_res = '360p'
-            elif any(k in cu for k in ('240p', '240')):
+            elif any(k in cu for k in ('240p', '240')) or 'type=1' in cu:
                 detected_res = '240p'
 
         return True, detected_res
@@ -12545,6 +12584,22 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
             pass
 
     def _get_quality_bucket(self, lnk):
+        # 1. Prioridad maxima: resolucion real confirmada por decodificador o verificacion tecnica
+        real_q = _safe_str(getattr(lnk, 'real_quality', '') or getattr(lnk, 'real_res', '')).strip().upper()
+        if real_q:
+            if '4K' in real_q or '2160' in real_q: return '4K'
+            if '1080' in real_q or 'FHD' in real_q: return '1080p'
+            if '720' in real_q: return '720p'
+            if '480' in real_q or '360' in real_q or '240' in real_q or 'SD' in real_q: return 'SD'
+
+        # 2. Formato de calidad de Multi Bridge (contempla servidores como Okru, Streamwish, etc.)
+        fq = _format_quality(lnk).upper()
+        if '4K' in fq or '2160' in fq: return '4K'
+        if '1080' in fq or 'FHD' in fq: return '1080p'
+        if '720' in fq: return '720p'
+        if '480' in fq or '360' in fq or '240' in fq or 'SD' in fq: return 'SD'
+
+        # 3. Fallback de texto combinado
         qual = _safe_str(getattr(lnk, 'quality', '')).strip().upper()
         title_str = _safe_str(getattr(lnk, 'title', '')).strip().upper()
         url_str = _safe_str(getattr(lnk, 'url', '')).strip().upper()
@@ -12555,7 +12610,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
             return '1080p'
         if '720' in comb or 'HD' in comb:
             return '720p'
-        return 'SD'
+        return 'SD' 
 
     def _set_window_properties(self):
         meta_title = self.meta.get('title') or self.meta.get('tvshowtitle') or title or showname or 'Multi Bridge'
