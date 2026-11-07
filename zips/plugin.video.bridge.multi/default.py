@@ -1006,41 +1006,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                     threading.Thread(target=_start_next_episode_preloader, args=(_m_dict, my_token), daemon=True).start()
                 except Exception as _pre_e:
                     xbmc.log("Multi Bridge: error lanzando precarga de siguiente episodio: %s" % str(_pre_e), xbmc.LOGWARNING)
-        # Detectar resolucion tecnica real directamente del decodificador de Kodi Player (ffmpeg)
-        def _detect_and_sync_player_resolution():
-            for _attempt in range(25):
-                if not p.isPlayingVideo() or mon.abortRequested():
-                    break
-                try:
-                    w_str = xbmc.getInfoLabel('VideoPlayer.VideoWidth') or ''
-                    h_str = xbmc.getInfoLabel('VideoPlayer.VideoHeight') or ''
-                    w = int(w_str) if w_str.isdigit() else 0
-                    h = int(h_str) if h_str.isdigit() else 0
-                    if not w or not h:
-                        vt = p.getVideoInfoTag() if hasattr(p, 'getVideoInfoTag') else None
-                        if vt:
-                            w = vt.getVideoWidth() if hasattr(vt, 'getVideoWidth') else 0
-                            h = vt.getVideoHeight() if hasattr(vt, 'getVideoHeight') else 0
-                    if w > 0 or h > 0:
-                        kodi_res = _classify_resolution(w, h)
-                        if kodi_res:
-                            xbmc.log("Multi Bridge: resolucion real confirmada por decodificador de Kodi (%dx%d) -> %s" % (w, h, kodi_res), xbmc.LOGINFO)
-                            active_idx = current_link_index
-                            _update_link_real_quality_in_cache(active_idx, kodi_res, media_key=str(media_key))
-                            try:
-                                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', kodi_res)
-                            except Exception:
-                                pass
-                            break
-                except Exception:
-                    pass
-                if mon.waitForAbort(0.4):
-                    break
 
-        try:
-            threading.Thread(target=_detect_and_sync_player_resolution, daemon=True).start()
-        except Exception as _e_res:
-            xbmc.log("Multi Bridge: error iniciando hilo de resolucion real de Kodi: %s" % _e_res, xbmc.LOGINFO)
 
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
@@ -3722,15 +3688,15 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
             if not detected_res:
                 detected_res = _detect_resolution_from_text(clean_url)
             if not detected_res:
-                if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')):
+                if any(k in cu for k in ('1080p', '1080', 'fullhd', 'fhd')) or 'type=5' in cu or 'type=6' in cu:
                     detected_res = '1080p'
-                elif any(k in cu for k in ('720p', '720', '/hd/')):
+                elif any(k in cu for k in ('720p', '720', '/hd/')) or 'type=4' in cu:
                     detected_res = '720p'
-                elif any(k in cu for k in ('480p', '480', 'dvd', 'dvdrip', 'sd')):
+                elif re.search(r'(?:[._\-/]480p?|dvd|dvdrip|sd)', cu) or 'type=3' in cu:
                     detected_res = '480p'
-                elif any(k in cu for k in ('360p', '360')):
+                elif any(k in cu for k in ('360p', '360')) or 'type=2' in cu:
                     detected_res = '360p'
-                elif any(k in cu for k in ('240p', '240')):
+                elif any(k in cu for k in ('240p', '240')) or 'type=1' in cu:
                     detected_res = '240p'
 
             return True, detected_res
@@ -8379,7 +8345,14 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
 
     def _cap_sel(heading="", options=None, *args, **kwargs):
         if options and isinstance(options, (list, tuple)):
-            return len(options) - 1
+            best_idx = 0
+            best_score = -1
+            for idx, opt in enumerate(options):
+                score = _stream_quality_score(opt)
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+            return best_idx
         return 0
 
     try:    _xp.setResolvedUrl = _capture

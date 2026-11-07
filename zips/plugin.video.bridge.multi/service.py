@@ -131,36 +131,12 @@ class BridgePlayerService(xbmc.Player):
             _inject_active_playback_metadata(self)
         except Exception as e:
             xbmc.log("Multi Bridge PlayerService: error en onAVStarted: " + str(e), xbmc.LOGWARNING)
-        try:
-            import threading
-            threading.Thread(target=_detect_service_player_resolution, args=(self,), daemon=True).start()
-        except Exception:
-            pass
 
     def onPlayBackStopped(self):
         try:
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
         except Exception:
             pass
-
-
-def _detect_service_player_resolution(player):
-    for _ in range(25):
-        if not player.isPlayingVideo():
-            break
-        try:
-            w_str = xbmc.getInfoLabel('VideoPlayer.VideoWidth') or ''
-            h_str = xbmc.getInfoLabel('VideoPlayer.VideoHeight') or ''
-            w = int(w_str) if w_str.isdigit() else 0
-            h = int(h_str) if h_str.isdigit() else 0
-            if w > 0 or h > 0:
-                res = '4K' if (w >= 3200 or h >= 1800) else ('1080p' if (w >= 1600 or h >= 750) else ('720p' if (w >= 1100 or h >= 520) else ('480p' if (w >= 700 or h >= 440) else 'SD')))
-                xbmcgui.Window(10000).setProperty('MultiBridge.ActiveLinkQuality', res)
-                xbmc.log("Multi Bridge Service: resolucion detectada %dx%d -> %s" % (w, h, res), xbmc.LOGINFO)
-                break
-        except Exception:
-            pass
-        xbmc.sleep(400)
 
 
 def _inject_active_playback_metadata(player):
