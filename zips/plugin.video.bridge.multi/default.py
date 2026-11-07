@@ -890,6 +890,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         _set_global_monitor_token(my_token)
         try:
             xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentMediaKey', str(media_key or ''))
+            xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentPlayingIndex', str(current_link_index if current_link_index is not None else -1))
         except Exception:
             pass
         _current_playing_link_index = current_link_index
@@ -1216,6 +1217,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             _set_global_monitor_token('')
             try:
                 xbmcgui.Window(10000).clearProperty('BridgeMulti.CurrentMediaKey')
+                xbmcgui.Window(10000).clearProperty('BridgeMulti.CurrentPlayingIndex')
                 xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.ClearLogo')
                 xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.CropImage')
                 xbmcgui.Window(10000).clearProperty('TMDbHelper.Player.ClearLogo')
@@ -3685,6 +3687,47 @@ def _get_filter_prefs():
 
 _get_balandro_preferences = _get_filter_prefs
 
+def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
+    if b_prefs is None:
+        b_prefs = _get_filter_prefs()
+    is_tor = _is_torrent_link(it)
+    srv = 'torrent' if is_tor else (_get_link_server_name(it) or getattr(it, 'server', '') or '').lower()
+    if not srv: srv = 'indeterminado'
+
+    # 1. IDIOMA (Jerarquia maxima: Latino primero, luego Castellano, luego VOSE)
+    p_lat = b_prefs.get('preferencia_idioma_lat', 1)
+    p_esp = b_prefs.get('preferencia_idioma_esp', 2)
+    p_vos = b_prefs.get('preferencia_idioma_vos', 3)
+    prefs_lang = {'Lat': p_lat, 'Esp': p_esp, 'VO': p_vos, '?': 4}
+
+    l_str = (_safe_str(getattr(it, 'language', '')) + ' ' + _get_link_language_group(it)).upper()
+    if 'LAT' in l_str: grp = 'Lat'
+    elif 'ESP' in l_str or 'CAST' in l_str: grp = 'Esp'
+    elif 'VOS' in l_str or 'VO' in l_str or 'SUB' in l_str or 'ENG' in l_str: grp = 'VO'
+    else: grp = '?'
+    l_key = prefs_lang.get(grp, 4)
+
+    # 2. SUB-CATEGORIA DENTRO DEL IDIOMA:
+    # 0 = Enlaces normales (HTTP)
+    # 1 = Ultima opcion (Torrents u otros unfavored dentro de ese idioma)
+    unfav_list = [u.lower() for u in b_prefs.get('servers_unfavored', [])]
+    is_unfav = 1 if (srv in unfav_list or (is_tor and 'torrent' in unfav_list)) else 0
+
+    # 3. Servidor preferido
+    pref_list = [p.lower() for p in b_prefs.get('servers_preferred', [])]
+    if srv in pref_list:
+        srv_key = pref_list.index(srv)
+    elif is_unfav:
+        srv_key = 100 + (unfav_list.index(srv) if srv in unfav_list else 50)
+    else:
+        srv_key = 50
+
+    # 4. Calidad
+    q_score = _get_link_quality_score(it, pref_quality=sort_q)
+
+    return (l_key, is_unfav, srv_key, -q_score)
+
+
 def _filter_and_sort_links(links):
     if not links: return []
 
@@ -3717,28 +3760,8 @@ def _filter_and_sort_links(links):
     disc_list = b_prefs.get('servers_discarded', [])
     safe_links = _filter_discarded_links(safe_links, disc_list=disc_list)
 
-    # 2b. Ordenar preferidos, normales (99) y última opción (999 - index)
-    pref_list = b_prefs.get('servers_preferred', [])
-    unfav_list = b_prefs.get('servers_unfavored', [])
-    if pref_list or unfav_list:
-        def numera_server(it):
-            if _is_torrent_link(it):
-                srv = 'torrent'
-            else:
-                srv = (_get_link_server_name(it) or getattr(it, 'server', '') or '').lower()
-            if not srv:
-                srv = 'indeterminado'
-            if srv in pref_list:
-                return pref_list.index(srv)
-            elif srv in unfav_list:
-                return 999 - unfav_list.index(srv)
-            else:
-                return 99
-        safe_links = sorted(safe_links, key=numera_server)
-
-    # PASO 3 de Balandro: filter_and_sort_by_language
+        # PASO 3 de Balandro: filter_and_sort_by_language
     # 3a. Quitar idiomas con valor 0 (Descartar)
-    # 3b. Ordenar según orden de preferencia (1: Primero, 2: Segundo, 3: Tercero)
     p_lat = b_prefs.get('preferencia_idioma_lat', 1)
     p_esp = b_prefs.get('preferencia_idioma_esp', 2)
     p_vos = b_prefs.get('preferencia_idioma_vos', 3)
@@ -3754,14 +3777,8 @@ def _filter_and_sort_links(links):
     # Descartar idiomas con valor 0 (Descartar)
     safe_links = [it for it in safe_links if _is_torrent_link(it) or prefs_lang.get(_get_lang_grp(it), 4) != 0]
 
-    # Ordenar por preferencia de idioma
-    def _lang_sort_key(it):
-        if _is_torrent_link(it):
-            grp = _get_lang_grp(it)
-            return prefs_lang.get(grp, 4) if grp != '?' else 99
-        return prefs_lang.get(_get_lang_grp(it), 4)
-
-    safe_links = sorted(safe_links, key=_lang_sort_key)
+    # 3b. Ordenar respetando jerarquia: Idioma -> HTTP normales primero -> Torrents debajo dentro de su idioma
+    safe_links = sorted(safe_links, key=lambda it: _get_hierarchical_sort_key(it, b_prefs=b_prefs, sort_q=sort_q))
 
     # PASO 4: Priorizar enlaces confirmados sobre enlaces debiles
     # Evita que un enlace debil/no confirmado (posible homonimo de otro anio)
@@ -11597,43 +11614,81 @@ def show_resume_dialog(time_str, title_text=""):
         return -1
 
 
-class _FloatingLinksDialog(xbmcgui.WindowDialog):
-    ACTION_MOVE_LEFT          = 1
-    ACTION_MOVE_RIGHT         = 2
-    ACTION_MOVE_UP            = 3
-    ACTION_MOVE_DOWN          = 4
-    ACTION_PAGE_UP            = 5
-    ACTION_PAGE_DOWN          = 6
-    ACTION_SELECT_ITEM        = 7
-    ACTION_PREVIOUS_MENU      = 10
-    ACTION_SHOW_INFO          = 11
-    ACTION_PAUSE              = 12
-    ACTION_STOP               = 13
-    ACTION_PLAY               = 68
-    ACTION_PLAYER_PLAY        = 79
-    ACTION_NAV_BACK           = 92
-    ACTION_MOUSE_LEFT_CLICK   = 100
-    ACTION_MOUSE_DOUBLE_CLICK = 103
-    ACTION_MOUSE_WHEEL_UP     = 104
-    ACTION_MOUSE_WHEEL_DOWN   = 105
-    ACTION_MOUSE_MOVE         = 107
-    ACTION_BACKSPACE          = 110
-    ACTION_CONTEXT_MENU       = 117
+class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
+    _QUALITY_ICONS = {
+        '4K':    'flag4k.png',
+        '1080p': 'flag1080p.png',
+        '720p':  'flag720p.png',
+        'SD':    'flagSD.png',
+    }
 
-    def __init__(self, links, current_index=0, meta=None, engine='alfa', is_playback=False, failed_links=None, initial_tab=None, offset=0):
-        super().__init__()
+    _CODEC_PATTERNS = [
+        (re.compile(r'HEVC|[Xx]\.?265|[Hh]\.?265', re.I), 'HEVC'),
+        (re.compile(r'[Xx]\.?264|[Hh]\.?264', re.I),       'x264'),
+        (re.compile(r'AV1', re.I),                         'AV1'),
+    ]
+
+    _SOURCE_PATTERNS = [
+        (re.compile(r'Remux', re.I),     'REMUX'),
+        (re.compile(r'BluRay|BLU-RAY', re.I), 'BluRay'),
+        (re.compile(r'BDRip|BRRip', re.I),   'BDRip'),
+        (re.compile(r'WEB-DL|WEBDL', re.I),  'WEB-DL'),
+        (re.compile(r'WEBRip', re.I),        'WebRip'),
+        (re.compile(r'\bWEB\b', re.I),       'WEB-DL'),
+        (re.compile(r'HDTV', re.I),          'HDTV'),
+        (re.compile(r'HDRip', re.I),         'HDRip'),
+        (re.compile(r'DVDRip', re.I),        'DVDRip'),
+        (re.compile(r'DVDScr', re.I),        'DVDScr'),
+        (re.compile(r'HDCAM|CAM|TeleSync|\bTS\b|\bTC\b', re.I), 'CAM/TS'),
+    ]
+
+    _HDR_PATTERNS = [
+        (re.compile(r'HDR10\+', re.I),           'HDR10+'),
+        (re.compile(r'HDR10', re.I),             'HDR10'),
+        (re.compile(r'\bHDR\b', re.I),           'HDR'),
+        (re.compile(r'\bSDR\b', re.I),           'SDR'),
+        (re.compile(r'\bHLG\b', re.I),           'HLG'),
+        (re.compile(r'Dolby[.\s]?Vision|\b(DV|DoVi)\b', re.I), 'DV'),
+    ]
+
+    _AUDIO_PATTERNS = [
+        (re.compile(r'Atmos', re.I),                   'ATMOS'),
+        (re.compile(r'TrueHD', re.I),                  'TrueHD'),
+        (re.compile(r'DTS[\-\.]?HD(?:[\-\.]?MA)?', re.I), 'DTS-HD'),
+        (re.compile(r'\bDTS\b', re.I),                 'DTS'),
+        (re.compile(r'DDP\s?5[\. ]?1|DD\+\s?5[\. ]?1|EAC3\s?5[\. ]?1', re.I), 'DDP 5.1'),
+        (re.compile(r'\bDDP\b|DD\+|EAC3', re.I),       'DDP'),
+        (re.compile(r'DD\s?5[\. ]?1|AC3\s?5[\. ]?1', re.I), 'DD 5.1'),
+        (re.compile(r'\bAC3\b|\bDD\b', re.I),          'AC3'),
+        (re.compile(r'AAC\s?5[\. ]?1', re.I),          'AAC 5.1'),
+        (re.compile(r'\bAAC\b', re.I),                 'AAC'),
+        (re.compile(r'\bFLAC\b', re.I),                'FLAC'),
+        (re.compile(r'6CH|\b5[\. ]?1\b', re.I),        '5.1'),
+        (re.compile(r'2\.0|2CH', re.I),                '2.0'),
+    ]
+
+    def __new__(cls, *args, **kwargs):
+        addon_path = _bridge_addon.getAddonInfo('path')
+        return super(_FloatingLinksDialog, cls).__new__(cls, 'results.xml', addon_path, 'Default', '1080i')
+
+    def __init__(self, links, current_index=0, meta=None, engine='alfa', is_playback=False, failed_links=None, initial_tab=None, offset=0, *args, **kwargs):
         self._is_closed = False
         self.all_links = [l for l in (links or []) if l is not None and getattr(l, 'url', None)]
         self.meta = meta or {}
         self.engine = engine or 'alfa'
         self.is_playback = is_playback
         self.selected = -1
+        self.target_focus_idx = current_index if isinstance(current_index, int) else 0
         self.failed_links = set(failed_links or [])
         mk = _get_media_key(self.meta) if self.meta else None
         self.failed_signatures = _get_session_failed_signatures(media_key=mk, meta=self.meta)
         self.offset_count = offset
+        self.active_tab = initial_tab if initial_tab is not None else 0
+        self.active_filter = None
+        self.last_cm_time = 0
+        self.display_items = []
 
-        # Separar en dos pestañas: 0 = Servidores Directos, 1 = Torrents
+        # Separar directos y torrents para clasificacion e informacion
         self.direct_links = []
         self.torrent_links = []
         for l in self.all_links:
@@ -11643,84 +11698,43 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
             else:
                 self.direct_links.append(l)
 
-        # Enlace en reproducción (si aplica)
+        # Enlace en reproduccion (identificado en la lista original ANTES de reordenar)
         self.playing_item = None
-        if self.is_playback and 0 <= current_index < len(self.all_links):
-            self.playing_item = self.all_links[current_index]
+        if self.is_playback:
+            for l in self.all_links:
+                try: setattr(l, '_is_currently_playing', False)
+                except Exception: pass
 
-        # Determinar pestaña activa inicial
-        if initial_tab is not None and initial_tab in (0, 1):
-            self.active_tab = initial_tab
-        elif self.is_playback and self.playing_item is not None:
-            if self.playing_item in self.torrent_links:
-                self.active_tab = 1
+            target_idx = -1
+            if 0 <= self.target_focus_idx < len(self.all_links):
+                target_idx = self.target_focus_idx
             else:
-                self.active_tab = 0
-        elif len(self.direct_links) == 0 and len(self.torrent_links) > 0:
-            self.active_tab = 1
-        else:
-            self.active_tab = 0
+                try:
+                    c_idx_str = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+                    if c_idx_str and c_idx_str.isdigit():
+                        c_idx = int(c_idx_str)
+                        if 0 <= c_idx < len(self.all_links):
+                            target_idx = c_idx
+                except Exception:
+                    pass
 
-        # Posición del cursor y desplazamiento independientes por pestaña
-        self.tab_current = {0: 0, 1: 0}
-        self.tab_offset = {0: 0, 1: 0}
+            if 0 <= target_idx < len(self.all_links):
+                self.playing_item = self.all_links[target_idx]
+                try: setattr(self.playing_item, '_is_currently_playing', True)
+                except Exception: pass
 
-        # Enfocar enlace inicial en la pestaña activa
-        if isinstance(current_index, int) and 0 <= current_index < len(self.all_links):
-            target_link = self.all_links[current_index]
-            if target_link in self.direct_links:
-                d_idx = self.direct_links.index(target_link)
-                self.tab_current[0] = d_idx
-                if d_idx >= 7:
-                    self.tab_offset[0] = min(d_idx - 7 + 1, max(0, len(self.direct_links) - 7))
-            if target_link in self.torrent_links:
-                t_idx = self.torrent_links.index(target_link)
-                self.tab_current[1] = t_idx
-                if t_idx >= 7:
-                    self.tab_offset[1] = min(t_idx - 7 + 1, max(0, len(self.torrent_links) - 7))
-        elif self.is_playback and self.playing_item is not None:
-            if self.playing_item in self.direct_links:
-                d_idx = self.direct_links.index(self.playing_item)
-                self.tab_current[0] = d_idx
-                if d_idx >= 7:
-                    self.tab_offset[0] = min(d_idx - 7 + 1, max(0, len(self.direct_links) - 7))
-            if self.playing_item in self.torrent_links:
-                t_idx = self.torrent_links.index(self.playing_item)
-                self.tab_current[1] = t_idx
-                if t_idx >= 7:
-                    self.tab_offset[1] = min(t_idx - 7 + 1, max(0, len(self.torrent_links) - 7))
-
-        self.visible_rows = 7
-        self._row_bgs = []
-        self._row_btns = []
-        self._row_btn_ids = []
-        self._row_badges = []
-        self._row_details = []
-        self._row_channels = []
-        self._hl_images = []
-        self._counter_label = None
-        self._empty_label = None
-        self._scroll_controls = []
-        self._up_btn = None
-        self._down_btn = None
-        self._close_btn = None
-        self._close_bg = None
-        self._scroll_btn_bgs = {}
-        self._row_start_y = 0
-        self._row_h = 48
-        self._row_gap = 6
-        self._rx = 0
-        self._rw = 0
-        self._touch_accum_y = 0.0
-        self._touch_accum_x = 0.0
-        self._last_pointer_y = None
-        self._last_pointer_x = None
-        self._is_touching = False
-        self._touch_has_dragged = False
+        # Respetar jerarquia: dentro de cada idioma, HTTP primero y Torrents debajo
         try:
-            self._build()
-        except Exception as e:
-            xbmc.log('BridgeMulti FloatingLinksDialog build error: ' + str(e), xbmc.LOGWARNING)
+            b_prefs = _get_filter_prefs()
+            sort_q = b_prefs.get('servers_sort_quality', 0)
+            self.all_links = sorted(self.all_links, key=lambda it: _get_hierarchical_sort_key(it, b_prefs=b_prefs, sort_q=sort_q))
+        except Exception:
+            pass
+
+        # Despues de ordenar, actualizar target_focus_idx para enfocar exactamente el enlace en reproduccion
+        if self.playing_item is not None and self.playing_item in self.all_links:
+            self.target_focus_idx = self.all_links.index(self.playing_item)
+
         if self.is_playback:
             self._start_playback_watchdog()
 
@@ -11745,40 +11759,186 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
         t.name = "FloatingLinksWatchdog"
         t.start()
 
-    @property
-    def active_links(self):
-        return self.direct_links if self.active_tab == 0 else self.torrent_links
+    def onInit(self):
+        self._set_window_properties()
+        self._populate_list()
+        try:
+            self.setFocusId(2000)
+            target_idx = 0
+            if 0 <= self.target_focus_idx < len(self.all_links):
+                target_lnk = self.all_links[self.target_focus_idx]
+                if target_lnk in self.display_items:
+                    target_idx = self.display_items.index(target_lnk)
+            ctrl = self.getControl(2000)
+            if ctrl and 0 <= target_idx < len(self.display_items):
+                ctrl.selectItem(target_idx)
+        except Exception:
+            pass
 
-    @property
-    def current(self):
-        return self.tab_current.get(self.active_tab, 0)
+    def _get_quality_bucket(self, lnk):
+        qual = _safe_str(getattr(lnk, 'quality', '')).strip().upper()
+        title_str = _safe_str(getattr(lnk, 'title', '')).strip().upper()
+        url_str = _safe_str(getattr(lnk, 'url', '')).strip().upper()
+        comb = qual + ' ' + title_str + ' ' + url_str
+        if _has_4k_token(comb) or '2160' in comb or '4K' in qual:
+            return '4K'
+        if '1080' in comb or 'FHD' in comb or 'FULLHD' in comb:
+            return '1080p'
+        if '720' in comb or 'HD' in comb:
+            return '720p'
+        return 'SD'
 
-    @current.setter
-    def current(self, val):
-        self.tab_current[self.active_tab] = val
+    def _set_window_properties(self):
+        meta_title = self.meta.get('title') or self.meta.get('tvshowtitle') or title or showname or 'Multi Bridge'
+        self.setProperty('bridge.title', _safe_str(meta_title))
+        self.setProperty('bridge.fanart', _safe_str(self.meta.get('fanart') or fanart or ''))
 
-    @property
-    def offset(self):
-        return self.tab_offset.get(self.active_tab, 0)
+        logo = self.meta.get('clearlogo') or clearlogo or ''
+        if logo in ('_', 'None', 'none'): logo = ''
+        if not logo:
+            try: logo = xbmcgui.Window(10000).getProperty('MultiBridge.ClearLogo') or ''
+            except Exception: pass
+        if not logo:
+            try: logo = xbmcgui.Window(10000).getProperty('Player.Art(clearlogo)') or ''
+            except Exception: pass
+        if not logo:
+            try: logo = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.ClearLogo') or ''
+            except Exception: pass
+        if not logo:
+            t_id = self.meta.get('tmdb') or self.meta.get('tmdb_id') or tmdb_id
+            if t_id:
+                is_tv = bool(self.meta.get('season') and self.meta.get('episode'))
+                try:
+                    logo = _get_clearlogo(t_id, is_tv) or ''
+                except Exception:
+                    pass
+        if not logo:
+            try:
+                logo = xbmc.getInfoLabel('ListItem.Art(clearlogo)') or xbmc.getInfoLabel('Player.Art(clearlogo)') or ''
+            except Exception:
+                pass
+        self.setProperty('bridge.clearlogo', _safe_str(logo))
 
-    @offset.setter
-    def offset(self, val):
-        self.tab_offset[self.active_tab] = val
+        season_val = self.meta.get('season') or season
+        episode_val = self.meta.get('episode') or episode
+        try:
+            if season_val and episode_val:
+                self.setProperty('bridge.episode_label', 'S%02dE%02d' % (int(season_val), int(episode_val)))
+            else:
+                self.setProperty('bridge.episode_label', '')
+        except Exception:
+            self.setProperty('bridge.episode_label', '')
 
-    def _white(self):
-        return _get_addon_white_texture()
+        # Contadores por calidad
+        c_4k, c_1080, c_720, c_sd = 0, 0, 0, 0
+        for l in self.all_links:
+            qb = self._get_quality_bucket(l)
+            if qb == '4K': c_4k += 1
+            elif qb == '1080p': c_1080 += 1
+            elif qb == '720p': c_720 += 1
+            else: c_sd += 1
 
-    def _format_link(self, lnk, is_playing=False, is_failed=False):
-        if not lnk:
-            return '[COLOR red]Directo[/COLOR]', 'N/A', '[COLOR red][FALLIDO][/COLOR]'
-        srv = _get_link_server_name(lnk)
-        lang = _format_language(lnk)
-        qual = _format_quality(lnk)
-        ch = _format_channel(lnk)
-        weak = getattr(lnk, 'bridge_weak', False)
-        is_tor = (srv.lower() == 'torrent' or _is_torrent_link(lnk))
+        self.setProperty('bridge.count_4k', str(c_4k))
+        self.setProperty('bridge.count_1080p', str(c_1080))
+        self.setProperty('bridge.count_720p', str(c_720))
+        self.setProperty('bridge.count_sd', str(c_sd))
+        self.setProperty('bridge.total_results', str(len(self.all_links)))
 
-        if not is_failed:
+        self.setProperty('bridge.color_4k', 'FFFF00FF')
+        self.setProperty('bridge.color_1080p', 'FFDAA520')
+        self.setProperty('bridge.color_720p', 'FF9932CC')
+        self.setProperty('bridge.color_sd', 'FF6495ED')
+
+        # Deteccion de idiomas presentes
+        found_langs = set()
+        for l in self.all_links:
+            lg = _format_language(l)
+            if lg:
+                for sublg in lg.split('/'):
+                    sublg = sublg.strip().upper()
+                    if sublg: found_langs.add(sublg)
+        if found_langs:
+            ordered = []
+            for preferred in ('LATINO', 'CASTELLANO', 'VOSE', 'INGLÉS', 'SUBTITULADO'):
+                if preferred in found_langs:
+                    ordered.append(preferred)
+                    found_langs.remove(preferred)
+            ordered.extend(sorted(list(found_langs)))
+            self.setProperty('bridge.lang_text', 'AUDIO: ' + ' / '.join(ordered[:3]))
+        else:
+            self.setProperty('bridge.lang_text', '')
+
+    def _extract_codec(self, name):
+        for pattern, label in self._CODEC_PATTERNS:
+            if pattern.search(name): return label
+        return ''
+
+    def _extract_source(self, name):
+        for pattern, label in self._SOURCE_PATTERNS:
+            if pattern.search(name): return label
+        return ''
+
+    def _extract_hdr(self, name):
+        found = []
+        for pattern, label in self._HDR_PATTERNS:
+            if pattern.search(name) and label not in found:
+                found.append(label)
+        return found
+
+    def _extract_audio(self, name):
+        name_clean = name.replace('.', ' ').replace('_', ' ')
+        found = []
+        for pattern, label in self._AUDIO_PATTERNS:
+            if pattern.search(name_clean):
+                if not any(label in f or f in label for f in found):
+                    found.append(label)
+        return found
+
+    def _populate_list(self):
+        try:
+            ctrl = self.getControl(2000)
+            ctrl.reset()
+        except Exception:
+            ctrl = None
+
+        meta_title = self.meta.get('title') or self.meta.get('tvshowtitle') or title or showname or 'Multi Bridge'
+        global_poster = self.meta.get('poster') or poster or ''
+        global_plot = self.meta.get('plot') or self.meta.get('plot_lat') or self.meta.get('plot_es') or plot or ''
+
+        # Filtrado si esta activo
+        if self.active_filter == 'filter_direct':
+            filtered = [l for l in self.all_links if l in self.direct_links]
+        elif self.active_filter == 'filter_torrent':
+            filtered = [l for l in self.all_links if l in self.torrent_links]
+        elif self.active_filter == 'filter_4k':
+            filtered = [l for l in self.all_links if self._get_quality_bucket(l) == '4K']
+        elif self.active_filter == 'filter_1080p':
+            filtered = [l for l in self.all_links if self._get_quality_bucket(l) == '1080p']
+        elif self.active_filter == 'filter_720p':
+            filtered = [l for l in self.all_links if self._get_quality_bucket(l) == '720p']
+        elif self.active_filter == 'filter_sd':
+            filtered = [l for l in self.all_links if self._get_quality_bucket(l) == 'SD']
+        else:
+            filtered = list(self.all_links)
+
+        self.display_items = filtered
+        items = []
+        playing_matched = False
+
+        for idx, lnk in enumerate(self.display_items):
+            try:
+                src_idx = self.all_links.index(lnk)
+            except ValueError:
+                src_idx = idx
+
+            # Comprobar si es el enlace actualmente en reproduccion (estrictamente solo uno)
+            is_curr_playing = False
+            if self.is_playback and not playing_matched:
+                if getattr(lnk, '_is_currently_playing', False) or (self.playing_item is not None and lnk is self.playing_item):
+                    is_curr_playing = True
+                    playing_matched = True
+
+            # Comprobar si ha fallado
             sig = _get_link_unique_id(lnk)
             is_failed = bool(
                 (lnk in self.failed_links) or
@@ -11786,482 +11946,193 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                 (sig and sig in self.failed_signatures)
             )
 
-        if is_failed:
-            if is_tor:
-                srv_clean = srv if srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', '') else ''
-                badge = ('[COLOR #888888]TORRENT[/COLOR]  [COLOR #777777]%s[/COLOR]' % srv_clean) if srv_clean else '[COLOR #888888]TORRENT[/COLOR]'
+            qb = self._get_quality_bucket(lnk)
+            srv_name = _get_link_server_name(lnk) or ''
+            is_torrent = (srv_name.lower() == 'torrent' or _is_torrent_link(lnk))
+            type_label = 'TORRENT' if is_torrent else 'HTTP'
+            if is_failed:
+                type_label = 'FALLIDO'
+
+            # Colores base y estilo de tarjeta
+            if is_failed:
+                base_color = 'FFFF4444'
+                hl_focus = '40FF3333'
+                hl_dim = '20FF3333'
+                title_color_focus = 'FFFF6666'
+            elif is_curr_playing:
+                base_color = 'FF00FF7F'  # SpringGreen vibrante para el enlace en reproduccion
+                hl_focus = '4500FF7F'
+                hl_dim = '2500FF7F'
+                title_color_focus = 'FF00FF7F'
+            elif is_torrent:
+                base_color = 'FF00E5FF'  # Cyan electrico unico y distintivo para Torrents
+                hl_focus = '3500E5FF'
+                hl_dim = '1800E5FF'
+                title_color_focus = 'FFE0FFFF'
             else:
-                badge = '[COLOR #777777]%s[/COLOR]' % (srv or 'Directo')
+                if qb == '4K': base_color = 'FFFF00FF'
+                elif qb == '1080p': base_color = 'FFDAA520'
+                elif qb == '720p': base_color = 'FF9932CC'
+                else: base_color = 'FF6495ED'
+                hl_focus = '35' + base_color[2:]
+                hl_dim = '15' + base_color[2:]
+                title_color_focus = 'FFCCCCFF'
 
-            mid_parts = []
-            if lang: mid_parts.append('[COLOR #666666]%s[/COLOR]' % lang)
-            if qual and qual != 'N/A': mid_parts.append('[COLOR #666666]%s[/COLOR]' % qual)
-            mid = ' | '.join(mid_parts)
+            # Linea 1: Nombre
+            raw_title = _safe_str(getattr(lnk, 'title', '')).strip()
+            clean_title = re.sub(r'\[/?COLOR.*?\]', '', raw_title).strip()
+            clean_title = re.sub(r'\[/?B\]', '', clean_title).strip()
+            url_val = _safe_str(getattr(lnk, 'url', '')).strip()
+            url_fn = url_val.split('|')[0].split('?')[0].rstrip('/').split('/')[-1] if url_val else ''
 
-            right_parts = ['[B][COLOR red][FALLIDO][/COLOR][/B]']
-            if ch: right_parts.append('[COLOR #555555](%s)[/COLOR]' % ch)
-            right = '  '.join(right_parts)
-            return badge, mid, right
-
-        if is_tor:
-            # Eliminar duplicado "TORRENT Torrent": si el servidor es "torrent" o vacío, sólo mostrar "TORRENT"
-            if srv and srv.strip().lower() not in ('torrent', 'magnet', 'directo', 'unknown', ''):
-                badge = '[B][COLOR cyan]TORRENT[/COLOR][/B]  [B][COLOR deepskyblue]%s[/COLOR][/B]' % srv
-            else:
-                badge = '[B][COLOR cyan]TORRENT[/COLOR][/B]'
-        else:
-            badge = '[B][COLOR deepskyblue]%s[/COLOR][/B]' % (srv or 'Directo')
-
-        mid_parts = []
-        if lang: mid_parts.append('[COLOR lime]%s[/COLOR]' % lang)
-        if qual and qual != 'N/A': mid_parts.append('[COLOR gold]%s[/COLOR]' % qual)
-        if weak: mid_parts.append('[COLOR orange][Dudoso][/COLOR]')
-        mid = ' | '.join(mid_parts)
-
-        right_parts = []
-        if is_playing:
-            # Texto verde sin icono con glifo roto
-            right_parts.append('[B][COLOR lime]EN REPRODUCCIÓN[/COLOR][/B]')
-        if ch:
-            right_parts.append('[COLOR #888888](%s)[/COLOR]' % ch)
-        right = '  '.join(right_parts)
-
-        return badge, mid, right
-
-    def _build(self):
-        W = self.getWidth() or 1920
-        H = self.getHeight() or 1080
-        dw, dh = 980, 580
-        dx = (W - dw) // 2
-        dy = (H - dh) // 2
-        white = self._white()
-        GOLD = 'FFCFA82C'
-        BORDER = 3
-
-        # Sin backdrop de cierre para la ventana grande (no se puede cerrar dando clic afuera)
-
-        # Borde dorado exterior
-        self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
-        # Fondo oscuro interior translúcido
-        self.addControl(xbmcgui.ControlImage(dx+BORDER, dy+BORDER, dw-BORDER*2, dh-BORDER*2, white, colorDiffuse='F20A0A0A'))
-
-        # Título cabecera
-        if self.is_playback:
-            sub_head = '¿Deseas cambiar de servidor?'
-        elif getattr(self, 'offset_count', 0) > 0:
-            sub_head = 'Enlaces Adicionales (%d)' % len(self.all_links)
-        else:
-            sub_head = 'Servidores Disponibles'
-        self.addControl(xbmcgui.ControlLabel(
-            dx+28, dy+16, 620, 28,
-            '[B][COLOR #CFA82C]MULTI BRIDGE[/COLOR][/B]  [COLOR #E0E0E0]—  %s[/COLOR]' % sub_head,
-            font='font13'))
-
-        # Botón de cierre [ ✕ ] en la esquina superior derecha (táctil y cursor PC)
-        close_w, close_h = 48, 32
-        close_x = dx + dw - 24 - close_w
-        close_y = dy + 10
-        self._close_bg = xbmcgui.ControlImage(close_x, close_y, close_w, close_h, white, colorDiffuse='22FFFFFF')
-        self.addControl(self._close_bg)
-        for _bx, _by, _bw, _bh in (
-                (close_x, close_y, close_w, 2),
-                (close_x, close_y + close_h - 2, close_w, 2),
-                (close_x, close_y, 2, close_h),
-                (close_x + close_w - 2, close_y, 2, close_h)):
-            self.addControl(xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='44CFA82C'))
-        self._close_btn = xbmcgui.ControlButton(
-            close_x, close_y, close_w, close_h, '[B]X[/B]', '', '',
-            font='font13', textColor='FFCCCCCC', focusedColor='FFFF4444', alignment=6)
-        self.addControl(self._close_btn)
-
-        # Línea separadora dorada superior
-        self.addControl(xbmcgui.ControlImage(dx+20, dy+48, dw-40, 2, white, colorDiffuse='55CFA82C'))
-
-        # Barra de Pestañas (Tabs)
-        tab_y = dy + 58
-        tab_h = 34
-        tab0_w = 200
-        tab0_x = dx + 28
-        tab1_w = 200
-        tab1_x = tab0_x + tab0_w + 12
-        t = 2
-
-        # Pestaña 0: Enlaces Directos
-        self._tab0_bg = xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, tab_h, white, colorDiffuse='44CFA82C')
-        self.addControl(self._tab0_bg)
-        self._tab0_borders = [
-            xbmcgui.ControlImage(tab0_x, tab_y, tab0_w, t, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(tab0_x, tab_y + tab_h - t, tab0_w, t, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(tab0_x, tab_y, t, tab_h, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(tab0_x + tab0_w - t, tab_y, t, tab_h, white, colorDiffuse=GOLD),
-        ]
-        for b in self._tab0_borders: self.addControl(b)
-        self._tab0_btn = xbmcgui.ControlButton(tab0_x, tab_y, tab0_w, tab_h, '', '', '', font='font12', alignment=6)
-        self.addControl(self._tab0_btn)
-        self._tab0_lbl = xbmcgui.ControlLabel(tab0_x, tab_y + 4, tab0_w, 24, '', font='font12', alignment=6)
-        self.addControl(self._tab0_lbl)
-
-        # Pestaña 1: Torrents
-        self._tab1_bg = xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, tab_h, white, colorDiffuse='15FFFFFF')
-        self.addControl(self._tab1_bg)
-        self._tab1_borders = [
-            xbmcgui.ControlImage(tab1_x, tab_y, tab1_w, t, white, colorDiffuse='33CFA82C'),
-            xbmcgui.ControlImage(tab1_x, tab_y + tab_h - t, tab1_w, t, white, colorDiffuse='33CFA82C'),
-            xbmcgui.ControlImage(tab1_x, tab_y, t, tab_h, white, colorDiffuse='33CFA82C'),
-            xbmcgui.ControlImage(tab1_x + tab1_w - t, tab_y, t, tab_h, white, colorDiffuse='33CFA82C'),
-        ]
-        for b in self._tab1_borders: self.addControl(b)
-        self._tab1_btn = xbmcgui.ControlButton(tab1_x, tab_y, tab1_w, tab_h, '', '', '', font='font12', alignment=6)
-        self.addControl(self._tab1_btn)
-        self._tab1_lbl = xbmcgui.ControlLabel(tab1_x, tab_y + 4, tab1_w, 24, '', font='font12', alignment=6)
-        self.addControl(self._tab1_lbl)
-
-        # Botón de scroll arriba (ampliado para toque táctil fácil en Android)
-        btn_w, btn_h = 100, 36
-        up_top_x = dx + dw - btn_w - 24
-        up_top_y = tab_y
-
-        # Botón superior ▲ con marco dorado y fondo táctil destacado
-        up_top_bg = xbmcgui.ControlImage(up_top_x, up_top_y, btn_w, btn_h, white, colorDiffuse='33CFA82C')
-        self.addControl(up_top_bg)
-        self._scroll_controls.append(up_top_bg)
-        for _bx, _by, _bw, _bh in (
-                (up_top_x, up_top_y, btn_w, t),
-                (up_top_x, up_top_y + btn_h - t, btn_w, t),
-                (up_top_x, up_top_y, t, btn_h),
-                (up_top_x + btn_w - t, up_top_y, t, btn_h)):
-            _b = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=GOLD)
-            self.addControl(_b)
-            self._scroll_controls.append(_b)
-
-        self._up_btn = xbmcgui.ControlButton(
-            up_top_x, up_top_y, btn_w, btn_h, '[B]▲[/B]', '', '',
-            font='font20_title', textColor=GOLD, focusedColor='FFFFFFFF', alignment=6)
-        self.addControl(self._up_btn)
-        self._scroll_controls.append(self._up_btn)
-        self._scroll_btn_bgs[self._up_btn.getId()] = up_top_bg
-
-        # Contador a la izquierda del botón superior
-        self._counter_label = xbmcgui.ControlLabel(
-            dx + dw - btn_w - 24 - 12 - 200, tab_y + 4, 200, 26, '', font='font13', alignment=1)
-        self.addControl(self._counter_label)
-
-        # Filas de la lista (espaciado de 14px idéntico arriba y abajo)
-        self._rx = dx + 20
-        self._rw = dw - 40
-        self._row_start_y = dy + 106
-
-        for i in range(self.visible_rows):
-            ry = self._row_start_y + i * (self._row_h + self._row_gap)
-            bg = xbmcgui.ControlImage(self._rx, ry, self._rw, self._row_h, white, colorDiffuse='18FFFFFF')
-            self.addControl(bg)
-            self._row_bgs.append(bg)
-
-            badge_lbl = xbmcgui.ControlLabel(self._rx + 16, ry + 9, 220, 30, '', font='font13')
-            self.addControl(badge_lbl)
-            self._row_badges.append(badge_lbl)
-
-            details_lbl = xbmcgui.ControlLabel(self._rx + 240, ry + 9, 360, 30, '', font='font13')
-            self.addControl(details_lbl)
-            self._row_details.append(details_lbl)
-
-            ch_lbl = xbmcgui.ControlLabel(self._rx + 610, ry + 9, self._rw - 626, 30, '', font='font13', alignment=1)
-            self.addControl(ch_lbl)
-            self._row_channels.append(ch_lbl)
-
-            # Botón interactivo transparente sobre toda la fila para soporte táctil, clic y hover con cursor
-            btn = xbmcgui.ControlButton(
-                self._rx, ry, self._rw, self._row_h, '', '', '',
-                textColor='00000000', focusedColor='00000000')
-            self.addControl(btn)
-            self._row_btns.append(btn)
-            self._row_btn_ids.append(btn.getId())
-
-        # Mensaje si la pestaña está vacía
-        self._empty_label = xbmcgui.ControlLabel(
-            self._rx, self._row_start_y + 130, self._rw, 36,
-            '[COLOR #888888]No se encontraron enlaces en esta categoría[/COLOR]',
-            font='font13', alignment=6)
-        self.addControl(self._empty_label)
-
-        # Marco dorado de resaltado activo (4 bordes)
-        th = 2
-        self._hl_images = [
-            xbmcgui.ControlImage(self._rx, self._row_start_y, self._rw, th, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(self._rx, self._row_start_y + self._row_h - th, self._rw, th, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(self._rx, self._row_start_y, th, self._row_h, white, colorDiffuse=GOLD),
-            xbmcgui.ControlImage(self._rx + self._rw - th, self._row_start_y, th, self._row_h, white, colorDiffuse=GOLD),
-        ]
-        for hl in self._hl_images:
-            self.addControl(hl)
-
-        # Botón inferior ▼ con el mismo espaciado de 14px respecto a la última fila
-        nav_y = dy + 492
-        down_x = dx + dw - btn_w - 24
-
-        down_bg = xbmcgui.ControlImage(down_x, nav_y, btn_w, btn_h, white, colorDiffuse='33CFA82C')
-        self.addControl(down_bg)
-        self._scroll_controls.append(down_bg)
-        for _bx, _by, _bw, _bh in (
-                (down_x, nav_y, btn_w, t),
-                (down_x, nav_y + btn_h - t, btn_w, t),
-                (down_x, nav_y, t, btn_h),
-                (down_x + btn_w - t, nav_y, t, btn_h)):
-            _b = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse=GOLD)
-            self.addControl(_b)
-            self._scroll_controls.append(_b)
-
-        self._down_btn = xbmcgui.ControlButton(
-            down_x, nav_y, btn_w, btn_h, '[B]▼[/B]', '', '',
-            font='font20_title', textColor=GOLD, focusedColor='FFFFFFFF', alignment=6)
-        self.addControl(self._down_btn)
-        self._scroll_controls.append(self._down_btn)
-        self._scroll_btn_bgs[self._down_btn.getId()] = down_bg
-
-        # Título de la película o serie/episodio en la barra inferior izquierda (idéntico en gris)
-        s_val = self.meta.get('season')
-        e_val = self.meta.get('episode')
-        year_val = self.meta.get('year') or self.meta.get('showyear')
-        show_name = _safe_str(self.meta.get('showname') or self.meta.get('tvshowtitle') or '')
-        ep_title = _safe_str(self.meta.get('title') or 'Vídeo')
-        if s_val and e_val:
-            bottom_media_title = (show_name or ep_title)
-            if year_val: bottom_media_title += ' (%s)' % year_val
-            bottom_media_title += ' [COLOR gold]T%sxE%s[/COLOR]' % (s_val, e_val)
-        else:
-            bottom_media_title = ep_title
-            if year_val: bottom_media_title += ' (%s)' % year_val
-
-        self._bottom_media_label = xbmcgui.ControlLabel(
-            dx + 28, nav_y + 6, dw - btn_w - 76, 22,
-            bottom_media_title, font='font12', textColor='FFAAAAAA')
-        self.addControl(self._bottom_media_label)
-
-        # Separador inferior
-        self.addControl(xbmcgui.ControlImage(dx+20, dy+538, dw-40, 1, white, colorDiffuse='44CFA82C'))
-
-        # Ayuda en pie de página
-        other_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
-        if self.is_playback:
-            hint_txt = '[COLOR=888888][← →] Pestaña    [↑ ↓] Navegar    [OK / Clic] Servidor    [I] %s    [Atrás] Continuar[/COLOR]' % other_name
-        else:
-            hint_txt = '[COLOR=888888][← →] Pestaña    [↑ ↓] Navegar    [OK / Clic] Reproducir    [I] %s    [Atrás] Salir[/COLOR]' % other_name
-        self.addControl(xbmcgui.ControlLabel(
-            dx+20, dy+546, dw-40, 22, hint_txt, font='font12', alignment=6))
-
-        self._update_tab_headers()
-        self._update_view()
-
-    def _switch_tab(self, new_tab):
-        if new_tab == self.active_tab:
-            return
-        self.active_tab = new_tab
-        self._update_tab_headers()
-        self._update_view()
-
-    def _update_tab_headers(self):
-        GOLD = 'FFCFA82C'
-        DIM_BORDER = '33CFA82C'
-        BG_ACTIVE = '44CFA82C'
-        BG_INACTIVE = '15FFFFFF'
-
-        d_count = len(self.direct_links)
-        t_count = len(self.torrent_links)
-
-        if self.active_tab == 0:
-            self._tab0_bg.setColorDiffuse(BG_ACTIVE)
-            for b in self._tab0_borders: b.setColorDiffuse(GOLD)
-            self._tab0_lbl.setLabel('[B][COLOR #CFA82C]DIRECTOS (%d)[/COLOR][/B]' % d_count)
-
-            self._tab1_bg.setColorDiffuse(BG_INACTIVE)
-            for b in self._tab1_borders: b.setColorDiffuse(DIM_BORDER)
-            self._tab1_lbl.setLabel('[COLOR #888888]TORRENTS (%d)[/COLOR]' % t_count)
-        else:
-            self._tab0_bg.setColorDiffuse(BG_INACTIVE)
-            for b in self._tab0_borders: b.setColorDiffuse(DIM_BORDER)
-            self._tab0_lbl.setLabel('[COLOR #888888]DIRECTOS (%d)[/COLOR]' % d_count)
-
-            self._tab1_bg.setColorDiffuse(BG_ACTIVE)
-            for b in self._tab1_borders: b.setColorDiffuse(GOLD)
-            self._tab1_lbl.setLabel('[B][COLOR #CFA82C]TORRENTS (%d)[/COLOR][/B]' % t_count)
-
-    def _move(self, delta):
-        links = self.active_links
-        if not links: return
-        n = len(links)
-        new_idx = self.current + delta
-        if new_idx >= n:
-            if delta == 1:
-                new_idx = 0
-            else:
-                new_idx = min(new_idx, n - 1) if self.current < n - 1 else 0
-        elif new_idx < 0:
-            if delta == -1:
-                new_idx = n - 1
-            else:
-                new_idx = 0 if self.current > 0 else n - 1
-        self.current = new_idx
-        self._update_view()
-
-    def _scroll(self, delta):
-        """Desplazamiento ultra fluido sin bloqueo de foco para rueda del ratón y táctil."""
-        links = self.active_links
-        if not links: return
-        n = len(links)
-        if n <= self.visible_rows:
-            new_idx = max(0, min(n - 1, self.current + delta))
-            if new_idx != self.current:
-                self.current = new_idx
-                self._update_view(sync_focus=False)
-            return
-        max_offset = max(0, n - self.visible_rows)
-        new_offset = max(0, min(max_offset, self.offset + delta))
-        if new_offset != self.offset:
-            self.offset = new_offset
-            if self.current < self.offset:
-                self.current = self.offset
-            elif self.current >= self.offset + self.visible_rows:
-                self.current = self.offset + self.visible_rows - 1
-            self._update_view(sync_focus=False)
-        else:
-            new_idx = max(0, min(n - 1, self.current + delta))
-            if new_idx != self.current:
-                self.current = new_idx
-                self._update_view(sync_focus=False)
-
-    def _update_highlight_and_bgs(self):
-        links = self.active_links
-        n = len(links)
-        if n == 0:
-            for hl in self._hl_images: hl.setVisible(False)
-            return
-
-        slot = self.current - self.offset
-        if 0 <= slot < self.visible_rows:
-            active_y = self._row_start_y + slot * (self._row_h + self._row_gap)
-            th = 2
-            self._hl_images[0].setPosition(self._rx, active_y)
-            self._hl_images[1].setPosition(self._rx, active_y + self._row_h - th)
-            self._hl_images[2].setPosition(self._rx, active_y)
-            self._hl_images[3].setPosition(self._rx + self._rw - th, active_y)
-            for hl in self._hl_images: hl.setVisible(True)
-
-            for i in range(self.visible_rows):
-                item_idx = self.offset + i
-                if item_idx < n:
-                    lnk = links[item_idx]
-                    is_failed = (lnk in self.failed_links)
-                    if i == slot:
-                        bg_c = '44AA3333' if is_failed else '33CFA82C'
-                    else:
-                        bg_c = '20551111' if is_failed else '18FFFFFF'
-                    self._row_bgs[i].setColorDiffuse(bg_c)
-
-            self._counter_label.setLabel('[B][COLOR #CFA82C]%d[/COLOR] [COLOR #888888]/ %d[/COLOR][/B]' % (self.current + 1, n))
-
-    def _update_view(self, sync_focus=True):
-        links = self.active_links
-        n = len(links)
-        if n == 0:
-            self._counter_label.setLabel('[COLOR #888888]0 / 0[/COLOR]')
-            self._empty_label.setVisible(True)
-            for c in self._scroll_controls:
-                try: c.setVisible(False)
-                except: pass
-            for hl in self._hl_images: hl.setVisible(False)
-            for i in range(self.visible_rows):
-                self._row_badges[i].setVisible(False)
-                self._row_details[i].setVisible(False)
-                self._row_channels[i].setVisible(False)
-                self._row_bgs[i].setVisible(False)
-                if i < len(self._row_btns): self._row_btns[i].setVisible(False)
-            return
-
-        self._empty_label.setVisible(False)
-
-        if self.current < self.offset:
-            self.offset = self.current
-        elif self.current >= self.offset + self.visible_rows:
-            self.offset = self.current - self.visible_rows + 1
-
-        self._counter_label.setLabel('[B][COLOR #CFA82C]%d[/COLOR] [COLOR #888888]/ %d[/COLOR][/B]' % (self.current + 1, n))
-
-        # Visibilidad de controles de desplazamiento táctil: visibles si hay más enlaces que filas en pantalla
-        has_scroll = (n > self.visible_rows)
-        for c in self._scroll_controls:
-            try: c.setVisible(has_scroll)
-            except: pass
-
-        slot = self.current - self.offset
-        for i in range(self.visible_rows):
-            item_idx = self.offset + i
-            if item_idx < n:
-                lnk = links[item_idx]
-                is_curr_playing = bool(self.is_playback and self.playing_item is not None and lnk is self.playing_item)
-                is_failed = (lnk in self.failed_links)
-                badge, mid, right = self._format_link(lnk, is_playing=is_curr_playing, is_failed=is_failed)
-                self._row_badges[i].setLabel(badge)
-                self._row_details[i].setLabel(mid)
-                self._row_channels[i].setLabel(right)
-                self._row_badges[i].setVisible(True)
-                self._row_details[i].setVisible(True)
-                self._row_channels[i].setVisible(True)
-                self._row_bgs[i].setVisible(True)
-                if i == slot:
-                    bg_c = '44AA3333' if is_failed else '33CFA82C'
+            if len(clean_title) < 5 or clean_title.lower() in ('directo', 'torrent', 'enlace', 'stream', 'reproducir'):
+                if len(url_fn) > 5 and '.' in url_fn and not url_fn.lower().endswith(('.php', '.html', '.htm')):
+                    clean_title = url_fn
                 else:
-                    bg_c = '20551111' if is_failed else '18FFFFFF'
-                self._row_bgs[i].setColorDiffuse(bg_c)
-                if i < len(self._row_btns): self._row_btns[i].setVisible(True)
+                    clean_title = '%s - %s' % (meta_title, srv_name or 'Servidor')
+
+            # Quitar etiqueta de resolucion redundante al final del titulo (ej. [1080P], (720p))
+            clean_title = re.sub(r'(?i)\s*\[\s*(?:4k|uhd|2160p?|1080p?|720p?|480p?|sd|hd|fhd)\s*\]\s*$', '', clean_title).strip()
+            clean_title = re.sub(r'(?i)\s*\(\s*(?:4k|uhd|2160p?|1080p?|720p?|480p?|sd|hd|fhd)\s*\)\s*$', '', clean_title).strip()
+
+            if is_failed and not clean_title.startswith('[FALLIDO]'):
+                clean_title = '[FALLIDO] ' + clean_title
+            elif is_curr_playing and not clean_title.startswith('[EN REPRODUCCIÓN]'):
+                clean_title = '[EN REPRODUCCIÓN] ' + clean_title
+
+            # Linea 2: Metadatos estructurados
+            parts = []
+
+            # Badge destacado si esta en reproduccion
+            if is_curr_playing:
+                parts.append('[COLOR FF00FF7F][B]► EN REPRODUCCIÓN[/B][/COLOR]')
+
+            # Tamano
+            size_val = _safe_str(getattr(lnk, 'size', '') or getattr(lnk, 'filesize', '') or '').strip()
+            if not size_val and hasattr(lnk, 'infoLabels') and isinstance(lnk.infoLabels, dict):
+                size_val = _safe_str(lnk.infoLabels.get('size', '')).strip()
+            if not size_val:
+                m_sz = re.search(r'(\d+(?:\.\d+)?\s*(?:GB|MB|GiB|MiB))', raw_title + ' ' + url_val, re.I)
+                if m_sz: size_val = m_sz.group(1).upper()
+            if size_val and size_val != 'N/A':
+                parts.append('[COLOR lime][B]%s[/B][/COLOR]' % size_val)
+
+                        # Servidor
+            if is_torrent:
+                if srv_name and srv_name.lower() not in ('torrent', 'magnet', 'unknown', ''):
+                    parts.append('[COLOR FF00E5FF][B]TORRENT (%s)[/B][/COLOR]' % srv_name.upper())
+                else:
+                    parts.append('[COLOR FF00E5FF][B]TORRENT[/B][/COLOR]')
+            elif srv_name and srv_name.lower() not in ('directo', 'torrent', 'unknown', '', 'http'):
+                parts.append('[COLOR FF00BFFF][B]%s[/B][/COLOR]' % srv_name.upper())
             else:
-                self._row_badges[i].setVisible(False)
-                self._row_details[i].setVisible(False)
-                self._row_channels[i].setVisible(False)
-                self._row_bgs[i].setVisible(False)
-                if i < len(self._row_btns): self._row_btns[i].setVisible(False)
+                parts.append('[COLOR FF00BFFF][B]HTTP[/B][/COLOR]')
 
-        active_y = self._row_start_y + slot * (self._row_h + self._row_gap)
-        th = 2
-        self._hl_images[0].setPosition(self._rx, active_y)
-        self._hl_images[1].setPosition(self._rx, active_y + self._row_h - th)
-        self._hl_images[2].setPosition(self._rx, active_y)
-        self._hl_images[3].setPosition(self._rx + self._rw - th, active_y)
-        for hl in self._hl_images: hl.setVisible(True)
+            # Canal / Proveedor
+            ch = _format_channel(lnk)
+            if ch:
+                parts.append('[COLOR FF7B68EE][B]%s[/B][/COLOR]' % ch)
 
-        # Sincronizar foco nativo en el botón interactivo de la fila activa
-        if sync_focus and hasattr(self, '_row_btns') and 0 <= slot < len(self._row_btns) and slot < n - self.offset:
+            # Idioma
+            lang = _format_language(lnk)
+            if lang:
+                lang_up = lang.upper()
+                if 'LATINO' in lang_up:
+                    parts.append('[COLOR yellow][B]LATINO[/B][/COLOR]')
+                elif 'CAST' in lang_up or 'ESP' in lang_up:
+                    parts.append('[COLOR gold][B]CASTELLANO[/B][/COLOR]')
+                elif 'SUB' in lang_up or 'VOSE' in lang_up:
+                    parts.append('[COLOR FF87CEEB][B]VOSE[/B][/COLOR]')
+                elif 'ENG' in lang_up or 'ING' in lang_up:
+                    parts.append('[COLOR white][B]INGLÉS[/B][/COLOR]')
+                else:
+                    parts.append('[COLOR yellow][B]%s[/B][/COLOR]' % lang)
+
+            # Extension
+            m_ext = re.search(r'\.(mkv|mp4|avi|ts)(?:\s|$|\?|\|)', raw_title + ' ' + url_val, re.I)
+            if m_ext:
+                parts.append('[COLOR FFCCCCFF][B]%s[/B][/COLOR]' % m_ext.group(1).upper())
+
+            # Fuente de video (BluRay, WEB-DL, etc.)
+            src_tag = self._extract_source(raw_title + ' ' + url_val)
+            if src_tag:
+                parts.append('[COLOR FF00FA9A][B]%s[/B][/COLOR]' % src_tag)
+
+            # Codec
+            cod = self._extract_codec(raw_title + ' ' + url_val)
+            if cod:
+                parts.append('[COLOR red][B]%s[/B][/COLOR]' % cod)
+
+            # HDR / Dolby Vision
+            for h in self._extract_hdr(raw_title + ' ' + url_val):
+                parts.append('[COLOR FFFFCC00][B]%s[/B][/COLOR]' % h)
+
+            # Audio
+            for a in self._extract_audio(raw_title + ' ' + url_val):
+                parts.append('[COLOR FFADFF2F][B]%s[/B][/COLOR]' % a)
+
+            if is_failed:
+                parts.append('[COLOR red][B][FALLIDO][/B][/COLOR]')
+
+            info_line_colored = " | ".join(parts)
+            info_line_unfocus = re.sub(r'\[/?COLOR.*?\]', '', info_line_colored)
+            info_line_unfocus = re.sub(r'\[/?B\]', '', info_line_unfocus)
+
+            # ListItem
+            li = xbmcgui.ListItem(clean_title)
+            li.setProperty('bridge.count', '%d.' % (idx + 1))
+            li.setProperty('bridge.src_index', str(src_idx))
+            li.setProperty('bridge.quality', qb)
+            li.setProperty('bridge.type', type_label)
+            li.setProperty('bridge.highlight', base_color)
+            li.setProperty('bridge.highlight_dim', hl_dim)
+            li.setProperty('bridge.highlight_focus', hl_focus)
+            li.setProperty('bridge.is_playing', 'true' if is_curr_playing else 'false')
+            li.setProperty('bridge.name', clean_title)
+            li.setProperty('bridge.title_color_focus', title_color_focus)
+            li.setProperty('bridge.info_line_unfocus', info_line_unfocus)
+            li.setProperty('bridge.info_line_focus', info_line_colored)
+            li.setProperty('bridge.poster', global_poster)
+            li.setProperty('bridge.plot', global_plot)
+
+            items.append(li)
+
+        if ctrl and items:
+            ctrl.addItems(items)
+
+    def onClick(self, controlId):
+        if controlId == 2000:
             try:
-                self.setFocus(self._row_btns[slot])
+                ctrl = self.getControl(2000)
+                item = ctrl.getSelectedItem() if ctrl else None
+                if item:
+                    try:
+                        self.selected = int(item.getProperty('bridge.src_index'))
+                    except (ValueError, TypeError):
+                        self.selected = -1
             except Exception:
-                pass
+                self.selected = -1
+            self.close()
+        elif controlId == 3000:
+            return
 
     def onAction(self, action):
         aid = action.getId()
+        if aid in (117, 101, 11):  # Menu contextual / Info
+            import time
+            if time.time() - self.last_cm_time < 0.5:
+                return
+            self.last_cm_time = time.time()
+            self.handle_context_menu()
+            return
 
-        # Detección de cursor sobre enlace o botón (Hover solo en movimiento o cambio de foco)
-        try:
-            fid = self.getFocusId()
-            if aid in (self.ACTION_MOUSE_MOVE, 107) and hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
-                row_idx = self._row_btn_ids.index(fid)
-                hovered_idx = self.offset + row_idx
-                if hovered_idx < len(self.active_links) and hovered_idx != self.current:
-                    self.current = hovered_idx
-                    self._update_highlight_and_bgs()
+        if aid in (9, 10, 92, 110):  # Atras / ESC / Cancelar
+            self.selected = -1
+            self.close()
+            return
 
-            if hasattr(self, '_close_btn') and hasattr(self, '_close_bg') and self._close_btn and self._close_bg:
-                self._close_bg.setColorDiffuse('66AA2222' if fid == self._close_btn.getId() else '22FFFFFF')
-
-            if hasattr(self, '_scroll_btn_bgs'):
-                for bid, bg_c in self._scroll_btn_bgs.items():
-                    try:
-                        bg_c.setColorDiffuse('77CFA82C' if bid == fid else '33CFA82C')
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        if aid in (self.ACTION_PREVIOUS_MENU, self.ACTION_NAV_BACK, self.ACTION_BACKSPACE, self.ACTION_PAUSE, self.ACTION_PLAYER_PLAY, self.ACTION_PLAY, self.ACTION_STOP, 13):
-            if aid in (self.ACTION_STOP, 13) and self.is_playback:
+        if aid in (13,):  # Stop
+            if self.is_playback:
                 try:
                     if xbmc.Player().isPlaying():
                         xbmc.Player().stop()
@@ -12269,220 +12140,61 @@ class _FloatingLinksDialog(xbmcgui.WindowDialog):
                     pass
             self.selected = -1
             self.close()
-        elif aid == self.ACTION_MOVE_LEFT:
-            self._switch_tab(0)
-        elif aid == self.ACTION_MOVE_RIGHT:
-            self._switch_tab(1)
-        elif aid == self.ACTION_MOVE_UP:
-            self._move(-1)
-        elif aid == self.ACTION_MOVE_DOWN:
-            self._move(1)
-        elif aid == self.ACTION_PAGE_UP:
-            self._move(-self.visible_rows)
-        elif aid == self.ACTION_PAGE_DOWN:
-            self._move(self.visible_rows)
-        elif aid == self.ACTION_SELECT_ITEM:
-            if self.active_links and 0 <= self.current < len(self.active_links):
-                chosen = self.active_links[self.current]
-                try:
-                    self.selected = self.all_links.index(chosen)
-                except ValueError:
-                    self.selected = 0
-            else:
-                self.selected = -1
+            return
+
+    def handle_context_menu(self):
+        opts_items = [('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'force_search')]
+        other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
+        other_eng_id = 'balandro' if self.engine == 'alfa' else 'alfa'
+        is_series = bool(self.meta.get('season') and self.meta.get('episode'))
+        if not (is_series and other_eng_id == 'alfa') and _is_engine_installed(other_eng_id):
+            opts_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name, 'other_engine'))
+
+        is_already_verified = (
+            _bridge_addon.getSetting('auto_verify_links') == 'true' or
+            bool(self.meta.get('verified_only')) or
+            not self.direct_links
+        )
+        if not is_already_verified:
+            opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
+
+        # Filtros rapidos
+        opts_items.append(('[B]Filtrar: Solo HTTP[/B]', 'filter_direct'))
+        opts_items.append(('[B]Filtrar: Solo Torrents[/B]', 'filter_torrent'))
+        opts_items.append(('[B]Filtrar: Solo 4K[/B]', 'filter_4k'))
+        opts_items.append(('[B]Filtrar: Solo 1080p[/B]', 'filter_1080p'))
+        opts_items.append(('[B]Filtrar: Solo 720p[/B]', 'filter_720p'))
+        opts_items.append(('[B]Filtrar: Solo SD[/B]', 'filter_sd'))
+        if self.active_filter:
+            opts_items.append(('[B][COLOR springgreen]Mostrar todos (Restablecer)[/COLOR][/B]', 'filter_reset'))
+
+        sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', [o[0] for o in opts_items])
+        if sel < 0 or sel >= len(opts_items):
+            return
+
+        chosen_action = opts_items[sel][1]
+        if chosen_action in ('force_search', 'other_engine', 'verify_links'):
+            self.selected = chosen_action
             self.close()
-        elif aid in (self.ACTION_SHOW_INFO, 11, self.ACTION_CONTEXT_MENU, 117):
-            other_eng_name = 'Balandro' if self.engine == 'alfa' else 'Alfa'
-            other_eng_id = 'balandro' if self.engine == 'alfa' else 'alfa'
-            is_series = bool(self.meta.get('season') and self.meta.get('episode'))
-            try:
-                opts_items = [('[COLOR yellow]Forzar nueva búsqueda[/COLOR]', 'force_search')]
-                if not (is_series and other_eng_id == 'alfa') and _is_engine_installed(other_eng_id):
-                    opts_items.append(('[COLOR orange]Buscar con %s[/COLOR]' % other_eng_name, 'other_engine'))
-                is_already_verified = (
-                    _bridge_addon.getSetting('auto_verify_links') == 'true' or
-                    bool(self.meta.get('verified_only')) or
-                    not self.direct_links
-                )
-                if not is_already_verified:
-                    opts_items.append(('[COLOR deepskyblue]Verificar disponibilidad[/COLOR]', 'verify_links'))
-
-                sel = _KODI_ORIG_DIALOG().select('Multi Bridge — Opciones', [o[0] for o in opts_items])
-                if 0 <= sel < len(opts_items):
-                    self.selected = opts_items[sel][1]
-                    self.close()
-            except Exception:
-                pass
-        elif aid in (self.ACTION_MOUSE_WHEEL_UP, 104, 111):
-            self._scroll(-2)
-        elif aid in (self.ACTION_MOUSE_WHEEL_DOWN, 105, 112):
-            self._scroll(2)
-        # Soporte nativo y ultra-fluido para gestos táctiles en Android y pantallas táctiles
-        if aid in (500, 501):  # ACTION_TOUCH_TAP / ACTION_GESTURE_BEGIN
-            self._is_touching = True
-            self._touch_has_dragged = False
-            self._touch_accum_y = 0.0
-            self._touch_accum_x = 0.0
-            self._last_pointer_y = None
-            self._last_pointer_x = None
-            try:
-                sy = action.getAmount2()
-                if sy and float(sy) > 80: self._last_pointer_y = float(sy)
-                sx = action.getAmount1()
-                if sx and float(sx) > 80: self._last_pointer_x = float(sx)
-            except Exception: pass
-        elif aid in (502, 505, 599):  # ACTION_GESTURE_END (599/502), ACTION_GESTURE_ABORT (505)
-            self._is_touching = False
-            self._last_pointer_y = None
-            self._last_pointer_x = None
-            self._touch_accum_y = 0.0
-            self._touch_accum_x = 0.0
-        elif aid in (504, 503, 106) or (aid in (self.ACTION_MOUSE_MOVE, 107) and getattr(self, '_is_touching', False)):
-            # 504 = ACTION_GESTURE_PAN nativo en Kodi
-            # 106 = ACTION_MOUSE_DRAG al arrastrar dedo en Android
-            # 107 = ACTION_MOUSE_MOVE continuo mientras se mantiene el toque
-            try:
-                raw_y = action.getAmount2()
-                dy = 0.0
-                if raw_y is not None:
-                    raw_y = float(raw_y)
-                    # Si el valor es pequeño (<= 80), Kodi envía delta relativo
-                    if abs(raw_y) <= 80:
-                        dy = raw_y
-                    # Si el valor es grande (> 80), Kodi envía coordenada Y absoluta en pantalla
-                    elif getattr(self, '_last_pointer_y', None) is not None:
-                        dy = raw_y - self._last_pointer_y
-                        self._last_pointer_y = raw_y
-                    else:
-                        self._last_pointer_y = raw_y
-                        dy = 0.0
-
-                if dy != 0.0:
-                    if abs(dy) > 2:
-                        self._touch_has_dragged = True
-                    self._touch_accum_y += dy
-                    # Umbral de 8px para respuesta instantánea, suave y natural al navegar
-                    if self._touch_accum_y >= 8:
-                        steps = int(self._touch_accum_y / 8)
-                        self._scroll(-steps)
-                        self._touch_accum_y -= steps * 8
-                    elif self._touch_accum_y <= -8:
-                        steps = int(abs(self._touch_accum_y) / 8)
-                        self._scroll(steps)
-                        self._touch_accum_y += steps * 8
-
-                raw_x = action.getAmount1()
-                dx = 0.0
-                if raw_x is not None:
-                    raw_x = float(raw_x)
-                    if abs(raw_x) <= 80:
-                        dx = raw_x
-                    elif getattr(self, '_last_pointer_x', None) is not None:
-                        dx = raw_x - self._last_pointer_x
-                        self._last_pointer_x = raw_x
-                    else:
-                        self._last_pointer_x = raw_x
-                        dx = 0.0
-
-                if dx != 0.0:
-                    self._touch_accum_x += dx
-                    if self._touch_accum_x > 35:
-                        self._switch_tab(0)
-                        self._touch_accum_x = 0.0
-                    elif self._touch_accum_x < -35:
-                        self._switch_tab(1)
-                        self._touch_accum_x = 0.0
-            except Exception:
-                pass
-        elif aid in (514,):      # SWIPE_DOWN (deslizar abajo -> subir lista)
-            self._scroll(-2)
-        elif aid in (513,):      # SWIPE_UP (deslizar arriba -> bajar lista)
-            self._scroll(2)
-        elif aid in (511,):      # SWIPE_LEFT -> Torrents
-            self._switch_tab(1)
-        elif aid in (512,):      # SWIPE_RIGHT -> Directos
-            self._switch_tab(0)
-        elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103, 500, 505, 510):
-            # Si el toque fue un arrastre de scroll, no seleccionar enlace al soltar
-            if getattr(self, '_touch_has_dragged', False):
-                self._touch_has_dragged = False
-                self._is_touching = False
-                self._last_pointer_y = None
-                return
-            self._is_touching = False
-
-            try: fid = self.getFocusId()
-            except: fid = -1
-            if hasattr(self, '_close_btn') and self._close_btn and fid == self._close_btn.getId():
-                self.selected = -1
-                self.close()
-                return
-            if hasattr(self, '_tab0_btn') and fid == self._tab0_btn.getId():
-                self._switch_tab(0); return
-            if hasattr(self, '_tab1_btn') and fid == self._tab1_btn.getId():
-                self._switch_tab(1); return
-            if hasattr(self, '_up_btn') and fid == self._up_btn.getId():
-                self._scroll(-2); return
-            if hasattr(self, '_down_btn') and fid == self._down_btn.getId():
-                self._scroll(2); return
-            if hasattr(self, '_row_btn_ids') and fid in self._row_btn_ids:
-                row_idx = self._row_btn_ids.index(fid)
-                item_idx = self.offset + row_idx
-                if item_idx < len(self.active_links):
-                    chosen = self.active_links[item_idx]
-                    try: self.selected = self.all_links.index(chosen)
-                    except ValueError: self.selected = 0
-                    self.close()
-                    return
-            # Clic o toque fuera en la ventana grande: IGNORAR (no cerrar ni seleccionar)
-            return
-
-    def onClick(self, control_id):
-        # Si fue arrastre de desplazamiento táctil, no ejecutar clic
-        if getattr(self, '_touch_has_dragged', False):
-            self._touch_has_dragged = False
-            self._is_touching = False
-            return
-        self._is_touching = False
-
-        if hasattr(self, '_close_btn') and self._close_btn and control_id == self._close_btn.getId():
-            self.selected = -1
-            self.close()
-            return
-        if hasattr(self, '_tab0_btn') and control_id == self._tab0_btn.getId():
-            self._switch_tab(0)
-            return
-        if hasattr(self, '_tab1_btn') and control_id == self._tab1_btn.getId():
-            self._switch_tab(1)
-            return
-        if hasattr(self, '_up_btn') and control_id == self._up_btn.getId():
-            self._scroll(-2)
-            return
-        if hasattr(self, '_down_btn') and control_id == self._down_btn.getId():
-            self._scroll(2)
-            return
-        if hasattr(self, '_row_btn_ids') and control_id in self._row_btn_ids:
-            row_idx = self._row_btn_ids.index(control_id)
-            item_idx = self.offset + row_idx
-            if item_idx < len(self.active_links):
-                chosen = self.active_links[item_idx]
-                try:
-                    self.selected = self.all_links.index(chosen)
-                except ValueError:
-                    self.selected = 0
-                self.close()
-                return
-        # Clic fuera: no hacer nada en la ventana grande
-        return
+        elif chosen_action == 'filter_reset':
+            self.active_filter = None
+            self._populate_list()
+        else:
+            self.active_filter = chosen_action
+            self._populate_list()
 
     def close(self):
         if getattr(self, '_is_closed', False):
             return
         self._is_closed = True
         try:
-            super().close()
+            super(_FloatingLinksDialog, self).close()
         except Exception:
-            pass
+            try:
+                super().close()
+            except Exception:
+                pass
+
 
 
 def _load_cached_links_for_dialog(offset=0):
@@ -12718,7 +12430,15 @@ def _show_floating_links_dialog_impl(offset=0):
             failed_links.add(l)
             failed_indices.add(idx)
     last_tab = None
-    next_suggested_idx = _current_playing_link_index if (is_playing and 0 <= _current_playing_link_index < len(c_links)) else 0
+    curr_idx_prop = -1
+    try:
+        curr_idx_str = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+        if curr_idx_str and curr_idx_str.isdigit():
+            curr_idx_prop = int(curr_idx_str)
+    except Exception:
+        pass
+    effective_playing_idx = curr_idx_prop if curr_idx_prop >= 0 else _current_playing_link_index
+    next_suggested_idx = effective_playing_idx if (is_playing and 0 <= effective_playing_idx < len(c_links)) else 0
     was_playback = is_playing
 
     # Ajuste on_link_fail: 0 = Reabrir ventana con enlace marcado (Recomendado), 1 = Desactivado
