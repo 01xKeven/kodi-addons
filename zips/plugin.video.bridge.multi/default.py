@@ -12444,7 +12444,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                 rx_offset = 13
                 ry_offset = 8
 
-        pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '0').strip()
+        pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '1').strip()
         margin_x = 35
         dx = W - dw - margin_x
         if pos_setting == '1':  # Inferior derecha
@@ -14212,7 +14212,7 @@ def main():
                 _cached_item    = _deserialize_item(_c.get('item'), _cached_engine)
                 _cached_meta    = _c.get('meta', {})
                 _cached_tmdb_v  = str(_c.get('meta', {}).get('tmdb') or '')
-                _autoplay_cache = _bridge_addon.getSetting('autoplay_enabled') != 'false'
+                _autoplay_cache = _bridge_addon.getSetting('autoplay_enabled') == 'true'
 
                 if _autoplay_cache and _cached_links:
                     xbmc.log('Multi Bridge: cache reciente → autoplay con %d enlaces' % len(_cached_links), xbmc.LOGINFO)
@@ -14297,7 +14297,7 @@ def main():
                     return
                 eng = _picked
 
-            autoplay = _bridge_addon.getSetting('autoplay_enabled') != 'false'
+            autoplay = _bridge_addon.getSetting('autoplay_enabled') == 'true'
             if autoplay:
                 xbmc.log("Multi Bridge: autoplay activo -> iniciando reproduccion instantanea rapida...", xbmc.LOGINFO)
                 if _fast_autoplay_search_and_play(eng, handle):
@@ -14367,7 +14367,7 @@ def main():
             return
 
 
-        autoplay = _bridge_addon.getSetting('autoplay_enabled') != 'false'
+        autoplay = _bridge_addon.getSetting('autoplay_enabled') == 'true'
         if autoplay:
             _enrich_link_metadata(links[0], meta, matched_item)
             media_key = _get_media_key(meta, links[0])
@@ -14556,7 +14556,7 @@ def main():
                 _spawn_late_collector(eng, meta.get('tmdb'), meta.get('season'), meta.get('episode'))
             except: pass
 
-            autoplay = _bridge_addon.getSetting('autoplay_enabled') != 'false'
+            autoplay = _bridge_addon.getSetting('autoplay_enabled') == 'true'
             if autoplay:
                 _enrich_link_metadata(links[0], meta, matched_item)
                 media_key = _get_media_key(meta, links[0])
