@@ -477,10 +477,49 @@ def _get_ram_search_cache(target_tmdb='', target_season='', target_episode='', m
     return _RAM_SEARCH_CACHE
 
 
+def _is_cam_quality(link_or_dict):
+    """Detecta si un enlace fue grabado en cine (CAM, TS, Telesync, HDCAM, etc.)
+    para evitar que la verificacion interna sobrescriba la calidad con la resolucion
+    del contenedor de video (ej. 1080p), protegiendo la advertencia de que es CAM."""
+    if not link_or_dict:
+        return False
+    try:
+        if isinstance(link_or_dict, dict):
+            q = _safe_str(link_or_dict.get('quality', '') or '')
+            t = _safe_str(link_or_dict.get('title', '') or '')
+            u = _safe_str(link_or_dict.get('url', '') or '')
+            o = _safe_str(link_or_dict.get('other', '') or '')
+        else:
+            q = _safe_str(getattr(link_or_dict, 'quality', '') or '')
+            t = _safe_str(getattr(link_or_dict, 'title', '') or '')
+            u = _safe_str(getattr(link_or_dict, 'url', '') or '')
+            o = _safe_str(getattr(link_or_dict, 'other', '') or '')
+
+        q_clean = q.strip().upper()
+        if q_clean in ('CAM', 'TS', 'TC', 'HDCAM', 'CAMRIP', 'CAM-RIP', 'TELESYNC', 'TELECINE', 'SCREENER', 'SCR', 'DVD-SCR', 'DVDSCR'):
+            return True
+        if any(k in q_clean for k in ('CAM/TS', 'TS/CAM', 'HD-CAM', 'CAM-RIP', 'CAMRIP')):
+            return True
+
+        o_clean = o.strip().upper()
+        if any(k in o_clean for k in ('CAM', 'TS', 'TC', 'HDCAM', 'CAMRIP', 'CAM-RIP', 'TELESYNC', 'TELECINE', 'SCREENER')):
+            return True
+
+        combined = (t + ' ' + u).upper()
+        if re.search(r'\b(HDCAM|HD-CAM|CAM-?RIP|CAM/TS|TS/CAM|TELESYNC|TELECINE|DVD-?SCR|SCREENER)\b', combined):
+            return True
+        if re.search(r'\b(CAM|TS|TC)\b', combined):
+            return True
+    except Exception:
+        pass
+    return False
+
 def _update_link_real_quality_in_cache(link_idx=None, real_res='', link_obj=None, media_key=''):
     """Actualiza la resolucion real verificada de un enlace en el objeto link,
     en la cache en RAM y en el archivo JSON en disco, de manera sincronizada y atomica."""
     if not real_res:
+        return
+    if link_obj is not None and _is_cam_quality(link_obj):
         return
     global _RAM_SEARCH_CACHE
 
@@ -1795,13 +1834,26 @@ def _restore_dialog_noblock():
         pass
     return False
 
-def _ask_resume_dialog(title_text, time_str):
-    """Pregunta reanudar usando la ventana compacta de Multi Bridge."""
+def _ask_resume_dialog(title_text, time_str, media_key=""):
+    """Pregunta reanudar usando la ventana nativa de Kodi.
+    Retorna:
+      'resume': Si eligio Continuar
+      'restart': Si eligio Reiniciar
+      'cancel': Si presiono Cancelar, Atras o Escape
+    """
     try:
         _rsel = show_resume_dialog(time_str, title_text)
-        return (_rsel == 0)
+        if _rsel == 0:
+            return 'resume'
+        elif _rsel == 1:
+            if media_key:
+                try: save_bookmark(media_key, 0, 0, title=title_text)
+                except: pass
+            return 'restart'
+        else:
+            return 'cancel'
     except Exception:
-        return False
+        return 'cancel' 
 
 @contextmanager
 def silenced_dialogs():
@@ -3180,6 +3232,8 @@ def _has_4k_token(combined):
     return False
 
 def _format_quality(link):
+    if _is_cam_quality(link):
+        return 'CAM'
     qual = _safe_str(getattr(link, 'quality', '')).strip()
     title_str = _safe_str(getattr(link, 'title', '')).strip()
     url_str = _safe_str(getattr(link, 'url', '')).strip()
@@ -3802,16 +3856,9 @@ def _is_preferred_lang_candidate(cand, b_prefs, all_done=False):
     active_prios = [v for k, v in [('Lat', p_lat), ('Esp', p_esp), ('VO', p_vos)] if v > 0]
     best_prio = min(active_prios) if active_prios else 1
 
-    # Si VO o desconocido tiene menor prioridad que el idioma preferido, esperar
-    if grp == 'VO' and p_vos > best_prio:
-        return False
-    if grp == '?' and 4 > best_prio:
-        return False
-
-    threshold = max(best_prio, 2)
-    if p_vos > 0:
-        threshold = min(threshold, p_vos - 1) if p_vos > 1 else threshold
-    return p_val <= max(best_prio, threshold)
+    # Solo reproducir de inmediato si el candidato pertenece al idioma de mayor preferencia (ej. Latino si es 1).
+    # Si tiene menor prioridad (ej. Castellano con prio 2), esperar a que los demas canales terminen de buscar.
+    return p_val <= best_prio
 
 
 def _is_server_discarded(it, disc_list=None):
@@ -3889,6 +3936,22 @@ def _get_filter_prefs():
     lang_on = _bridge_addon.getSetting('filter_lang_enabled') != 'false'
     qual_on = _bridge_addon.getSetting('filter_quality_enabled') != 'false'
     srv_on  = _bridge_addon.getSetting('filter_servers_enabled') != 'false'
+    force_torrents_bottom = _bridge_addon.getSetting('force_torrents_bottom') != 'false'
+
+    # Jerarquía configurable de prioridades (1ª, 2ª, 3ª)
+    # 0 = Idioma, 1 = Calidad, 2 = Servidor
+    p1 = _bi('sort_prio_1', 0)
+    p2 = _bi('sort_prio_2', 1)
+    p3 = _bi('sort_prio_3', 2)
+    KEY_MAP = {0: 'lang', 1: 'quality', 2: 'server'}
+    raw_order = [KEY_MAP.get(p1, 'lang'), KEY_MAP.get(p2, 'quality'), KEY_MAP.get(p3, 'server')]
+    resolved_order = []
+    for k in raw_order:
+        if k not in resolved_order:
+            resolved_order.append(k)
+    for fallback in ('lang', 'quality', 'server'):
+        if fallback not in resolved_order:
+            resolved_order.append(fallback)
 
     return {
         'preferencia_idioma_lat': _bi('preferencia_idioma_lat', 1) if lang_on else 1,
@@ -3898,6 +3961,8 @@ def _get_filter_prefs():
         'servers_preferred': _bcsv('servers_preferred', ['mega', 'okru', 'doodstream', 'vidmoly', 'streamwish']) if srv_on else [],
         'servers_unfavored': _bcsv('servers_unfavored', ['uqload', 'torrent']) if srv_on else [],
         'servers_discarded': _bcsv('servers_discarded', ['rapidgator', 'directo', 'waaw']) if srv_on else [],
+        'sort_hierarchy': tuple(resolved_order),
+        'force_torrents_bottom': force_torrents_bottom,
     }
 
 _get_balandro_preferences = _get_filter_prefs
@@ -3905,11 +3970,14 @@ _get_balandro_preferences = _get_filter_prefs
 def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
     if b_prefs is None:
         b_prefs = _get_filter_prefs()
+    if sort_q == 0 and b_prefs:
+        sort_q = b_prefs.get('servers_sort_quality', 0)
+
     is_tor = _is_torrent_link(it)
     srv = 'torrent' if is_tor else (_get_link_server_name(it) or getattr(it, 'server', '') or '').lower()
     if not srv: srv = 'indeterminado'
 
-    # 1. IDIOMA (Jerarquia maxima: Latino primero, luego Castellano, luego VOSE)
+    # 1. IDIOMA
     p_lat = b_prefs.get('preferencia_idioma_lat', 1)
     p_esp = b_prefs.get('preferencia_idioma_esp', 2)
     p_vos = b_prefs.get('preferencia_idioma_vos', 3)
@@ -3922,13 +3990,10 @@ def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
     else: grp = '?'
     l_key = prefs_lang.get(grp, 4)
 
-    # 2. SUB-CATEGORIA DENTRO DEL IDIOMA:
-    # 0 = Enlaces normales (HTTP)
-    # 1 = Ultima opcion (Torrents u otros unfavored dentro de ese idioma)
+    # 2. SERVIDOR & TIPO DE ENLACE:
     unfav_list = [u.lower() for u in b_prefs.get('servers_unfavored', [])]
     is_unfav = 1 if (srv in unfav_list or (is_tor and 'torrent' in unfav_list)) else 0
 
-    # 3. Servidor preferido
     pref_list = [p.lower() for p in b_prefs.get('servers_preferred', [])]
     if srv in pref_list:
         srv_key = pref_list.index(srv)
@@ -3937,10 +4002,35 @@ def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
     else:
         srv_key = 50
 
-    # 4. Calidad
+    # 3. CALIDAD:
     q_score = _get_link_quality_score(it, pref_quality=sort_q)
+    q_key = -q_score
 
-    return (l_key, is_unfav, srv_key, -q_score)
+    # Mapeo de criterios según la jerarquía elegida:
+    criteria_map = {
+        'lang': (l_key,),
+        'quality': (q_key,),
+        'server': (is_unfav, srv_key),
+    }
+
+    hierarchy = b_prefs.get('sort_hierarchy', ('lang', 'quality', 'server'))
+    key = []
+
+    # Opción: Forzar Torrents siempre debajo de enlaces directos
+    if b_prefs.get('force_torrents_bottom', True):
+        key.append(1 if is_tor else 0)
+
+    for crit in hierarchy:
+        key.extend(criteria_map.get(crit, ()))
+
+    # Desempate final: confianza del match de título/año (bridge_score)
+    try:
+        b_score = -int(getattr(it, 'bridge_score', 0) or 0)
+    except Exception:
+        b_score = 0
+    key.append(b_score)
+
+    return tuple(key)
 
 
 def _filter_and_sort_links(links):
@@ -4101,11 +4191,14 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
                         prep.video_urls = valid_streams
                         st_lbl = stream_entry[0] if isinstance(stream_entry, (list, tuple)) and len(stream_entry) > 0 else ''
                         label_res = _detect_resolution_from_text(st_lbl) or _detect_resolution_from_text(st_url)
-                        final_res = real_res
-                        if label_res and (not final_res or _stream_quality_score(label_res) > _stream_quality_score(final_res)):
-                            final_res = label_res
-                        elif real_res and label_res and _stream_quality_score(real_res) >= _stream_quality_score(label_res):
+                        if _is_cam_quality(lnk):
+                            final_res = 'CAM'
+                        else:
                             final_res = real_res
+                            if label_res and (not final_res or _stream_quality_score(label_res) > _stream_quality_score(final_res)):
+                                final_res = label_res
+                            elif real_res and label_res and _stream_quality_score(real_res) >= _stream_quality_score(label_res):
+                                final_res = real_res
 
                         if final_res:
                             prep.real_quality = final_res
@@ -6394,14 +6487,13 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
         self.is_canceled = False
 
     def onInit(self):
+        self.is_canceled = False
         try:
+            self.setFocusId(self.CANCEL_BTN)
             btn = self.getControl(self.CANCEL_BTN)
-            self.setFocus(btn)
+            if btn: self.setFocus(btn)
         except Exception:
-            try:
-                self.setFocusId(self.CANCEL_BTN)
-            except Exception:
-                pass
+            pass
         try:
             xbmc.executebuiltin("SetFocus(200)")
         except:
@@ -6410,10 +6502,22 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
     def onAction(self, action):
         try:
             aid = action.getId() if hasattr(action, 'getId') else action
-            if aid not in (1, 2, 3, 4):
+            if aid in (9, 10, 92, 110, 13, 216, 247):
                 self.is_canceled = True
                 try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
                 except: pass
+                self.close()
+                return
+            elif aid in (7, 100):
+                self.is_canceled = True
+                try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+                except: pass
+                self.close()
+                return
+            elif aid in (1, 2, 3, 4, 5, 6, 11, 12, 14, 15):
+                try: self.setFocusId(self.CANCEL_BTN)
+                except: pass
+                return
         except Exception:
             pass
 
@@ -6421,11 +6525,13 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
         self.is_canceled = True
         try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
         except: pass
+        self.close()
 
     def onControl(self, control):
         self.is_canceled = True
         try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
         except: pass
+        self.close()
 
 
 class _RadialSearchProgressDialog(object):
@@ -6468,9 +6574,18 @@ class _RadialSearchProgressDialog(object):
             self._set_prop("bridge.search_status_line", _safe_str(line1 or "Preparando búsqueda..."))
 
             self._dlg.show()
-            try:
-                xbmc.executebuiltin("SetFocus(200)")
-            except: pass
+            def _steal_focus_rad(d=self._dlg):
+                for _ms in (0.04, 0.12, 0.25):
+                    time.sleep(_ms)
+                    try:
+                        if d and not getattr(d, 'is_canceled', False):
+                            d.setFocusId(200)
+                            btn = d.getControl(200)
+                            if btn: d.setFocus(btn)
+                    except: pass
+                    try: xbmc.executebuiltin("SetFocus(200)")
+                    except: pass
+            threading.Thread(target=_steal_focus_rad, daemon=True).start()
         except Exception as e:
             xbmc.log("Multi Bridge: error abriendo progress_radial.xml: %s (fallback a DialogProgress)" % e, xbmc.LOGWARNING)
             self._dlg = xbmcgui.DialogProgress()
@@ -6578,12 +6693,13 @@ class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
         self.is_canceled = False
 
     def onInit(self):
+        self.is_canceled = False
         try:
+            self.setFocusId(self.CANCEL_BTN)
             btn = self.getControl(self.CANCEL_BTN)
-            self.setFocus(btn)
+            if btn: self.setFocus(btn)
         except Exception:
-            try: self.setFocusId(self.CANCEL_BTN)
-            except Exception: pass
+            pass
         try:
             xbmc.executebuiltin("SetFocus(200)")
         except:
@@ -6592,11 +6708,22 @@ class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
     def onAction(self, action):
         try:
             aid = action.getId() if hasattr(action, 'getId') else action
-            if aid in (9, 10, 92, 110):
+            if aid in (9, 10, 92, 110, 13, 216, 247):
                 self.is_canceled = True
                 try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                 except: pass
                 self.close()
+                return
+            elif aid in (7, 100):
+                self.is_canceled = True
+                try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                except: pass
+                self.close()
+                return
+            elif aid in (1, 2, 3, 4, 5, 6, 11, 12, 14, 15):
+                try: self.setFocusId(self.CANCEL_BTN)
+                except: pass
+                return
         except Exception:
             pass
 
@@ -6650,9 +6777,18 @@ class _AutoplayProgressDialog(object):
             self._set_prop("bridge.autoplay_channel", "")
 
             self._dlg.show()
-            try:
-                xbmc.executebuiltin("SetFocus(200)")
-            except: pass
+            def _steal_focus_rad(d=self._dlg):
+                for _ms in (0.04, 0.12, 0.25):
+                    time.sleep(_ms)
+                    try:
+                        if d and not getattr(d, 'is_canceled', False):
+                            d.setFocusId(200)
+                            btn = d.getControl(200)
+                            if btn: d.setFocus(btn)
+                    except: pass
+                    try: xbmc.executebuiltin("SetFocus(200)")
+                    except: pass
+            threading.Thread(target=_steal_focus_rad, daemon=True).start()
         except Exception as e:
             xbmc.log("Multi Bridge: error abriendo autoplay.xml: %s (fallback a DialogProgress)" % e, xbmc.LOGWARNING)
             self._dlg = xbmcgui.DialogProgress()
@@ -6835,11 +6971,7 @@ def _run_parallel_search_impl(engine='alfa'):
             ep_tag = 'S%sE%s' % (p_season, p_episode)
         dlg_display_title = ('%s • %s' % (target_title, ep_tag)) if target_title else ep_tag
 
-    dlg_style = _bridge_addon.getSetting('search_dialog_style')
-    if str(dlg_style) == '1':
-        p_dialog = xbmcgui.DialogProgress()
-    else:
-        p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine)
+    p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine)
     p_dialog.create('Multi Bridge (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
@@ -8666,7 +8798,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             extra_info=_extra_tag
         )
         _prog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
-        _prog.set_stream_info(server=server, quality=cand_qual or '1080p', language=lang_raw or 'Latino', channel=ch or 'Canal', status='Iniciando reproducción...')
+        _prog.set_stream_info(server=server, quality=cand_qual or '1080p', language=lang_raw or 'Latino', channel='', status='Iniciando reproducción...')
         _prog.update(10)
 
         _res_done  = [None]
@@ -8718,7 +8850,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 idx+1, total_att, server), xbmc.LOGINFO)
             continue
 
-        if real_res:
+        if real_res and not _is_cam_quality(link):
             link.real_quality = real_res
             link.quality = real_res
             try: _res_li[0].setInfo('video', {'quality': real_res})
@@ -9168,6 +9300,20 @@ def _fast_autoplay_search_and_play(engine, handle):
     if is_series and engine == 'alfa':
         engine = 'balandro'
 
+    p_poster = poster or get_param('poster') or thumbnail or get_param('thumbnail') or get_param('thumb') or ''
+    p_fanart = fanart or get_param('fanart') or ''
+    if not p_poster:
+        try: p_poster = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Poster') or xbmc.getInfoLabel('ListItem.Art(poster)') or ''
+        except: pass
+    if not p_fanart:
+        try: p_fanart = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Fanart') or xbmc.getInfoLabel('ListItem.Art(fanart)') or ''
+        except: pass
+
+    p_genre = (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or ''
+    if not p_genre:
+        try: p_genre = xbmc.getInfoLabel('ListItem.Genre') or ''
+        except: pass
+
     meta = {
         'tmdb': p_tmdb, 'imdb': p_imdb, 'tvdb': p_tvdb, 'trakt': p_trakt,
         'title': p_title or ((p_showname if is_series else '') or ''),
@@ -9175,13 +9321,13 @@ def _fast_autoplay_search_and_play(engine, handle):
         'season': p_season, 'episode': p_episode,
         'showname': p_showname, 'showyear': p_showyear,
         'plot': plot or get_param('plot') or '',
-        'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or (_get_directors(p_tmdb, is_series) or [''])[0],
+        'director': _clean_single_director(director) or _clean_single_director(get_param('director')) or '',
         'tagline': tagline or get_param('tagline') or '',
-        'poster': poster or get_param('poster') or '',
-        'fanart': fanart or get_param('fanart') or '',
-        'thumbnail': (_get_episode_still(p_tmdb, p_season, p_episode) if is_series else '') or thumbnail or get_param('thumbnail') or '',
-        'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or _get_clearlogo(p_tmdb, is_series),
-        'genre': (genre if genre and genre not in ('_', 'None') else '') or (get_param('genre') if get_param('genre') not in ('_', 'None', None) else '') or " / ".join(_get_genres(p_tmdb, is_series)),
+        'poster': p_poster,
+        'fanart': p_fanart,
+        'thumbnail': thumbnail or get_param('thumbnail') or p_poster or '',
+        'clearlogo': (clearlogo if clearlogo and clearlogo not in ('_', 'None') else '') or (get_param('clearlogo') if get_param('clearlogo') not in ('_', 'None', None) else '') or '',
+        'genre': p_genre,
         'verified_only': False, 'engine': engine
     }
 
@@ -9248,7 +9394,6 @@ def _fast_autoplay_search_and_play(engine, handle):
         extra_info=_extra_info
     )
     p_dialog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
-    p_dialog.set_stream_info(server="BUSCANDO", quality="1080P", language="LATINO", channel=engine.capitalize(), status="Iniciando reproducción...")
     p_dialog.update(5)
 
     results_dict = {}
@@ -9322,11 +9467,7 @@ def _fast_autoplay_search_and_play(engine, handle):
             except: pass
             return False
 
-        p_dialog.update(min(pct, 85),
-            '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR gold]Comprobando disponibilidad de servidores...[/COLOR]' % (
-                target_title, completed, total_channels
-            )
-        )
+        p_dialog.update(min(pct, 85), 'Buscando servidores...')
 
         all_done = (completed >= total_channels) or ((time.time() - start_time) >= 12.0)
 
@@ -9353,15 +9494,14 @@ def _fast_autoplay_search_and_play(engine, handle):
                 cand_u = getattr(cand, 'url', None)
 
                 srv_name = _get_link_server_name(cand)
-                lang_raw = _safe_str(getattr(cand, 'language', '') or '')
+                lang_raw = _format_language(cand)
                 cand_qual = _format_quality(cand)
-                cand_ch = _format_channel(cand)
                 try:
                     p_dialog.set_stream_info(
                         server=srv_name,
                         quality=cand_qual or '1080p',
                         language=lang_raw or 'Latino',
-                        channel=cand_ch or 'Canal',
+                        channel='',
                         status='Iniciando reproducción...'
                     )
                 except Exception:
@@ -9396,7 +9536,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                     except: pass
                     is_ok, real_res = _check_stream_url_playable(m_url, server_name=srv_name, timeout=3.0)
                     if m_url and is_ok:
-                        if real_res:
+                        if real_res and not _is_cam_quality(cand):
                             cand.real_quality = real_res
                             cand.quality = real_res
                             try: li.setInfo('video', {'quality': real_res})
@@ -9407,11 +9547,18 @@ def _fast_autoplay_search_and_play(engine, handle):
                         fast_li = li
                         fast_url = li.getPath()
                         q_show = _format_quality(cand)
-                        p_dialog.update(100,
-                            '[COLOR white][B]%s[/B][/COLOR]\n[COLOR lightgreen]¡Enlace verificado![/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s  •  [COLOR springgreen]%s[/COLOR]' % (
-                                target_title, srv_name, lang_colored, q_show
+                        lang_fmt = _format_language(cand)
+                        try:
+                            p_dialog.set_stream_info(
+                                server=srv_name,
+                                quality=q_show or '1080p',
+                                language=lang_fmt or 'Latino',
+                                channel='',
+                                status='Iniciando reproducción...'
                             )
-                        )
+                        except Exception:
+                            pass
+                        p_dialog.update(100, 'Iniciando reproducción...')
                         break
                     else:
                         xbmc.log("Multi Bridge Fast Autoplay: candidato %s no superó verificación de stream (bloqueado/caído)" % srv_name, xbmc.LOGINFO)
@@ -9507,9 +9654,18 @@ def _fast_autoplay_search_and_play(engine, handle):
             hrs = mins // 60; mins = mins % 60
             time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
             t_title = meta.get('title') or getattr(matched_item_holder[0], 'title', '') or 'este video'
-            res = _ask_resume_dialog(t_title, time_str)
-            if res:
+            ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+            if ans == 'cancel':
+                try: p_dialog.close()
+                except: pass
+                if handle >= 0:
+                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                    except: pass
+                return False
+            elif ans == 'resume':
                 seek_to_time = r_time
+            elif ans == 'restart':
+                seek_to_time = 0
 
     # Aplicar metadatos completos para Trakt, TMDb Helper y reproductor
     sync_tmdbhelper_playerstring(meta)
@@ -9665,7 +9821,7 @@ def _fast_autoplay_search_and_play(engine, handle):
                 m_url = li.getPath()
                 is_ok, real_res = _check_stream_url_playable(m_url, server_name=_get_link_server_name(cand), timeout=3.0)
                 if is_ok:
-                    if real_res:
+                    if real_res and not _is_cam_quality(cand):
                         cand.real_quality = real_res
                         cand.quality = real_res
                         try: li.setInfo('video', {'quality': real_res})
@@ -13593,6 +13749,7 @@ def main():
     if clearlogo in ('_', 'None', 'none'):
         clearlogo = ''
 
+
     if action in ('switch_source', 'floating_links'):
         try:
             xbmc.executebuiltin('Dialog.Close(busydialog, true)')
@@ -14070,8 +14227,16 @@ def main():
                         _m2 = int(_rt2 // 60); _s2 = int(_rt2 % 60); _h2 = _m2 // 60; _m2 = _m2 % 60
                         _ts2 = ('%d:%02d:%02d' % (_h2, _m2, _s2)) if _h2 else ('%d:%02d' % (_m2, _s2))
                         _tt2 = _cached_meta.get('title') or ''
-                        if _ask_resume_dialog(_tt2, _ts2):
+                        _ans = _ask_resume_dialog(_tt2, _ts2, media_key=_mk)
+                        if _ans == 'cancel':
+                            if handle >= 0:
+                                try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                                except: pass
+                            return
+                        elif _ans == 'resume':
                             _seek = _rt2
+                        elif _ans == 'restart':
+                            _seek = 0
                     _played = _autoplay_with_fallback(
                         _cached_links, handle,
                         engine=_cached_engine, matched_item=_cached_item,
@@ -14215,10 +14380,17 @@ def main():
                 mins = int(r_time // 60); secs = int(r_time % 60)
                 hrs = mins // 60; mins = mins % 60
                 time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                res = _ask_resume_dialog(t_title, time_str)
-                if res:
+                t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este video'
+                ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+                if ans == 'cancel':
+                    if handle >= 0:
+                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                        except: pass
+                    return
+                elif ans == 'resume':
                     seek_to_time = r_time
+                elif ans == 'restart':
+                    seek_to_time = 0
 
             xbmc.log('Multi Bridge: autoplay con fallback, %d enlaces disponibles, motor=%s' % (
                 len(links), meta.get('engine', 'alfa')), xbmc.LOGINFO)
@@ -14397,10 +14569,17 @@ def main():
                     mins = int(r_time // 60); secs = int(r_time % 60)
                     hrs = mins // 60; mins = mins % 60
                     time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                    t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                    res = _ask_resume_dialog(t_title, time_str)
-                    if res:
-                        seek_to_time = r_time
+                    t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este video'
+                ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+                if ans == 'cancel':
+                    if handle >= 0:
+                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                        except: pass
+                    return
+                elif ans == 'resume':
+                    seek_to_time = r_time
+                elif ans == 'restart':
+                    seek_to_time = 0
 
                 played = _autoplay_with_fallback(
                     links, handle,

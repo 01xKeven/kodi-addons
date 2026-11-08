@@ -12,7 +12,7 @@
         <control type="image">
             <left>0</left><top>0</top>
             <width>1920</width><height>1080</height>
-            <texture colordiffuse="C0000000">white.png</texture>
+            <texture colordiffuse="88000000">white.png</texture>
             <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
             <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
         </control>
@@ -28,7 +28,7 @@
                 <left>420</left><top>315</top>
                 <width>1080</width><height>440</height>
                 <texture border="16">texture.png</texture>
-                <colordiffuse>F00D1117</colordiffuse>
+                <colordiffuse>E60D1117</colordiffuse>
             </control>
 
             <!-- Capa de Fanart sutil dentro del cuadro -->
@@ -75,6 +75,7 @@
             <control type="image">
                 <left>715</left><top>440</top>
                 <width>170</width><height>170</height>
+                <aspectratio align="center" aligny="center">keep</aspectratio>
                 <texture>radial_glow_v2.png</texture>
                 <animation effect="rotate" start="360" end="0" center="auto" time="2200" loop="true" condition="true">Conditional</animation>
             </control>
@@ -83,6 +84,7 @@
             <control type="image">
                 <left>725</left><top>450</top>
                 <width>150</width><height>150</height>
+                <aspectratio align="center" aligny="center">keep</aspectratio>
                 <texture>radial_circle.png</texture>
             </control>
 

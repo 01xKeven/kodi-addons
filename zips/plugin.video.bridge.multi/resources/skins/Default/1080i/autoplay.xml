@@ -8,18 +8,18 @@
         <top>0</top>
     </coordinates>
     <controls>
-        <!-- Oscurecimiento de pantalla de fondo -->
+        <!-- Oscurecimiento de pantalla de fondo (Opacidad suavizada al 53%) -->
         <control type="image">
             <left>0</left><top>0</top>
             <width>1920</width><height>1080</height>
-            <texture colordiffuse="C0000000">white.png</texture>
+            <texture colordiffuse="88000000">white.png</texture>
             <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
             <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
         </control>
 
         <!-- TARJETA PRINCIPAL DEL DIALOGO (1080 x 440) -->
         <control type="group">
-            <animation effect="zoom" start="90" end="100" center="auto" time="250" tween="quadratic" easing="out">WindowOpen</animation>
+            <animation effect="zoom" start="90" end="100" center="960,535" time="250" tween="quadratic" easing="out">WindowOpen</animation>
             <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
             <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
 
@@ -28,7 +28,7 @@
                 <left>420</left><top>315</top>
                 <width>1080</width><height>440</height>
                 <texture border="16">texture.png</texture>
-                <colordiffuse>F00D1117</colordiffuse>
+                <colordiffuse>E60D1117</colordiffuse>
             </control>
 
             <!-- Capa de Fanart sutil dentro del cuadro -->
@@ -62,7 +62,7 @@
                 <texture colordiffuse="50D4AF37">white.png</texture>
             </control>
 
-            <!-- POSTER DE LA PELICULA / SERIE (Limpio, sin textos agregados) -->
+            <!-- POSTER DE LA PELICULA / SERIE (Limpio, con esquinas redondeadas) -->
             <control type="image">
                 <left>445</left><top>348</top>
                 <width>250</width><height>375</height>
@@ -74,8 +74,8 @@
             <!-- CABECERA: MULTI BRIDGE • AUTOPLAY -->
             <control type="label">
                 <left>725</left><top>355</top>
-                <width>450</width><height>25</height>
-                <font>font13</font>
+                <width>450</width><height>20</height>
+                <font>font11</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <label>[B][COLOR FFD4AF37]MULTI BRIDGE[/COLOR][/B]  •  [B]AUTOPLAY[/B]</label>
             </control>
@@ -83,107 +83,104 @@
             <!-- ETIQUETA DERECHA: EXTRA (Género, Año o Duración) -->
             <control type="label">
                 <left>1150</left><top>355</top>
-                <width>325</width><height>25</height>
-                <font>font12</font>
+                <width>325</width><height>20</height>
+                <font>font11</font>
                 <textcolor>FFA0AEC0</textcolor>
                 <align>right</align>
                 <label>$INFO[Window(10000).Property(bridge.autoplay_extra)]</label>
             </control>
 
-            <!-- TITULO PRINCIPAL -->
+            <!-- TITULO PRINCIPAL (Centrado simétricamente entre MULTI BRIDGE y el estado inferior) -->
             <control type="label" id="2001">
-                <left>725</left><top>390</top>
-                <width>750</width><height>45</height>
-                <font>font20_title</font>
+                <left>725</left><top>410</top>
+                <width>750</width><height>30</height>
+                <font>font13</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <label>[B]$INFO[Window(10000).Property(bridge.autoplay_title)][/B]</label>
             </control>
 
-            <!-- ICONO PLAY EN CIRCULO DORADO -->
-            <control type="image">
-                <left>735</left><top>460</top>
-                <width>60</width><height>60</height>
-                <texture>radial_circle.png</texture>
-                <colordiffuse>35D4AF37</colordiffuse>
-            </control>
-            <control type="label">
-                <left>735</left><top>460</top>
-                <width>60</width><height>60</height>
-                <font>font20_title</font>
-                <textcolor>FFD4AF37</textcolor>
-                <align>center</align>
-                <aligny>center</aligny>
-                <label>▶</label>
+            <!-- ZONA ANIMADA DEL PLAY (Centrado verticalmente con estado y cuadritos) -->
+            <control type="group">
+                <left>725</left><top>474</top>
+                <width>72</width><height>72</height>
+
+                <!-- Resplandor giratorio exterior -->
+                <control type="image">
+                    <left>0</left><top>0</top>
+                    <width>72</width><height>72</height>
+                    <aspectratio align="center" aligny="center">keep</aspectratio>
+                    <texture>radial_glow_v2.png</texture>
+                    <animation effect="rotate" start="360" end="0" center="auto" time="2200" loop="true" condition="true">Conditional</animation>
+                </control>
+
+                <!-- Icono circular de Play interior -->
+                <control type="image">
+                    <left>11</left><top>11</top>
+                    <width>50</width><height>50</height>
+                    <aspectratio align="center" aligny="center">keep</aspectratio>
+                    <texture>play_circle.png</texture>
+                </control>
             </control>
 
             <!-- TEXTO DE ESTADO: INICIANDO REPRODUCCION... -->
             <control type="label" id="2002">
-                <left>810</left><top>462</top>
-                <width>665</width><height>30</height>
-                <font>font15</font>
+                <left>810</left><top>474</top>
+                <width>660</width><height>22</height>
+                <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <label>[B]$INFO[Window(10000).Property(bridge.autoplay_status)][/B]</label>
             </control>
 
-            <!-- BADGES DE INFORMACION TECNICA -->
-            <!-- 1. Servidor -->
+            <!-- 3 BADGES DE INFORMACION TECNICA (Margen superior holgado para que el texto respire) -->
+            <!-- 1. Servidor (170x33, top:514) -->
             <control type="image">
-                <left>810</left><top>498</top>
-                <width>110</width><height>30</height>
+                <left>810</left><top>514</top>
+                <width>170</width><height>33</height>
                 <texture colordiffuse="3000BFFF">white.png</texture>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_server))</visible>
             </control>
             <control type="label">
-                <left>810</left><top>498</top>
-                <width>110</width><height>30</height>
-                <font>font12</font>
+                <left>810</left><top>517</top>
+                <width>170</width><height>28</height>
+                <font>font10</font>
                 <textcolor>FF00BFFF</textcolor>
                 <align>center</align><aligny>center</aligny>
                 <label>[B]$INFO[Window(10000).Property(bridge.autoplay_server)][/B]</label>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_server))</visible>
             </control>
 
-            <!-- 2. Calidad -->
+            <!-- 2. Calidad (85x33, top:514) -->
             <control type="image">
-                <left>930</left><top>498</top>
-                <width>115</width><height>30</height>
+                <left>990</left><top>514</top>
+                <width>85</width><height>33</height>
                 <texture colordiffuse="30D4AF37">white.png</texture>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_quality))</visible>
             </control>
             <control type="label">
-                <left>930</left><top>498</top>
-                <width>115</width><height>30</height>
-                <font>font12</font>
+                <left>990</left><top>517</top>
+                <width>85</width><height>28</height>
+                <font>font10</font>
                 <textcolor>FFFFD700</textcolor>
                 <align>center</align><aligny>center</aligny>
                 <label>[B]$INFO[Window(10000).Property(bridge.autoplay_quality)][/B]</label>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_quality))</visible>
             </control>
 
-            <!-- 3. Idioma -->
+            <!-- 3. Idioma (155x33, top:514) -->
             <control type="image">
-                <left>1055</left><top>498</top>
-                <width>110</width><height>30</height>
+                <left>1085</left><top>514</top>
+                <width>155</width><height>33</height>
                 <texture colordiffuse="25FFFFFF">white.png</texture>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_language))</visible>
             </control>
             <control type="label">
-                <left>1055</left><top>498</top>
-                <width>110</width><height>30</height>
-                <font>font12</font>
+                <left>1085</left><top>517</top>
+                <width>155</width><height>28</height>
+                <font>font10</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <align>center</align><aligny>center</aligny>
                 <label>[B]$INFO[Window(10000).Property(bridge.autoplay_language)][/B]</label>
-            </control>
-
-            <!-- 4. Canal Proveedor -->
-            <control type="image">
-                <left>1175</left><top>498</top>
-                <width>130</width><height>30</height>
-                <texture colordiffuse="257B68EE">white.png</texture>
-            </control>
-            <control type="label">
-                <left>1175</left><top>498</top>
-                <width>130</width><height>30</height>
-                <font>font12</font>
-                <textcolor>FFB4A0FF</textcolor>
-                <align>center</align><aligny>center</aligny>
-                <label>[B]$INFO[Window(10000).Property(bridge.autoplay_channel)][/B]</label>
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.autoplay_language))</visible>
             </control>
 
             <!-- BARRA DE PROGRESO DORADA (ID 20) -->
@@ -191,19 +188,19 @@
                 <left>725</left><top>575</top>
                 <width>750</width><height>6</height>
                 <texturebg colordiffuse="33FFFFFF">white.png</texturebg>
-                <midtexture colordiffuse="FFD4AF37">white.png</midtexture>
+                <midtexture colordiffuse="FFFFB000">white.png</midtexture>
             </control>
 
-            <!-- BOTON CANCELAR (ID 200) -->
+            <!-- BOTON CANCELAR (ID 200) - Mismo tamaño, posición y estilo que la ventana de búsqueda normal -->
             <control type="button" id="200">
-                <left>1280</left><top>642</top>
-                <width>195</width><height>50</height>
+                <left>1250</left><top>626</top>
+                <width>225</width><height>60</height>
                 <label>Cancelar</label>
                 <font>font13</font>
-                <textcolor>FF000000</textcolor>
-                <focusedcolor>FF000000</focusedcolor>
-                <texturefocus colordiffuse="FFD4AF37">white.png</texturefocus>
-                <texturenofocus colordiffuse="80D4AF37">white.png</texturenofocus>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFB000</focusedcolor>
+                <texturefocus colordiffuse="70FFB000">white.png</texturefocus>
+                <texturenofocus colordiffuse="30FFFFFF">white.png</texturenofocus>
                 <align>center</align>
                 <aligny>center</aligny>
                 <pulseonselect>true</pulseonselect>
