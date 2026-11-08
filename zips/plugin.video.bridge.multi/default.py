@@ -6568,6 +6568,151 @@ class _RadialSearchProgressDialog(object):
             except Exception:
                 pass
 
+
+class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
+    PROGRESS_CTRL = 20
+    CANCEL_BTN = 200
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_canceled = False
+
+    def onInit(self):
+        try:
+            btn = self.getControl(self.CANCEL_BTN)
+            self.setFocus(btn)
+        except Exception:
+            try: self.setFocusId(self.CANCEL_BTN)
+            except Exception: pass
+        try:
+            xbmc.executebuiltin("SetFocus(200)")
+        except:
+            pass
+
+    def onAction(self, action):
+        try:
+            aid = action.getId() if hasattr(action, 'getId') else action
+            if aid in (9, 10, 92, 110):
+                self.is_canceled = True
+                try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                except: pass
+                self.close()
+        except Exception:
+            pass
+
+    def onClick(self, control_id):
+        self.is_canceled = True
+        try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+        except: pass
+        self.close()
+
+    def onControl(self, control):
+        self.is_canceled = True
+        try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+        except: pass
+        self.close()
+
+
+class _AutoplayProgressDialog(object):
+    """Controlador nativo para el diálogo de reproducción automática exclusivo (autoplay.xml)."""
+
+    def __init__(self, target_title="", poster_url="", fanart_url="", extra_info=""):
+        self.target_title = target_title or ""
+        self.poster_url = poster_url or ""
+        self.fanart_url = fanart_url or ""
+        self.extra_info = extra_info or ""
+        self._dlg = None
+        self._canceled = False
+
+    def _set_prop(self, k, v):
+        try:
+            xbmcgui.Window(10000).setProperty(k, str(v if v is not None else ''))
+        except Exception:
+            pass
+
+    def create(self, heading="", line1="", line2="", line3=""):
+        try:
+            self._set_prop("bridge.autoplay_canceled", "false")
+            self._canceled = False
+            skin_dir = "Default"
+            xml_file = "autoplay.xml"
+            addon_path = _bridge_addon.getAddonInfo("path")
+            self._dlg = _AutoplayProgressWindow(xml_file, addon_path, skin_dir, "1080i")
+
+            self._set_prop("bridge.autoplay_title", _safe_str(self.target_title))
+            self._set_prop("bridge.autoplay_poster", _safe_str(self.poster_url))
+            self._set_prop("bridge.autoplay_fanart", _safe_str(self.fanart_url))
+            self._set_prop("bridge.autoplay_extra", _safe_str(self.extra_info))
+            self._set_prop("bridge.autoplay_status", _safe_str(line1 or "Iniciando reproducción..."))
+            self._set_prop("bridge.autoplay_server", "")
+            self._set_prop("bridge.autoplay_quality", "")
+            self._set_prop("bridge.autoplay_language", "")
+            self._set_prop("bridge.autoplay_channel", "")
+
+            self._dlg.show()
+            try:
+                xbmc.executebuiltin("SetFocus(200)")
+            except: pass
+        except Exception as e:
+            xbmc.log("Multi Bridge: error abriendo autoplay.xml: %s (fallback a DialogProgress)" % e, xbmc.LOGWARNING)
+            self._dlg = xbmcgui.DialogProgress()
+            self._dlg.create(heading or "Multi Bridge", line1, line2, line3)
+
+    def set_stream_info(self, server="", quality="", language="", channel="", status=""):
+        try:
+            if server: self._set_prop("bridge.autoplay_server", _safe_str(server).upper())
+            if quality: self._set_prop("bridge.autoplay_quality", _safe_str(quality).upper())
+            if language: self._set_prop("bridge.autoplay_language", _safe_str(language).upper())
+            if channel: self._set_prop("bridge.autoplay_channel", _safe_str(channel))
+            if status: self._set_prop("bridge.autoplay_status", _safe_str(status))
+        except Exception:
+            pass
+
+    def update(self, pct, message=""):
+        if not self._dlg:
+            return
+        if isinstance(self._dlg, xbmcgui.DialogProgress):
+            try: self._dlg.update(int(pct), message or "")
+            except: pass
+            return
+
+        try:
+            p_ctrl = self._dlg.getControl(20)
+            if p_ctrl:
+                p_ctrl.setPercent(int(pct))
+        except Exception:
+            pass
+
+        if message:
+            clean_msg = _clean_dialog_text(str(message)).strip()
+            if clean_msg:
+                self._set_prop("bridge.autoplay_status", clean_msg)
+
+    def iscanceled(self):
+        if self._canceled:
+            return True
+        if self._dlg:
+            if isinstance(self._dlg, xbmcgui.DialogProgress):
+                return self._dlg.iscanceled()
+            if getattr(self._dlg, "is_canceled", False):
+                self._canceled = True
+                return True
+        prop = xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled")
+        if prop == "true":
+            self._canceled = True
+            return True
+        return False
+
+    def close(self):
+        if self._dlg:
+            try:
+                self._dlg.close()
+            except Exception:
+                pass
+            self._dlg = None
+        self._set_prop("bridge.autoplay_canceled", "false")
+
+
 def _run_parallel_search_impl(engine='alfa'):
     if not _is_engine_installed(engine):
         xbmc.log("Multi Bridge: El motor %s no está instalado. Cancelando búsqueda." % engine, xbmc.LOGWARNING)
@@ -8512,9 +8657,16 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             idx+1, total_att, server, lang_raw, ch), xbmc.LOGINFO)
 
         # ── Step 1: Resolve ────────────────────────────────────────────────
-        _prog = xbmcgui.DialogProgress()
-        _prog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR] [COLOR white]—[/COLOR] [COLOR deepskyblue]Autoplay[/COLOR]',
-                     '[%d/%d] Conectando a %s...\n[COLOR grey]Espere por favor (0.0s / %ds)[/COLOR]' % (idx+1, total_att, _label, _resolve_timeout))
+        _t_title = meta.get('title') or resume_title or getattr(link, 'title', '') or 'Multi Bridge'
+        _extra_tag = '%d/%d' % (idx+1, total_att)
+        _prog = _AutoplayProgressDialog(
+            target_title=_t_title,
+            poster_url=meta.get('poster') or meta.get('thumbnail') or '',
+            fanart_url=meta.get('fanart') or '',
+            extra_info=_extra_tag
+        )
+        _prog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
+        _prog.set_stream_info(server=server, quality=cand_qual or '1080p', language=lang_raw or 'Latino', channel=ch or 'Canal', status='Iniciando reproducción...')
         _prog.update(10)
 
         _res_done  = [None]
@@ -8535,8 +8687,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             if _res_done[0] is not None:
                 break
             xbmc.sleep(100)
-            _prog.update(min(10 + int(_s * 70.0 / _resolve_steps), 80),
-                         '[%d/%d] Conectando a %s...\n[COLOR grey]Espere por favor (%.1fs / %ds)[/COLOR]' % (idx+1, total_att, _label, (_s + 1) * 0.1, _resolve_timeout))
+            _pct = min(10 + int(_s * 85.0 / _resolve_steps), 95)
+            _prog.update(_pct, 'Iniciando reproducción...')
 
         _rt.join(timeout=1)
 
@@ -9088,9 +9240,15 @@ def _fast_autoplay_search_and_play(engine, handle):
         enabled_players = sorted(enabled_players, key=_ch_prio)
 
     total_channels = len(enabled_players)
-    p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR] [COLOR white]—[/COLOR] [COLOR deepskyblue]Autoplay[/COLOR]',
-                    '[COLOR white][B]%s[/B][/COLOR]\n[COLOR gold]Iniciando canales...[/COLOR]' % target_title)
+    _extra_info = meta.get('genre') or ('%s' % (meta.get('year') or ''))
+    p_dialog = _AutoplayProgressDialog(
+        target_title=target_title,
+        poster_url=meta.get('poster') or '',
+        fanart_url=meta.get('fanart') or '',
+        extra_info=_extra_info
+    )
+    p_dialog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
+    p_dialog.set_stream_info(server="BUSCANDO", quality="1080P", language="LATINO", channel=engine.capitalize(), status="Iniciando reproducción...")
     p_dialog.update(5)
 
     results_dict = {}
@@ -9196,14 +9354,19 @@ def _fast_autoplay_search_and_play(engine, handle):
 
                 srv_name = _get_link_server_name(cand)
                 lang_raw = _safe_str(getattr(cand, 'language', '') or '')
-                lang_colored = _format_language_display(lang_raw, colored=True)
                 cand_qual = _format_quality(cand)
-                qual_part = ('  •  [COLOR gold]%s[/COLOR]' % cand_qual) if (cand_qual and cand_qual != 'N/A') else ''
-                p_dialog.update(min(pct, 90),
-                    '[COLOR white][B]%s[/B][/COLOR]  [COLOR gray](%d/%d canales)[/COLOR]\n[COLOR deepskyblue]Verificando:[/COLOR] [B][COLOR gold]%s[/COLOR][/B]  •  %s%s' % (
-                        target_title, completed, total_channels, srv_name, lang_colored, qual_part
+                cand_ch = _format_channel(cand)
+                try:
+                    p_dialog.set_stream_info(
+                        server=srv_name,
+                        quality=cand_qual or '1080p',
+                        language=lang_raw or 'Latino',
+                        channel=cand_ch or 'Canal',
+                        status='Iniciando reproducción...'
                     )
-                )
+                except Exception:
+                    pass
+                p_dialog.update(min(pct, 90), 'Iniciando reproducción...')
 
                 _res_box = [False, None]
                 def _do_res(c=cand):
