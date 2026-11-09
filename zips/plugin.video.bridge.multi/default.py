@@ -10556,7 +10556,13 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             if is_switch and xbmc.Player().isPlaying():
                 try:
                     xbmc.Player().stop()
-                    xbmc.sleep(350)
+                    try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+                    except: pass
+                    for _ in range(40):
+                        if not xbmc.Player().isPlaying():
+                            break
+                        xbmc.sleep(50)
+                    xbmc.sleep(150)
                 except Exception:
                     pass
             sys.argv[1] = '-1' if is_switch else str(handle)
@@ -13675,17 +13681,10 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         except Exception:
             pass
 
-    # Parar explícitamente la reproducción anterior para que Kodi y los scrobblers procesen el evento stop
+    # Mantener el reproductor pausado en el frame actual sin destruir el pipeline hasta que el nuevo stream este listo
     try:
-        if p.isPlaying():
-            p.stop()
-            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-            except: pass
-            for _ in range(40):
-                if not p.isPlaying():
-                    break
-                xbmc.sleep(50)
-            xbmc.sleep(150)
+        if p.isPlayingVideo() and not xbmc.getCondVisibility(Player.Paused):
+            p.pause()
     except Exception:
         pass
 
@@ -13877,6 +13876,7 @@ def _show_floating_links_dialog_impl(offset=0):
         chosen_idx = dlg.selected
         last_tab = dlg.active_tab
         del dlg
+        xbmc.sleep(150)
 
         if chosen_idx == 'force_search':
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=force_search)')
@@ -14248,7 +14248,7 @@ def main():
                     start_beginning = True
                     save_bookmark(media_key, 0, 0, title=t_title)
                 elif _rsel is None or _rsel < 0:
-                    if handle > 0:
+                    if handle >= 0:
                         try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
                         except: pass
                     return
@@ -14823,20 +14823,22 @@ def main():
                 seek_to_time = 0
                 if bm:
                     r_time = float(bm.get('resume_time', 0))
-                    mins = int(r_time // 60); secs = int(r_time % 60)
-                    hrs = mins // 60; mins = mins % 60
-                    time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                    t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este video'
-                ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
-                if ans == 'cancel':
-                    if handle >= 0:
-                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                        except: pass
-                    return
-                elif ans == 'resume':
-                    seek_to_time = r_time
-                elif ans == 'restart':
-                    seek_to_time = 0
+                    if r_time > 10:
+                        mins = int(r_time // 60); secs = int(r_time % 60)
+                        hrs = mins // 60; mins = mins % 60
+                        time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                        t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este video'
+                        ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+                        if ans == 'cancel':
+                            xbmcgui.Window(10000).setProperty(bridge.autoplay_canceled, true)
+                            if handle >= 0:
+                                try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                                except: pass
+                            return
+                        elif ans == 'resume':
+                            seek_to_time = r_time
+                        elif ans == 'restart':
+                            seek_to_time = 0
 
                 played = _autoplay_with_fallback(
                     links, handle,
