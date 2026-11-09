@@ -23,11 +23,11 @@
             <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
             <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
 
-            <!-- Fondo oscuro con textura -->
+            <!-- Fondo oscuro con esquinas redondeadas -->
             <control type="image">
                 <left>420</left><top>315</top>
                 <width>1080</width><height>440</height>
-                <texture border="16">texture.png</texture>
+                <texture border="32">dialog_bg.png</texture>
                 <colordiffuse>E60D1117</colordiffuse>
             </control>
 
@@ -35,31 +35,17 @@
             <control type="image">
                 <left>420</left><top>315</top>
                 <width>1080</width><height>440</height>
-                <texture background="true">$INFO[Window(10000).Property(bridge.autoplay_fanart)]</texture>
+                <texture background="true" diffuse="dialog_mask.png">$INFO[Window(10000).Property(bridge.autoplay_fanart)]</texture>
                 <colordiffuse>18FFFFFF</colordiffuse>
                 <aspectratio aligny="center">scale</aspectratio>
             </control>
 
-            <!-- Borde tenue dorado permanente -->
+            <!-- Borde redondeado tenue dorado permanente -->
             <control type="image">
                 <left>420</left><top>315</top>
-                <width>1080</width><height>2</height>
-                <texture colordiffuse="50D4AF37">white.png</texture>
-            </control>
-            <control type="image">
-                <left>420</left><top>753</top>
-                <width>1080</width><height>2</height>
-                <texture colordiffuse="50D4AF37">white.png</texture>
-            </control>
-            <control type="image">
-                <left>420</left><top>315</top>
-                <width>2</width><height>440</height>
-                <texture colordiffuse="50D4AF37">white.png</texture>
-            </control>
-            <control type="image">
-                <left>1498</left><top>315</top>
-                <width>2</width><height>440</height>
-                <texture colordiffuse="50D4AF37">white.png</texture>
+                <width>1080</width><height>440</height>
+                <texture border="32">dialog_border.png</texture>
+                <colordiffuse>70D4AF37</colordiffuse>
             </control>
 
             <!-- POSTER DE LA PELICULA / SERIE (Limpio, con esquinas redondeadas) -->
