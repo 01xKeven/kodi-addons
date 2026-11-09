@@ -3079,11 +3079,11 @@ def _get_link_server_name(link):
         ('streamlare', 'Streamlare'), ('supervideo', 'Supervideo'), ('dropload', 'Dropload'),
         ('userload', 'Userload'), ('upstream', 'Upstream'), ('wolfstream', 'Wolfstream'),
         ('hexupload', 'Hexupload'), ('mega', 'Mega'), ('1fichier', '1fichier'),
-        ('okru', 'Okru'), ('ok.ru', 'Okru'), ('kinoger', 'Kinoger')
+        ('okru', 'Okru'), ('ok.ru', 'Okru'), ('kinoger', 'Kinoger'), ('vimeos', 'Vimeos'), ('zures', 'Vimeos')
     ]
 
-    if not srv or srv.lower() in ('various', 'directo', 'none', ''):
-        if clean_other and clean_other.lower() not in ('various', 'directo', 'none', ''):
+    if not srv or srv.lower() in ('various', 'zures', 'videoapp', 'directo', 'none', ''):
+        if clean_other and clean_other.lower() not in ('various', 'zures', 'videoapp', 'directo', 'none', ''):
             for d_key, d_name in domain_map:
                 if d_key in clean_other.lower(): return d_name
             return clean_other.capitalize()
@@ -3096,9 +3096,10 @@ def _get_link_server_name(link):
         if d_key == srv.lower() or d_key in srv.lower():
             return d_name
 
-    if clean_other and clean_other.lower() not in ('various', 'directo', 'none', ''):
+    if clean_other and clean_other.lower() not in ('various', 'zures', 'videoapp', 'directo', 'none', ''):
         for d_key, d_name in domain_map:
             if d_key in clean_other.lower(): return d_name
+        return clean_other.capitalize()
 
     return srv.capitalize()
 
@@ -3755,7 +3756,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                 try:
                     h2 = dict(headers)
                     h2['Range'] = 'bytes=0-65535'
-                    r_seg = requests.get(sub_url, headers=h2, timeout=timeout, verify=False, stream=True)
+                    r_seg = requests.get(sub_url, headers=h2, timeout=max(4.5, timeout), verify=False, stream=True)
                     if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
                         xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d: %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
                         return False, None
@@ -3768,8 +3769,9 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                             if h_s or w_s:
                                 detected_res = _classify_resolution(w_s, h_s)
                 except Exception as e_seg:
-                    xbmc.log("Multi Bridge: segmento HLS fallo (%s): %s" % (sub_url, e_seg), xbmc.LOGINFO)
-                    return False, None
+                    # El manifiesto m3u8 es válido y respondió 200 OK. Si el segmento dio timeout o lentitud en la CDN,
+                    # NO descartamos el stream; Kodi reproducirá el flujo con su propio búfer.
+                    xbmc.log("Multi Bridge: segmento HLS lento o advertencia (%s: %s), pero playlist m3u8 es válida -> conservando enlace" % (sub_url, e_seg), xbmc.LOGINFO)
 
             # Si no se detecto resolucion por etiqueta RESOLUTION, buscar patrones en la URL
             if not detected_res:
@@ -5066,28 +5068,32 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                             xbmc.log("Multi Bridge: %s '%s' IMDb en web no coincide (%s != %s), verificando por año/reparto..." % (channel_id, _u, page_imdbs[0], t_imdb), xbmc.LOGINFO)
                         except: pass
 
+        # Verificación por Reparto/Actores si target_tmdb está disponible:
+        # Se verifica SIEMPRE (haya o no año objetivo) cuando el sitio web liste actores.
+        # Si la web lista 3 o más actores y ninguno coincide con el reparto oficial de TMDB,
+        # es un homónimo o contenido completamente distinto (ej. documental vs película nueva).
+        if target_tmdb:
+            try:
+                web_actors = _extract_web_actors(html)
+                if web_actors and len(web_actors) >= 2:
+                    tmdb_cast = _fetch_tmdb_cast(target_tmdb, is_series=is_series)
+                    if tmdb_cast and len(tmdb_cast) >= 2:
+                        norm_web = {_norm_person_name(a) for a in web_actors if _norm_person_name(a)}
+                        norm_tmdb = {_norm_person_name(a) for a in tmdb_cast if _norm_person_name(a)}
+                        if _match_actors(norm_web, norm_tmdb):
+                            _mark_confirmed()
+                            try:
+                                xbmc.log("Multi Bridge: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
+                            except: pass
+                            return True
+                        elif len(web_actors) >= 3:
+                            try:
+                                xbmc.log("Multi Bridge: %s '%s' descartado por reparto no coincidente (%d actores web vs TMDB)" % (channel_id, _u, len(web_actors)), xbmc.LOGINFO)
+                            except: pass
+                            return False
+            except Exception: pass
+
         if not year_t:
-            # Si no hay año objetivo pero sí target_tmdb, verificar actores antes de salir
-            if target_tmdb:
-                try:
-                    web_actors = _extract_web_actors(html)
-                    if web_actors and len(web_actors) >= 2:
-                        tmdb_cast = _fetch_tmdb_cast(target_tmdb, is_series=is_series)
-                        if tmdb_cast and len(tmdb_cast) >= 2:
-                            norm_web = {_norm_person_name(a) for a in web_actors if _norm_person_name(a)}
-                            norm_tmdb = {_norm_person_name(a) for a in tmdb_cast if _norm_person_name(a)}
-                            if _match_actors(norm_web, norm_tmdb):
-                                _mark_confirmed()
-                                try:
-                                    xbmc.log("Multi Bridge: %s '%s' confirmado por coincidencia de actores" % (channel_id, _u), xbmc.LOGINFO)
-                                except: pass
-                                return True
-                            elif len(web_actors) >= 3:
-                                try:
-                                    xbmc.log("Multi Bridge: %s '%s' descartado por reparto no coincidente" % (channel_id, _u), xbmc.LOGINFO)
-                                except: pass
-                                return False
-                except Exception: pass
             return True
 
         # 0.8. Check específico de HDFull y similares (ej: /buscar/year/2013 o /year/2013)
@@ -5154,8 +5160,8 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             return False
 
         # 3. Meta release_date estricto (ignora fechas de subida como uploadDate)
-        meta_dates = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:(?:video:)?release_date|datepublished)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
-        meta_dates += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:(?:video:)?release_date|datepublished)["\']', html, _re2.I)
+        meta_dates = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
+        meta_dates += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date)["\']', html, _re2.I)
         all_md = []
         for md in meta_dates:
             all_md.extend([int(y) for y in _re2.findall(years_re, md)])
@@ -5176,8 +5182,8 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                     return True
                 return False
 
-        # 5. JSON-LD datePublished / releaseDate
-        j_dates = _re2.findall(r'["\'](?:datePublished|releaseDate)["\']\s*:\s*["\']?(19\d\d|20[0-3]\d)', html, _re2.IGNORECASE)
+        # 5. JSON-LD releaseDate / releasedEvent
+        j_dates = _re2.findall(r'["\'](?:releaseDate|releasedEvent)["\']\s*:\s*["\']?(19\d\d|20[0-3]\d)', html, _re2.IGNORECASE)
         if j_dates:
             jy = [int(y) for y in j_dates]
             if any(abs(y - year_t) <= 1 for y in jy):
@@ -14336,37 +14342,116 @@ def main():
     if action == 'force_search':
         xbmc.log("Multi Bridge: 'Forzar nueva búsqueda' solicitado desde menú contextual", xbmc.LOGINFO)
         _force_meta = {}
+        _force_engine = 'alfa'
         try:
             _fc = _read_search_cache_atomic()
             if _fc and isinstance(_fc, dict):
                 _force_meta = _fc.get('meta', {}) or {}
+                _force_engine = _fc.get('engine', 'alfa') or 'alfa'
         except Exception:
             pass
 
-        # Invalida la cache de RAM y el timestamp de SEARCH_CACHE_FILE
-        global _RAM_SEARCH_CACHE
+        # Invalida completamente toda la caché en memoria, propiedades de ventana y ficheros de disco
+        global _RAM_SEARCH_CACHE, _LAST_SEARCH_CACHE_DATA, _LAST_SEARCH_CACHE_MTIME
         _RAM_SEARCH_CACHE = None
+        _LAST_SEARCH_CACHE_DATA = None
+        _LAST_SEARCH_CACHE_MTIME = 0
+        try:
+            xbmcgui.Window(10000).setProperty('MultiBridge.SearchCacheJson', '')
+        except Exception:
+            pass
         try:
             if os.path.exists(SEARCH_CACHE_FILE):
                 os.remove(SEARCH_CACHE_FILE)
         except Exception:
             pass
+        try:
+            if os.path.exists(SEARCH_CACHE_FILE + '.bak'):
+                os.remove(SEARCH_CACHE_FILE + '.bak')
+        except Exception:
+            pass
 
-        _fm_title = _force_meta.get('title') or title or get_param('title') or ''
-        _fm_tmdb = _force_meta.get('tmdb') or tmdb_id or get_param('tmdb') or ''
-        _fm_s = _force_meta.get('season') or season or get_param('season') or ''
-        _fm_e = _force_meta.get('episode') or episode or get_param('episode') or ''
+        def _g(k): return _force_meta.get(k) or get_param(k) or ''
 
-        # Re-invoca la acción play con force_search=1 para ejecutar búsqueda limpia y fresca
-        _force_play_url = 'plugin://plugin.video.bridge.multi/?action=play&force_search=1'
-        if _fm_tmdb: _force_play_url += '&tmdb=%s' % _fm_tmdb
-        if _fm_title: _force_play_url += '&title=%s' % uparse.quote_plus(str(_fm_title))
-        if _fm_s and _fm_e: _force_play_url += '&season=%s&episode=%s' % (_fm_s, _fm_e)
-        for _fk in ('title_es', 'title_lat', 'year', 'showyear', 'showname', 'imdb', 'tvdb'):
-            _fv = _force_meta.get(_fk) or get_param(_fk) or ''
-            if _fv: _force_play_url += '&%s=%s' % (_fk, uparse.quote_plus(str(_fv)))
+        title      = _g('title')      or title
+        title_es   = _g('title_es')
+        title_lat  = _g('title_lat')
+        title_en   = _g('title_en')
+        title_orig = _g('title_orig')
+        showname   = _g('showname')   or showname
+        year       = _g('year')       or year
+        showyear   = _g('showyear')   or showyear
+        season     = _g('season')     or season
+        episode    = _g('episode')    or episode
+        tmdb_id    = _g('tmdb')       or tmdb_id
+        imdb_id    = _g('imdb')       or imdb_id
+        tvdb_id    = _g('tvdb')       or tvdb_id
+        trakt_id   = _g('trakt')      or trakt_id
+        plot       = _g('plot')       or plot
+        tagline    = _g('tagline')    or tagline
+        poster     = _g('poster')     or poster
+        fanart     = _g('fanart')     or fanart
+        thumbnail  = _g('thumbnail')  or thumbnail
+        clearlogo  = _g('clearlogo')  or clearlogo
+        genre      = _g('genre')      or genre
+        director   = _g('director')   or director
 
-        xbmc.executebuiltin('RunPlugin(%s)' % _force_play_url)
+        # Limpiar fallidos para este contenido
+        _media_k = _get_media_key(_force_meta)
+        if _media_k:
+            _clear_session_failed_links(_media_k)
+
+        eng = _force_engine or 'alfa'
+        if bool(season and episode):
+            eng = 'balandro'
+
+        xbmc.log("Multi Bridge: Ejecutando búsqueda fresca para '%s' (motor=%s)" % (title, eng), xbmc.LOGINFO)
+        _force_links, _force_matched = run_parallel_search(engine=eng)
+
+        _force_verified = (getattr(_force_matched, '_pipeline_verified', False) if _force_matched else False) or _PIPELINE_VERIFIED_SEARCH
+        _auto_v = _bridge_addon.getSetting('auto_verify_links') == 'true'
+        if _force_links and _auto_v and not _force_verified:
+            _pv = xbmcgui.DialogProgress()
+            _pv.create('Multi Bridge', 'Comprobando disponibilidad...')
+            _vl = _verify_links_headless(_force_links, engine=eng, p_dialog=_pv)
+            try: _pv.close()
+            except: pass
+            if _vl:
+                _force_links = _filter_and_sort_links(_vl)
+                _force_verified = True
+
+        _force_meta2 = dict(_force_meta)
+        _force_meta2['engine'] = eng
+        _force_meta2['verified_only'] = _force_verified
+        if _force_matched:
+            _enrich_link_metadata(None, _force_meta2, _force_matched)
+
+        try:
+            _store_ram_search_cache(_force_links or [], _force_matched, _force_meta2, eng)
+            _save_search_cache_atomic({
+                'item': _serialize_item(_force_matched) if _force_matched else None,
+                'links': [_serialize_item(l) for l in (_force_links or [])],
+                'meta': _force_meta2,
+                'engine': eng
+            })
+        except Exception:
+            pass
+
+        try:
+            _spawn_late_collector(eng, _force_meta2.get('tmdb'), _force_meta2.get('season'), _force_meta2.get('episode'))
+        except Exception:
+            pass
+
+        # Reabrir la ventana de lista de enlaces fresca
+        _cur_tmdb = str(tmdb_id or _force_meta2.get('tmdb') or '')
+        _ts = int(time.time())
+        _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
+        if _force_meta2.get('season') and _force_meta2.get('episode'):
+            _win_url += '&season=%s&episode=%s' % (_force_meta2['season'], _force_meta2['episode'])
+        _open_links_view(_win_url)
+        if handle >= 0:
+            try: xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
+            except Exception: pass
         return
 
     if action == 'verify_links':
@@ -14601,6 +14686,16 @@ def main():
         # Respetar tiempo configurable (por defecto 10 min = 600s, 0 = buscar siempre).
         # Si force_search=1 viene por parámetro, se omite la caché y se busca fresco.
         _force_search = get_param('force_search') in ('1', 'true', 'True')
+        if _force_search:
+            global _RAM_SEARCH_CACHE, _LAST_SEARCH_CACHE_DATA, _LAST_SEARCH_CACHE_MTIME
+            _RAM_SEARCH_CACHE = None
+            _LAST_SEARCH_CACHE_DATA = None
+            _LAST_SEARCH_CACHE_MTIME = 0
+            try:
+                xbmcgui.Window(10000).setProperty('MultiBridge.SearchCacheJson', '')
+                if os.path.exists(SEARCH_CACHE_FILE): os.remove(SEARCH_CACHE_FILE)
+                if os.path.exists(SEARCH_CACHE_FILE + '.bak'): os.remove(SEARCH_CACHE_FILE + '.bak')
+            except Exception: pass
         _cache_timeout_mins = _get_int_setting('cache_links_timeout', 10)
         _cache_max_age_secs = max(0, _cache_timeout_mins * 60)
 
@@ -14743,8 +14838,8 @@ def main():
                     _show_bridge_notification('Multi Bridge', 'Autoplay: no se encontraron enlaces reproducibles', 3000)
                     return
 
-            _cached = _read_search_cache_atomic()
-            if _cached and isinstance(_cached, dict) and _cached.get('links'):
+            _cached = None if _force_search else _read_search_cache_atomic()
+            if not _force_search and _cached and isinstance(_cached, dict) and _cached.get('links'):
                 _c_meta = _cached.get('meta', {}) or {}
                 if _is_same_media_item(_c_meta, _init_meta):
                     _c_raw_links = [l for l in _cached.get('links', []) if isinstance(l, dict) and l.get('url')]
