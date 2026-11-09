@@ -1319,15 +1319,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True, failed_links=cur_failed_links)
                                     dlg.doModal()
                                     chosen_idx = dlg.selected
+                                    chosen_link = getattr(dlg, 'selected_link', None)
                                     del dlg
+                                    xbmc.sleep(150)
                                     if chosen_idx == 'other_engine':
                                         _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
                                         xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
                                         return
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
-                                        switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time)
+                                        if chosen_link is None and 0 <= chosen_idx < len(c_links):
+                                            chosen_link = c_links[chosen_idx]
+                                        switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
                                         if switched:
-                                            chosen_l = c_links[chosen_idx]
+                                            chosen_l = chosen_link or c_links[chosen_idx]
                                             srv_n = _get_link_server_name(chosen_l) or 'Servidor'
                                             is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
                                             switch_ok = _verify_playback_started(is_torrent=is_t)
@@ -3104,19 +3108,44 @@ def _get_link_server_name(link):
 # --------------------------------------------------------------------------------------------------
 _SESSION_FAILED_LINKS = {}
 
-def _get_link_unique_id(link):
+def _get_link_unique_id(link, fallback_index=None):
     if not link:
         return ''
-    url = _safe_str(getattr(link, 'url', '')).strip().lower()
+    uid = getattr(link, '_bridge_uid', None)
+    if uid:
+        return uid
+
     srv = _get_link_server_name(link).strip().lower()
     ch = _safe_str(getattr(link, 'channel', '')).strip().lower()
+    lang = _safe_str(getattr(link, 'language', '')).strip().lower()
+    qual = _safe_str(getattr(link, 'quality', '')).strip().lower()
     data_url = _safe_str(getattr(link, 'data_url', '')).strip().lower()
+    url = _safe_str(getattr(link, 'url', '')).strip().lower()
+    extra = _safe_str(getattr(link, 'extra', '')).strip().lower()
     title = _safe_str(getattr(link, 'title', '')).strip().lower()
-    if url:
-        return '%s|%s|%s' % (srv, ch, url)
+    post = _safe_str(getattr(link, 'post', '')).strip().lower()
+    idx = getattr(link, '_bridge_orig_idx', None)
+    if idx is None and fallback_index is not None:
+        idx = fallback_index
+
+    parts = [srv, ch, lang, qual]
+    if idx is not None:
+        parts.append('idx_%s' % idx)
     if data_url:
-        return '%s|%s|%s' % (srv, ch, data_url)
-    return '%s|%s|%s' % (srv, ch, title)
+        parts.append('durl_%s' % data_url)
+    elif url:
+        parts.append('url_%s' % url)
+    if extra:
+        parts.append('ext_%s' % extra)
+    if post:
+        parts.append('post_%s' % post)
+    if title:
+        parts.append('tit_%s' % title)
+
+    uid = '|'.join(parts)
+    try: setattr(link, '_bridge_uid', uid)
+    except Exception: pass
+    return uid
 
 def _get_session_failed_signatures(media_key=None, meta=None):
     global _SESSION_FAILED_LINKS
@@ -3156,7 +3185,7 @@ def _record_session_failed_link(link, index=None, media_key=None, meta=None):
         setattr(link, 'bridge_failed', True)
     except Exception:
         pass
-    sig = _get_link_unique_id(link)
+    sig = _get_link_unique_id(link, fallback_index=index)
     if not mk:
         mk = 'default_media'
 
@@ -10488,6 +10517,12 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 else:
                     try:
                         if is_switch and xbmc.Player().isPlaying():
+                            try:
+                                if xbmc.getCondVisibility("Player.Paused"):
+                                    try: xbmc.Player().pause()
+                                    except: pass
+                                    xbmc.sleep(50)
+                            except: pass
                             xbmc.Player().stop()
                             try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
                             except: pass
@@ -10555,6 +10590,12 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         try:
             if is_switch and xbmc.Player().isPlaying():
                 try:
+                    try:
+                        if xbmc.getCondVisibility("Player.Paused"):
+                            try: xbmc.Player().pause()
+                            except: pass
+                            xbmc.sleep(50)
+                    except: pass
                     xbmc.Player().stop()
                     try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
                     except: pass
@@ -11787,7 +11828,8 @@ class _EnginePickerDialog(xbmcgui.WindowDialog):
 
     def __init__(self, alfa_icon_path, balandro_icon_path):
         super().__init__()
-        self.selected = -1          # -1 = cancelado
+        self.selected = -1
+        self.selected_link = None          # -1 = cancelado
         self.current  = 0           # 0=Alfa 1=Balandro
         self._alfa_icon  = alfa_icon_path
         self._bal_icon   = balandro_icon_path
@@ -13505,9 +13547,13 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                         if is_playing_prop or is_playing_idx:
                             return
                         self.selected = s_idx
+                        if 0 <= s_idx < len(self.all_links):
+                            self.selected_link = self.all_links[s_idx]
                     else:
                         try:
                             self.selected = int(item.getProperty('bridge.src_index'))
+                            if 0 <= self.selected < len(self.all_links):
+                                self.selected_link = self.all_links[self.selected]
                         except (ValueError, TypeError):
                             self.selected = -1
             except Exception:
@@ -13646,6 +13692,16 @@ def _load_cached_links_for_dialog(offset=0):
 
         c_links = [l for l in (c_links or []) if l is not None and getattr(l, 'url', None)]
         if c_links:
+            for i, l in enumerate(c_links):
+                if getattr(l, '_bridge_orig_idx', None) is None:
+                    try: setattr(l, '_bridge_orig_idx', i + offset)
+                    except Exception: pass
+                _get_link_unique_id(l)
+            try:
+                b_prefs = _get_filter_prefs()
+                sort_q = b_prefs.get('servers_sort_quality', 0)
+                c_links = sorted(c_links, key=lambda it: _get_hierarchical_sort_key(it, b_prefs=b_prefs, sort_q=sort_q))
+            except Exception: pass
             _store_ram_search_cache(c_links, c_matched, c_meta, c_engine)
         return c_links, c_matched, c_meta, c_engine
     except Exception as e:
@@ -13653,10 +13709,13 @@ def _load_cached_links_for_dialog(offset=0):
         return [], None, {}, 'alfa'
 
 
-def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0):
-    if not links or chosen_idx < 0 or chosen_idx >= len(links):
+def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0, chosen_link=None):
+    if chosen_link is not None:
+        chosen = chosen_link
+    elif links and 0 <= chosen_idx < len(links):
+        chosen = links[chosen_idx]
+    else:
         return False
-    chosen = links[chosen_idx]
 
     p = xbmc.Player()
     cur_time = 0.0
@@ -13683,7 +13742,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
 
     # Mantener el reproductor pausado en el frame actual sin destruir el pipeline hasta que el nuevo stream este listo
     try:
-        if p.isPlayingVideo() and not xbmc.getCondVisibility(Player.Paused):
+        if p.isPlayingVideo() and not xbmc.getCondVisibility("Player.Paused"):
             p.pause()
     except Exception:
         pass
@@ -13702,15 +13761,22 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
     if played in ('cancel', 'no_client'):
         return played
     if played:
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=chosen_idx, meta=meta)
+        try:
+            m_idx = links.index(chosen)
+        except (ValueError, AttributeError):
+            m_idx = chosen_idx
+        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=m_idx, meta=meta)
         return True
     return False
 
 
-def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None):
-    if not links or chosen_idx < 0 or chosen_idx >= len(links):
+def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
+    if chosen_link is not None:
+        chosen = chosen_link
+    elif links and 0 <= chosen_idx < len(links):
+        chosen = links[chosen_idx]
+    else:
         return False
-    chosen = links[chosen_idx]
     _enrich_link_metadata(chosen, meta, matched_item)
     sync_tmdbhelper_playerstring(meta)
 
@@ -13749,7 +13815,7 @@ def _verify_playback_started(is_torrent=False, timeout=None):
     p = xbmc.Player()
     mon = xbmc.Monitor()
     if timeout is None:
-        timeout = 80.0 if is_torrent else 55.0
+        timeout = 40.0 if is_torrent else 25.0
     start_t = time.time()
 
     while (time.time() - start_t) < timeout:
@@ -13874,6 +13940,7 @@ def _show_floating_links_dialog_impl(offset=0):
         )
         dlg.doModal()
         chosen_idx = dlg.selected
+        chosen_link = getattr(dlg, 'selected_link', None)
         last_tab = dlg.active_tab
         del dlg
         xbmc.sleep(150)
@@ -13903,14 +13970,18 @@ def _show_floating_links_dialog_impl(offset=0):
             return False
 
         # Intentar reproducir el enlace seleccionado
-        chosen_link = c_links[chosen_idx]
+        if chosen_link is None:
+            if isinstance(chosen_idx, int) and 0 <= chosen_idx < len(c_links):
+                chosen_link = c_links[chosen_idx]
+            else:
+                continue
         srv_name = _get_link_server_name(chosen_link) or 'Servidor'
         is_tor = (srv_name.lower() == 'torrent' or _is_torrent_link(chosen_link))
 
         if was_playback:
-            played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time)
+            played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time, chosen_link=chosen_link)
         else:
-            played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, global_idx=(chosen_idx + offset))
+            played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, global_idx=(chosen_idx + offset), chosen_link=chosen_link)
 
         if played in ('cancel', 'no_client'):
             continue
