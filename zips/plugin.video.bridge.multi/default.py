@@ -14160,7 +14160,7 @@ def main():
     global title, title_es, title_lat, title_en, title_orig
     global showname, year, showyear, season, episode
     global tmdb_id, imdb_id, tvdb_id, trakt_id
-    global poster, fanart, thumbnail, director, clearlogo
+    global poster, fanart, thumbnail, director, clearlogo, genre
 
     # Re-sincronizar handle y parámetros en cada invocación (vital para reuselanguageinvoker a 0 ms)
     handle = -1
@@ -14198,12 +14198,15 @@ def main():
     fanart = get_param('fanart')
     thumbnail = get_param('thumbnail') or get_param('thumb')
     clearlogo = get_param('clearlogo')
+    genre = get_param('genre')
 
     if action not in ('switch_source', 'floating_links', 'play_single_link'):
         check_and_run_migration()
 
     if clearlogo in ('_', 'None', 'none'):
         clearlogo = ''
+    if genre in ('_', 'None', 'none'):
+        genre = ''
 
 
     if action in ('switch_source', 'floating_links'):
@@ -14537,7 +14540,7 @@ def main():
         global title, title_es, title_lat, title_en, title_orig
         global showname, year, showyear, season, episode
         global tmdb_id, imdb_id, tvdb_id, trakt_id
-        global poster, fanart, thumbnail, director, clearlogo
+        global poster, fanart, thumbnail, director, clearlogo, genre
         try:
             _prev_f = xbmc.getInfoLabel("Container.FolderPath") or ''
             if _prev_f and "plugin.video.bridge.multi" not in _prev_f:
