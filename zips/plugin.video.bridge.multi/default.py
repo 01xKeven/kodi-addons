@@ -3805,6 +3805,11 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
         except Exception:
             pass
 
+        # Descartar si el servidor no entregó datos reales (evita que proxies colgados como megaserver congelen Kodi)
+        if not chunk or len(chunk) < 64:
+            xbmc.log("Multi Bridge: URL descartada por no entregar bytes de vídeo (%s bytes): %s" % (len(chunk) if chunk else 0, clean_url), xbmc.LOGINFO)
+            return False, None
+
         if 'text/html' in ct and (b'<!doctype' in chunk[:100].lower() or b'<html' in chunk[:100].lower()):
             xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
             return False, None
@@ -6511,16 +6516,65 @@ def _search_on_player(player_data_or_file, engine, is_series, target_title, targ
 # ---------------------------------------------------------
 # Master Parallel Search Execution
 # ---------------------------------------------------------
+_last_autoplay_toggle_ts = [0.0]
+
+def _handle_autoplay_toggle_event(dlg_win=None):
+    try:
+        now = time.time()
+        if now - _last_autoplay_toggle_ts[0] < 0.75:
+            return
+        _last_autoplay_toggle_ts[0] = now
+        win = xbmcgui.Window(10000)
+        current = (_bridge_addon.getSetting('autoplay_enabled') == 'true')
+        new_val = not current
+        _bridge_addon.setSetting('autoplay_enabled', 'true' if new_val else 'false')
+        win.setProperty("bridge.autoplay_toggle_active", "true" if new_val else "false")
+        lbl = "[COLOR FF00FF7F]●[/COLOR] [B]AUTO PLAY[/B]" if new_val else "[COLOR FFFF3333]●[/COLOR] [B]AUTO PLAY[/B]"
+        win.setProperty("bridge.autoplay_toggle_label", lbl)
+        if dlg_win:
+            try:
+                btn = dlg_win.getControl(250)
+                if btn: btn.setLabel(lbl)
+            except Exception:
+                pass
+        if not new_val:
+            # Solo notificar al pasar de autoplay a modo normal (petición de usuario)
+            _show_bridge_notification("Multi Bridge", "Modo normal activado · Se aplicará en el próximo arranque", 3500)
+    except Exception as e:
+        xbmc.log("Multi Bridge toggle error: %s" % e, xbmc.LOGWARNING)
+
 class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
     PROGRESS_CTRL = 20
     CANCEL_BTN = 200
+    AUTOPLAY_BTN = 250
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.is_canceled = False
+        self._last_toggle_time = 0
+
+    def _update_autoplay_ui(self, is_active=None):
+        try:
+            if is_active is None:
+                is_active = (_bridge_addon.getSetting('autoplay_enabled') == 'true')
+            xbmcgui.Window(10000).setProperty("bridge.autoplay_toggle_active", "true" if is_active else "false")
+            lbl = "[COLOR FF00FF7F]●[/COLOR] [B]AUTO PLAY[/B]" if is_active else "[COLOR FFFF3333]●[/COLOR] [B]AUTO PLAY[/B]"
+            xbmcgui.Window(10000).setProperty("bridge.autoplay_toggle_label", lbl)
+            try:
+                btn = self.getControl(self.AUTOPLAY_BTN)
+                if btn:
+                    btn.setLabel(lbl)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def toggle_autoplay(self):
+        _handle_autoplay_toggle_event(self)
 
     def onInit(self):
         self.is_canceled = False
+        self._update_autoplay_ui()
         try:
             self.setFocusId(self.CANCEL_BTN)
             btn = self.getControl(self.CANCEL_BTN)
@@ -6541,30 +6595,29 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
                 except: pass
                 self.close()
                 return
-            elif aid in (7, 100):
-                self.is_canceled = True
-                try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
-                except: pass
-                self.close()
-                return
-            elif aid in (1, 2, 3, 4, 5, 6, 11, 12, 14, 15):
-                try: self.setFocusId(self.CANCEL_BTN)
-                except: pass
-                return
         except Exception:
             pass
 
     def onClick(self, control_id):
-        self.is_canceled = True
-        try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
-        except: pass
-        self.close()
+        if control_id == self.AUTOPLAY_BTN:
+            return
+        if control_id == self.CANCEL_BTN:
+            self.is_canceled = True
+            try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+            except: pass
+            self.close()
 
     def onControl(self, control):
-        self.is_canceled = True
-        try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+        cid = None
+        try: cid = control.getId() if hasattr(control, 'getId') else control
         except: pass
-        self.close()
+        if cid == self.AUTOPLAY_BTN:
+            return
+        if cid == self.CANCEL_BTN:
+            self.is_canceled = True
+            try: xbmcgui.Window(10000).setProperty("bridge.search_canceled", "true")
+            except: pass
+            self.close()
 
 
 class _RadialSearchProgressDialog(object):
@@ -6605,8 +6658,13 @@ class _RadialSearchProgressDialog(object):
             self._set_prop("bridge.count_torrents", "0")
             self._set_prop("bridge.count_verificando", "0")
             self._set_prop("bridge.search_status_line", _safe_str(line1 or "Preparando búsqueda..."))
+            _cur_auto = (_bridge_addon.getSetting('autoplay_enabled') == 'true')
+            self._set_prop("bridge.autoplay_toggle_click", "")
+            self._set_prop("bridge.autoplay_toggle_active", "true" if _cur_auto else "false")
+            self._set_prop("bridge.autoplay_toggle_label", "[COLOR FF00FF7F]●[/COLOR] [B]AUTO PLAY[/B]" if _cur_auto else "[COLOR FFFF3333]●[/COLOR] [B]AUTO PLAY[/B]")
 
             self._dlg.show()
+            self._start_toggle_watcher()
             def _steal_focus_rad(d=self._dlg):
                 for _ms in (0.04, 0.12, 0.25):
                     time.sleep(_ms)
@@ -6692,6 +6750,22 @@ class _RadialSearchProgressDialog(object):
         except Exception:
             pass
 
+    def _start_toggle_watcher(self):
+        self._watcher_stop = False
+        def _watch():
+            win = xbmcgui.Window(10000)
+            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False):
+                try:
+                    if win.getProperty("bridge.autoplay_toggle_click") == "true":
+                        win.setProperty("bridge.autoplay_toggle_click", "")
+                        _handle_autoplay_toggle_event(self._dlg)
+                except Exception:
+                    pass
+                time.sleep(0.05)
+        t = threading.Thread(target=_watch, daemon=True)
+        t.name = "BridgeAutoplayToggleWatcher"
+        t.start()
+
     def iscanceled(self):
         try:
             if xbmcgui.Window(10000).getProperty("bridge.search_canceled") == "true":
@@ -6708,6 +6782,7 @@ class _RadialSearchProgressDialog(object):
         return bool(getattr(self._dlg, "is_canceled", False))
 
     def close(self):
+        self._watcher_stop = True
         dlg = self._dlg
         self._dlg = None
         if dlg:
@@ -6720,13 +6795,35 @@ class _RadialSearchProgressDialog(object):
 class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
     PROGRESS_CTRL = 20
     CANCEL_BTN = 200
+    AUTOPLAY_BTN = 250
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.is_canceled = False
+        self._last_toggle_time = 0
+
+    def _update_autoplay_ui(self, is_active=None):
+        try:
+            if is_active is None:
+                is_active = (_bridge_addon.getSetting('autoplay_enabled') == 'true')
+            xbmcgui.Window(10000).setProperty("bridge.autoplay_toggle_active", "true" if is_active else "false")
+            lbl = "[COLOR FF00FF7F]●[/COLOR] [B]AUTO PLAY[/B]" if is_active else "[COLOR FFFF3333]●[/COLOR] [B]AUTO PLAY[/B]"
+            xbmcgui.Window(10000).setProperty("bridge.autoplay_toggle_label", lbl)
+            try:
+                btn = self.getControl(self.AUTOPLAY_BTN)
+                if btn:
+                    btn.setLabel(lbl)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def toggle_autoplay(self):
+        _handle_autoplay_toggle_event(self)
 
     def onInit(self):
         self.is_canceled = False
+        self._update_autoplay_ui()
         try:
             self.setFocusId(self.CANCEL_BTN)
             btn = self.getControl(self.CANCEL_BTN)
@@ -6747,30 +6844,29 @@ class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
                 except: pass
                 self.close()
                 return
-            elif aid in (7, 100):
-                self.is_canceled = True
-                try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
-                except: pass
-                self.close()
-                return
-            elif aid in (1, 2, 3, 4, 5, 6, 11, 12, 14, 15):
-                try: self.setFocusId(self.CANCEL_BTN)
-                except: pass
-                return
         except Exception:
             pass
 
     def onClick(self, control_id):
-        self.is_canceled = True
-        try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
-        except: pass
-        self.close()
+        if control_id == self.AUTOPLAY_BTN:
+            return
+        if control_id == self.CANCEL_BTN:
+            self.is_canceled = True
+            try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+            except: pass
+            self.close()
 
     def onControl(self, control):
-        self.is_canceled = True
-        try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+        cid = None
+        try: cid = control.getId() if hasattr(control, 'getId') else control
         except: pass
-        self.close()
+        if cid == self.AUTOPLAY_BTN:
+            return
+        if cid == self.CANCEL_BTN:
+            self.is_canceled = True
+            try: xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+            except: pass
+            self.close()
 
 
 class _AutoplayProgressDialog(object):
@@ -6808,8 +6904,13 @@ class _AutoplayProgressDialog(object):
             self._set_prop("bridge.autoplay_quality", "")
             self._set_prop("bridge.autoplay_language", "")
             self._set_prop("bridge.autoplay_channel", "")
+            _cur_auto = (_bridge_addon.getSetting('autoplay_enabled') == 'true')
+            self._set_prop("bridge.autoplay_toggle_click", "")
+            self._set_prop("bridge.autoplay_toggle_active", "true" if _cur_auto else "false")
+            self._set_prop("bridge.autoplay_toggle_label", "[COLOR FF00FF7F]●[/COLOR] [B]AUTO PLAY[/B]" if _cur_auto else "[COLOR FFFF3333]●[/COLOR] [B]AUTO PLAY[/B]")
 
             self._dlg.show()
+            self._start_toggle_watcher()
             def _steal_focus_rad(d=self._dlg):
                 for _ms in (0.04, 0.12, 0.25):
                     time.sleep(_ms)
@@ -6856,6 +6957,22 @@ class _AutoplayProgressDialog(object):
             clean_msg = _clean_dialog_text(str(message)).strip()
             if clean_msg:
                 self._set_prop("bridge.autoplay_status", clean_msg)
+
+    def _start_toggle_watcher(self):
+        self._watcher_stop = False
+        def _watch():
+            win = xbmcgui.Window(10000)
+            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False):
+                try:
+                    if win.getProperty("bridge.autoplay_toggle_click") == "true":
+                        win.setProperty("bridge.autoplay_toggle_click", "")
+                        _handle_autoplay_toggle_event(self._dlg)
+                except Exception:
+                    pass
+                time.sleep(0.05)
+        t = threading.Thread(target=_watch, daemon=True)
+        t.name = "BridgeAutoplayToggleWatcher"
+        t.start()
 
     def iscanceled(self):
         if self._canceled:
@@ -8813,6 +8930,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
     for idx, link in enumerate(normal_links[:total_att]):
         server   = _safe_str(getattr(link, 'server',   '') or '').capitalize() or 'Servidor'
         lang_raw = _safe_str(getattr(link, 'language', '') or '').strip()
+        ch       = _safe_str(getattr(link, 'channel', '') or getattr(link, 'channel_name', '') or '')
+        lang_lbl = _format_language(link)
         lang_colored = _format_language_display(lang_raw, colored=True)
         cand_qual = _format_quality(link)
         qual_part = ('  •  [COLOR gold]%s[/COLOR]' % cand_qual) if (cand_qual and cand_qual != 'N/A') else ''
@@ -8896,18 +9015,17 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         # ── Step 2: Start playback ─────────────────────────────────────────
         _prog.update(90, '[%d/%d] Iniciando %s...' % (idx+1, total_att, _label_play))
         try:
+            _prog.close()
+        except: pass
+        try:
             sync_tmdbhelper_playerstring(meta)
             if _res_li[0] is not None:
+                _ensure_playback_headers_on_item(_res_li[0], server_name=server, page_url=getattr(link, 'url', '') or '')
                 set_listitem_info(_res_li[0], meta=meta)
             player.play(_media_url, _res_li[0])
         except Exception as _pe:
-            try: _prog.close()
-            except: pass
             xbmc.log('Multi Bridge autoplay Player.play error: ' + str(_pe), xbmc.LOGINFO)
             continue
-
-        try: _prog.close()
-        except: pass
 
         # ── Step 3: Monitor 3 min reales de reloj ────────────────────────────
         # Esperar hasta 15 s a que el reproductor arranque.
@@ -8946,19 +9064,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             remaining = total_att - (idx + 1)
             _srv_lang = server + ((' [%s]' % lang_lbl) if lang_lbl else '')
             if remaining > 0:
-                try:
-                    ans = _KODI_ORIG_DIALOG().yesno(
-                        'Multi Bridge — Autoplay',
-                        '[B]%s[/B] no pudo reproducirse o fue detenido.\n¿Intentar con el siguiente enlace?' % _srv_lang,
-                        nolabel='No, abrir lista',
-                        yeslabel='Sí, siguiente')
-                except Exception as _ye:
-                    xbmc.log('Multi Bridge autoplay not started yesno error: ' + str(_ye), xbmc.LOGINFO)
-                    ans = False
-                xbmc.log('Multi Bridge autoplay: respuesta de usuario en arranque = %s' % str(ans), xbmc.LOGINFO)
-                if not ans:
-                    _cancelled_by_user = True
-                    break
+                _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
             continue
 
         xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, monitoreando 3 min reales...' % (
@@ -10158,6 +10264,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
         # Iniciar reproducción del nuevo enlace
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: reproduciendo automáticamente siguiente enlace: %s" % _get_link_server_name(active_link), xbmc.LOGINFO)
+        _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
         player.play(next_resolved_url, next_resolved_li)
 
     # Si se agotaron los intentos sin exito, abrir lista de enlaces para el usuario y gestionar fallback

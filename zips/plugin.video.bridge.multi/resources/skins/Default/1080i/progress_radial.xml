@@ -217,11 +217,13 @@
                 <midtexture colordiffuse="FFFFB000">white.png</midtexture>
             </control>
 
-            <!-- BOTON CANCELAR (ID 200) - Sin directivas onback conflictivas -->
-            <control type="button" id="200">
-                <left>1250</left><top>626</top>
-                <width>225</width><height>60</height>
-                <label>Cancelar</label>
+            <!-- ======================================================== -->
+            <!-- BOTON INTERACTIVO AUTOPLAY (ID 250)                      -->
+            <!-- ======================================================== -->
+            <control type="button" id="250">
+                <left>965</left><top>626</top>
+                <width>270</width><height>60</height>
+                <label>$INFO[Window(10000).Property(bridge.autoplay_toggle_label)]</label>
                 <font>font13</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <focusedcolor>FFFFB000</focusedcolor>
@@ -232,6 +234,26 @@
                 <pulseonselect>true</pulseonselect>
                 <onleft>200</onleft>
                 <onright>200</onright>
+                <onup>250</onup>
+                <ondown>250</ondown>
+                <onclick>SetProperty(bridge.autoplay_toggle_click,true,home)</onclick>
+            </control>
+
+            <!-- BOTON CANCELAR (ID 200) -->
+            <control type="button" id="200">
+                <left>1255</left><top>626</top>
+                <width>220</width><height>60</height>
+                <label>Cancelar</label>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFB000</focusedcolor>
+                <texturefocus colordiffuse="70FFB000">white.png</texturefocus>
+                <texturenofocus colordiffuse="30FFFFFF">white.png</texturenofocus>
+                <align>center</align>
+                <aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>250</onleft>
+                <onright>250</onright>
                 <onup>200</onup>
                 <ondown>200</ondown>
                 <onclick>SetProperty(bridge.search_canceled,true,home)</onclick>
