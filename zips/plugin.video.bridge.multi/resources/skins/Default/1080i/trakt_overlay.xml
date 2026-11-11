@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog">
+    <defaultcontrol always="true">999</defaultcontrol>
+    <zorder>150</zorder>
+    <coordinates>
+        <system>1</system>
+        <left>0</left>
+        <top>0</top>
+    </coordinates>
+    <controls>
+        <!-- Dummy invisible control to prevent Kodi from throwing navigation errors -->
+        <control type="button" id="999">
+            <left>-100</left><top>-100</top>
+            <width>1</width><height>1</height>
+            <visible>false</visible>
+        </control>
+
+        <!-- TARJETA FLOTANTE GLASSMORPHISM (Posición Superior Derecha) -->
+        <control type="group">
+            <animation effect="slide" start="0,-160" end="0,0" time="350" tween="quadratic" easing="out">WindowOpen</animation>
+            <animation effect="fade" start="0" end="100" time="300">WindowOpen</animation>
+            <animation effect="slide" start="0,0" end="0,-160" time="250" tween="quadratic" easing="in">WindowClose</animation>
+            <animation effect="fade" start="100" end="0" time="200">WindowClose</animation>
+
+            <!-- Fondo oscuro con esquinas redondeadas -->
+            <control type="image">
+                <left>1220</left><top>34</top>
+                <width>660</width><height>126</height>
+                <texture>trakt_card_bg.png</texture>
+                <colordiffuse>F2FFFFFF</colordiffuse>
+            </control>
+
+            <!-- Borde tenue con acento rojo carmesí Trakt -->
+            <control type="image">
+                <left>1220</left><top>34</top>
+                <width>660</width><height>126</height>
+                <texture>trakt_card_border.png</texture>
+                <colordiffuse>FFFFFFFF</colordiffuse>
+            </control>
+
+            <!-- FILA SUPERIOR: BADGE TRAKT LIVE + ETIQUETA MEDIA + CONTADOR -->
+            <!-- 1. Badge Trakt En Vivo -->
+            <control type="image">
+                <left>1240</left><top>48</top>
+                <width>140</width><height>32</height>
+                <texture>trakt_live_badge.png</texture>
+                <aspectratio align="left" aligny="center">keep</aspectratio>
+            </control>
+
+            <!-- 2. Tag de Media (PELÍCULA / S01E02) -->
+            <control type="label">
+                <left>1390</left><top>53</top>
+                <width>95</width><height>24</height>
+                <font>font10</font>
+                <textcolor>FF64B5F6</textcolor>
+                <align>left</align>
+                <aligny>center</aligny>
+                <label>$INFO[Window(10000).Property(bridge.trakt_media_tag)]</label>
+            </control>
+
+            <!-- 3. Titular: X personas viéndola ahora -->
+            <control type="label">
+                <left>1490</left><top>51</top>
+                <width>370</width><height>28</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>left</align>
+                <aligny>center</aligny>
+                <label>$INFO[Window(10000).Property(bridge.trakt_headline)]</label>
+                <scroll>true</scroll>
+            </control>
+
+            <!-- FILA INFERIOR: AVATARES DE USUARIOS EN CÍRCULOS SUPERPUESTOS -->
+            <!-- Avatar 1 -->
+            <control type="group">
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.trakt_av1))</visible>
+                <control type="image">
+                    <left>1240</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture background="true" diffuse="circle_mask.png">$INFO[Window(10000).Property(bridge.trakt_av1)]</texture>
+                    <fallback>avatar_default.png</fallback>
+                    <aspectratio align="center" aligny="center">scale</aspectratio>
+                </control>
+                <control type="image">
+                    <left>1240</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture>avatar_ring.png</texture>
+                    <colordiffuse>D0FFFFFF</colordiffuse>
+                </control>
+            </control>
+
+            <!-- Avatar 2 -->
+            <control type="group">
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.trakt_av2))</visible>
+                <control type="image">
+                    <left>1276</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture background="true" diffuse="circle_mask.png">$INFO[Window(10000).Property(bridge.trakt_av2)]</texture>
+                    <fallback>avatar_default.png</fallback>
+                    <aspectratio align="center" aligny="center">scale</aspectratio>
+                </control>
+                <control type="image">
+                    <left>1276</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture>avatar_ring.png</texture>
+                    <colordiffuse>D0FFFFFF</colordiffuse>
+                </control>
+            </control>
+
+            <!-- Avatar 3 -->
+            <control type="group">
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.trakt_av3))</visible>
+                <control type="image">
+                    <left>1312</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture background="true" diffuse="circle_mask.png">$INFO[Window(10000).Property(bridge.trakt_av3)]</texture>
+                    <fallback>avatar_default.png</fallback>
+                    <aspectratio align="center" aligny="center">scale</aspectratio>
+                </control>
+                <control type="image">
+                    <left>1312</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture>avatar_ring.png</texture>
+                    <colordiffuse>D0FFFFFF</colordiffuse>
+                </control>
+            </control>
+
+            <!-- Avatar 4 (solo si NO hay badge de '+N') -->
+            <control type="group">
+                <visible>!String.IsEmpty(Window(10000).Property(bridge.trakt_av4)) + !String.IsEqual(Window(10000).Property(bridge.trakt_has_more),true)</visible>
+                <control type="image">
+                    <left>1348</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture background="true" diffuse="circle_mask.png">$INFO[Window(10000).Property(bridge.trakt_av4)]</texture>
+                    <fallback>avatar_default.png</fallback>
+                    <aspectratio align="center" aligny="center">scale</aspectratio>
+                </control>
+                <control type="image">
+                    <left>1348</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture>avatar_ring.png</texture>
+                    <colordiffuse>D0FFFFFF</colordiffuse>
+                </control>
+            </control>
+
+            <!-- Badge '+N' más espectadores (si hay más de 3 usuarios) -->
+            <control type="group">
+                <visible>String.IsEqual(Window(10000).Property(bridge.trakt_has_more),true)</visible>
+                <control type="image">
+                    <left>1348</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <texture>avatar_more_bg.png</texture>
+                </control>
+                <control type="label">
+                    <left>1348</left><top>92</top>
+                    <width>44</width><height>44</height>
+                    <font>font10</font>
+                    <textcolor>FFFFD700</textcolor>
+                    <align>center</align>
+                    <aligny>center</aligny>
+                    <label>$INFO[Window(10000).Property(bridge.trakt_more_count)]</label>
+                </control>
+            </control>
+
+            <!-- Subtexto: Nombres de espectadores / Localización -->
+            <control type="label">
+                <left>1404</left><top>98</top>
+                <width>460</width><height>30</height>
+                <font>font11</font>
+                <textcolor>D8E0E8F0</textcolor>
+                <align>left</align>
+                <aligny>center</aligny>
+                <label>$INFO[Window(10000).Property(bridge.trakt_subtext)]</label>
+                <scroll>true</scroll>
+            </control>
+
+            <!-- Subtexto alternativo cuando 0 usuarios están viendo -->
+            <control type="label">
+                <visible>String.IsEqual(Window(10000).Property(bridge.trakt_count),0)</visible>
+                <left>1242</left><top>96</top>
+                <width>620</width><height>30</height>
+                <font>font11</font>
+                <textcolor>FFB0BEC5</textcolor>
+                <align>left</align>
+                <aligny>center</aligny>
+                <label>$INFO[Window(10000).Property(bridge.trakt_subtext)]</label>
+            </control>
+        </control>
+    </controls>
+</window>

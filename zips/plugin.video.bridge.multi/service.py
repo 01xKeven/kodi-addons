@@ -141,6 +141,11 @@ class BridgePlayerService(xbmc.Player):
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
         except Exception:
             pass
+        try:
+            import trakt_watchers
+            trakt_watchers.close_trakt_overlay()
+        except Exception:
+            pass
 
 
 def _inject_active_playback_metadata(player):

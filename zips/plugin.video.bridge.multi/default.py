@@ -1046,6 +1046,16 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 except Exception as _pre_e:
                     xbmc.log("Multi Bridge: error lanzando precarga de siguiente episodio: %s" % str(_pre_e), xbmc.LOGWARNING)
 
+        # Lanzar overlay flotante de espectadores en vivo de Trakt (Trickplay Social)
+        try:
+            import trakt_watchers
+            _dur = 6
+            try: _dur = int(float(_bridge_addon.getSetting('trakt_live_overlay_duration') or 6))
+            except Exception: pass
+            threading.Thread(target=trakt_watchers.show_trakt_overlay_timed, args=(_m_dict, _dur, my_token), daemon=True).start()
+        except Exception as _tr_err:
+            xbmc.log("Multi Bridge: error lanzando overlay de Trakt: " + str(_tr_err), xbmc.LOGWARNING)
+
 
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
@@ -1250,6 +1260,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmc.log("Multi Bridge: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
                 break
             try:
+                # Comprobar trigger de OSD para overlay en vivo de Trakt
+                try:
+                    import trakt_watchers
+                    trakt_watchers.check_osd_watchers_trigger(_m_dict)
+                except Exception:
+                    pass
+
                 # Mantener IDs de Trakt activos durante el arranque para evitar que eventos stop asíncronos los borren
                 if time.time() < _trakt_reassert_deadline:
                     if not xbmcgui.Window(10000).getProperty('script.trakt.ids'):
@@ -1385,6 +1402,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmcgui.Window(10000).clearProperty('VideoPlayer.Director')
                 xbmcgui.Window(10000).clearProperty('MultiBridge.Director')
                 xbmcgui.Window(10000).clearProperty('script.trakt.ids')
+                try:
+                    import trakt_watchers
+                    trakt_watchers.close_trakt_overlay()
+                except Exception:
+                    pass
             except Exception: pass
 
         if last_saved_time > 0 or tot_time > 0:
@@ -14254,6 +14276,19 @@ def main():
                 try: xbmcplugin.endOfDirectory(handle, succeeded=True, updateListing=False, cacheToDisc=False)
                 except Exception: pass
         else: show_player_manager_home()
+        return
+
+    if action == 'preview_trakt_overlay':
+        if handle >= 0:
+            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+            except Exception: pass
+        import trakt_watchers
+        import importlib
+        try:
+            importlib.reload(trakt_watchers)
+        except Exception:
+            pass
+        trakt_watchers.preview_trakt_live()
         return
 
     if action == 'search_other_engine':
