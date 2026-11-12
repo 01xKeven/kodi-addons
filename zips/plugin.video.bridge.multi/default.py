@@ -6628,11 +6628,12 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
 class _RadialSearchProgressDialog(object):
     """Controlador nativo en C++ para el diálogo de progreso con Anillo Radial (progress_radial.xml)."""
 
-    def __init__(self, target_title="", poster_url="", fanart_url="", engine="balandro"):
+    def __init__(self, target_title="", poster_url="", fanart_url="", engine="balandro", extra_info=""):
         self.target_title = target_title or ""
         self.poster_url = poster_url or ""
         self.fanart_url = fanart_url or ""
         self.engine_name = "Alfa" if str(engine).lower() == "alfa" else "Balandro"
+        self.extra_info = extra_info or ""
         self._dlg = None
         self._canceled = False
         self._last_pct = 0
@@ -6655,6 +6656,7 @@ class _RadialSearchProgressDialog(object):
 
             self._set_prop("bridge.search_title", _safe_str(self.target_title))
             self._set_prop("bridge.search_engine", self.engine_name.upper())
+            self._set_prop("bridge.search_extra", _safe_str(_get_single_genre(self.extra_info) or self.extra_info))
             self._set_prop("bridge.search_poster", _safe_str(self.poster_url))
             self._set_prop("bridge.search_fanart", _safe_str(self.fanart_url))
             self._set_prop("bridge.search_pct", "0")
@@ -6903,7 +6905,7 @@ class _AutoplayProgressDialog(object):
             self._set_prop("bridge.autoplay_title", _safe_str(self.target_title))
             self._set_prop("bridge.autoplay_poster", _safe_str(self.poster_url))
             self._set_prop("bridge.autoplay_fanart", _safe_str(self.fanart_url))
-            self._set_prop("bridge.autoplay_extra", _safe_str(self.extra_info))
+            self._set_prop("bridge.autoplay_extra", _safe_str(_get_single_genre(self.extra_info) or self.extra_info))
             self._set_prop("bridge.autoplay_status", _safe_str(line1 or "Iniciando reproducción..."))
             self._set_prop("bridge.autoplay_server", "")
             self._set_prop("bridge.autoplay_quality", "")
@@ -7126,7 +7128,18 @@ def _run_parallel_search_impl(engine='alfa'):
             ep_tag = 'S%sE%s' % (p_season, p_episode)
         dlg_display_title = ('%s • %s' % (target_title, ep_tag)) if target_title else ep_tag
 
-    p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine)
+    p_genre = genre or get_param('genre') or ''
+    if not p_genre:
+        try: p_genre = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Genre') or xbmc.getInfoLabel('ListItem.Genre') or ''
+        except: pass
+    if not p_genre and target_tmdb:
+        try:
+            _g_list = _get_genres(target_tmdb, is_series)
+            if _g_list: p_genre = _g_list[0]
+        except: pass
+    _search_extra = _get_single_genre(p_genre) or (str(target_year).strip() if target_year else '')
+
+    p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine, extra_info=_search_extra)
     p_dialog.create('Multi Bridge (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
@@ -8472,6 +8485,44 @@ def _get_genres(tmdb_id, is_series=False):
     _genres_cache[_cache_key] = list(genres_list)
     return genres_list
 
+def _get_single_genre(genre_val):
+    """Extrae estrictamente un solo género (el principal), descartando
+    géneros adicionales si vienen concatenados con /, coma, barra vertical u otros."""
+    if not genre_val:
+        return ''
+    if isinstance(genre_val, dict):
+        g = genre_val.get('genre') or genre_val.get('Genre') or ''
+        if not g and genre_val.get('tmdb'):
+            try:
+                g_list = _get_genres(genre_val.get('tmdb'), bool(genre_val.get('season') and genre_val.get('episode')))
+                if g_list:
+                    g = g_list[0]
+            except Exception:
+                pass
+        genre_val = g
+    if isinstance(genre_val, (list, tuple, set)):
+        for item in genre_val:
+            cleaned = _get_single_genre(item)
+            if cleaned:
+                return cleaned
+        return ''
+    if not isinstance(genre_val, str):
+        genre_val = str(genre_val or '')
+
+    # Limpiar tags de formato de Kodi [COLOR...], [B], etc.
+    genre_val = re.sub(r'\[/?COLOR.*?\]', '', genre_val, flags=re.IGNORECASE)
+    genre_val = re.sub(r'\[/?[BI]\]', '', genre_val, flags=re.IGNORECASE)
+
+    # Dividir por separadores comunes (/ , | • ; – — -)
+    parts = re.split(r'[/,|•;–—\-]', genre_val)
+    for p in parts:
+        clean = p.strip()
+        if clean and clean.lower() not in ('none', 'null', '_', 'unknown', 'desconocido', 'n/a'):
+            if clean.islower():
+                clean = clean.capitalize()
+            return clean
+    return ''
+
 _directors_cache = {}
 
 def _clean_single_director(director_val):
@@ -8947,7 +8998,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
         # ── Step 1: Resolve ────────────────────────────────────────────────
         _t_title = meta.get('title') or resume_title or getattr(link, 'title', '') or 'Multi Bridge'
-        _extra_tag = '%d/%d' % (idx+1, total_att)
+        _single_g = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
+        _extra_tag = _single_g or ('%d/%d' % (idx+1, total_att))
         _prog = _AutoplayProgressDialog(
             target_title=_t_title,
             poster_url=meta.get('poster') or meta.get('thumbnail') or '',
@@ -9495,7 +9547,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         all_names = [t for t in [target_title, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig')] if t]
         alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en')] if t and t != target_title]
 
-    # ?? Reproducci?n instant?nea desde CACH? si est? disponible ??????????????
+    # ── Reproducción instantánea desde CACHÉ si está disponible ──────────────
     if not cached_links:
         try:
             r_cache = _get_ram_search_cache(target_tmdb=p_tmdb, target_season=p_season, target_episode=p_episode)
@@ -9506,7 +9558,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     if not cached_item:
                         cached_item = r_cache.get('matched_item')
                     if cached_links:
-                        xbmc.log("Multi Bridge Fast Autoplay: reutilizando %d enlaces desde cach? RAM" % len(cached_links), xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge Fast Autoplay: reutilizando %d enlaces desde caché RAM" % len(cached_links), xbmc.LOGINFO)
             if not cached_links and os.path.exists(SEARCH_CACHE_FILE):
                 _c_data = _read_search_cache_atomic()
                 if _c_data and isinstance(_c_data, dict):
@@ -9520,23 +9572,23 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                             if not cached_item and _c_data.get('item'):
                                 cached_item = _deserialize_item(_c_data.get('item'), c_eng)
                             if cached_links:
-                                xbmc.log("Multi Bridge Fast Autoplay: reutilizando %d enlaces desde cach? de disco" % len(cached_links), xbmc.LOGINFO)
+                                xbmc.log("Multi Bridge Fast Autoplay: reutilizando %d enlaces desde caché de disco" % len(cached_links), xbmc.LOGINFO)
         except Exception as _ce:
-            xbmc.log("Multi Bridge Fast Autoplay: error leyendo cach? previa: %s" % _ce, xbmc.LOGWARNING)
+            xbmc.log("Multi Bridge Fast Autoplay: error leyendo caché previa: %s" % _ce, xbmc.LOGWARNING)
 
     if cached_links:
         sorted_cached = _filter_and_sort_links(cached_links)
         normal_cached = [l for l in sorted_cached if not _is_torrent_link(l)]
         if normal_cached:
-            xbmc.log("Multi Bridge Fast Autoplay: evaluando %d enlaces en cach?..." % len(normal_cached), xbmc.LOGINFO)
-            _extra_info = meta.get('genre') or ('%s' % (meta.get('year') or ''))
+            xbmc.log("Multi Bridge Fast Autoplay: evaluando %d enlaces en caché..." % len(normal_cached), xbmc.LOGINFO)
+            _extra_info = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
             p_dialog_c = _AutoplayProgressDialog(
                 target_title=target_title,
                 poster_url=meta.get('poster') or '',
                 fanart_url=meta.get('fanart') or '',
                 extra_info=_extra_info
             )
-            p_dialog_c.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  ?  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducci?n...')
+            p_dialog_c.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
             p_dialog_c.update(25)
 
             fast_link = None
@@ -9562,7 +9614,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         quality=cand_qual or '1080p',
                         language=lang_raw or 'Latino',
                         channel='',
-                        status='Iniciando reproducci?n...'
+                        status='Iniciando reproducción...'
                     )
                 except Exception: pass
                 p_dialog_c.update(60)
@@ -9616,13 +9668,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                                 quality=q_show or '1080p',
                                 language=lang_fmt or 'Latino',
                                 channel='',
-                                status='Iniciando reproducci?n...'
+                                status='Iniciando reproducción...'
                             )
                         except Exception: pass
                         p_dialog_c.update(100)
                         break
                     else:
-                        xbmc.log("Multi Bridge Fast Autoplay (Cach?): candidato %s no super? verificaci?n de stream" % srv_name, xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge Fast Autoplay (Caché): candidato %s no superó verificación de stream" % srv_name, xbmc.LOGINFO)
 
             try: p_dialog_c.close(); del p_dialog_c
             except: pass
@@ -9697,7 +9749,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     })
                 except Exception: pass
 
-                xbmc.log("Multi Bridge Fast Autoplay: ?Iniciando reproducci?n instant?nea desde CACH? con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea desde CACHÉ con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
                 player = xbmc.Player()
                 player.play(fast_url, fast_li)
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
@@ -9728,14 +9780,14 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     xbmc.sleep(250)
 
                 if user_aborted or video_started or player.isPlayingVideo():
-                    xbmc.log("Multi Bridge Fast Autoplay: ?Reproducci?n desde cach? confirmada!", xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada!", xbmc.LOGINFO)
                     try:
                         xbmc.executebuiltin('Dialog.Close(busydialog,true)')
                         xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                     except Exception: pass
                     return True
 
-                xbmc.log("Multi Bridge Fast Autoplay: enlace en cach? no arranc? en Kodi, continuando con b?squeda en canales...", xbmc.LOGINFO)
+                xbmc.log("Multi Bridge Fast Autoplay: enlace en caché no arrancó en Kodi, continuando con búsqueda en canales...", xbmc.LOGINFO)
                 try: player.stop()
                 except: pass
                 try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
@@ -9777,7 +9829,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         enabled_players = sorted(enabled_players, key=_ch_prio)
 
     total_channels = len(enabled_players)
-    _extra_info = meta.get('genre') or ('%s' % (meta.get('year') or ''))
+    _extra_info = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
     p_dialog = _AutoplayProgressDialog(
         target_title=target_title,
         poster_url=meta.get('poster') or '',
@@ -14760,12 +14812,12 @@ def main():
                 _autoplay_cache = _bridge_addon.getSetting('autoplay_enabled') == 'true'
 
                 if _autoplay_cache and _cached_links:
-                    xbmc.log('Multi Bridge: cache reciente → autoplay instant?neo con %d enlaces' % len(_cached_links), xbmc.LOGINFO)
+                    xbmc.log('Multi Bridge: cache reciente → autoplay instantáneo con %d enlaces' % len(_cached_links), xbmc.LOGINFO)
                     if _fast_autoplay_search_and_play(_cached_engine, handle, cached_links=_cached_links, cached_item=_cached_item):
                         return
                     if xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled") == "true":
                         xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "")
-                        xbmc.log("Multi Bridge: autoplay desde cach? cancelado por el usuario, saliendo limpiamente.", xbmc.LOGINFO)
+                        xbmc.log("Multi Bridge: autoplay desde caché cancelado por el usuario, saliendo limpiamente.", xbmc.LOGINFO)
                         if handle >= 0:
                             try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
                             except: pass

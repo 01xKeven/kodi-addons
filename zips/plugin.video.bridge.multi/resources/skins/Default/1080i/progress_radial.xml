@@ -108,13 +108,23 @@
             </control>
 
             <!-- ZONA DERECHA: INFORMACION, ESTADISTICAS Y CONTROLES -->
-            <!-- Etiqueta del motor -->
+            <!-- CABECERA: MULTI BRIDGE • BALANDRO / ALFA -->
             <control type="label">
                 <left>905</left><top>370</top>
-                <width>570</width><height>20</height>
+                <width>320</width><height>20</height>
                 <font>font11</font>
                 <textcolor>FFD4AF37</textcolor>
                 <label>[B]MULTI BRIDGE • $INFO[Window(10000).Property(bridge.search_engine)][/B]</label>
+            </control>
+
+            <!-- ETIQUETA DERECHA: Género -->
+            <control type="label">
+                <left>1225</left><top>370</top>
+                <width>250</width><height>20</height>
+                <font>font11</font>
+                <textcolor>FFA0AEC0</textcolor>
+                <align>right</align>
+                <label>$INFO[Window(10000).Property(bridge.search_extra)]</label>
             </control>
 
             <!-- Titulo de la Pelicula / Serie -->
