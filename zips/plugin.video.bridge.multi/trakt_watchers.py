@@ -126,6 +126,43 @@ def _get_screen_dimensions(window=None):
     return w, h
 
 
+def _detect_playback_bar_top(win_w, win_h, scale):
+    """
+    Detecta dinámicamente la posición superior (Y) de la franja de reproducción (OSD / SeekBar)
+    para colocar la cápsula exactamente 2 píxeles por encima de ella.
+    """
+    detected_top = None
+    # 1. Comprobar controles en SeekBar (10120) y VideoOSD (10115)
+    for win_id in (10120, 10115):
+        try:
+            w = xbmcgui.Window(win_id)
+            for cid in (403, 200, 201, 100, 601, 602, 603):
+                try:
+                    ctrl = w.getControl(cid)
+                    if ctrl:
+                        cy = ctrl.getY()
+                        if cy and 0 < cy < win_h:
+                            if cid == 403:
+                                detected_top = cy
+                                break
+                            elif detected_top is None or cy < detected_top:
+                                detected_top = cy
+                except Exception:
+                    pass
+            if detected_top is not None:
+                break
+        except Exception:
+            pass
+
+    # 2. Si se detectó una posición válida de la franja en la skin activa
+    if detected_top is not None and int(win_h * 0.4) < detected_top < win_h:
+        return detected_top
+
+    # 3. Fallback inteligente calibrado según la resolución:
+    # La franja estándar de reproducción (barra de progreso + tiempo) inicia a ~132px del fondo en 1080p
+    return win_h - int(round(132 * scale))
+
+
 def _get_media_asset(filename):
     """Devuelve la ruta absoluta de un archivo gráfico de la skin del addon"""
     p = os.path.join(_get_addon_path(), 'resources', 'skins', 'Default', 'media', filename)
@@ -448,17 +485,29 @@ class AppleControlAnim(object):
             pass
 
 
+class TraktLiveDialog(xbmcgui.WindowDialog):
+    """
+    Lienzo flotante independiente y 100% aislado.
+    Evita cualquier colisión de controles con otros addons de Kodi
+    (como service.guiaparental u otros overlays inyectados en Window 12005).
+    """
+    def __init__(self):
+        super(TraktLiveDialog, self).__init__()
+
+    def onAction(self, action):
+        pass
+
+
 class TraktLiveHUD(object):
     """
     HUD Cápsula Apple Floating (Dynamic Island)
-    - Totalmente adaptativo y responsivo a cualquier resolución de pantalla (720p, 1080p, 2K, 4K)
-    - Posición seleccionable: Abajo (encima del seekbar) o Arriba (Dynamic Island)
+    - Totalmente adaptativo y responsivo a cualquier resolución de pantalla (720p, 1080p, 2K, 4K, 1280x1024)
+    - Posición seleccionable: Abajo (exactamente 2 píxeles sobre la franja de reproducción) o Arriba (Dynamic Island)
     - Centrado horizontal exacto respecto al ancho real del lienzo gráfico
-    - Alineación óptica milimétrica con soporte para pantallas táctiles y televisores
+    - Totalmente aislado en TraktLiveDialog para eliminar colisiones de textos con service.guiaparental
     - Avatares circulares limpios e insignia +N con precarga total para animación conjunta
-    - Textos con anchos generosos que eliminan totalmente '...' y el auto-scroll
+    - Cajas delimitadoras de texto con amplio margen para evitar cualquier truncamiento a '...'
     - Entrada suave con curva cúbica desacelerada (ease-out ~280ms) y salida simultánea (~160ms)
-    - Inyectado en Window(12005) para respetar el OSD y la navegación de Kodi
     """
     HEIGHT = 50
 
@@ -468,26 +517,26 @@ class TraktLiveHUD(object):
         self.anims = []
         self.lock = threading.RLock()
         self.closed = False
-        self.dialog_canvas = None
         self.is_top = _get_overlay_is_top()
 
-        p = xbmc.Player()
-        if not is_preview and p.isPlayingVideo():
-            self.window = xbmcgui.Window(12005)
-        else:
-            self.dialog_canvas = xbmcgui.WindowDialog()
-            self.window = self.dialog_canvas
+        # Usar siempre un WindowDialog privado e independiente.
+        # Esto aísla al 100% los controles de Trakt Live impidiendo que otros addons
+        # que inyecten en Window(12005) (como service.guiaparental) colisionen o mezclen sus textos.
+        self.dialog = TraktLiveDialog()
+        self.window = self.dialog
 
         # Detección dinámica y robusta de la resolución activa del canvas de Kodi
         self.win_w, self.win_h = _get_screen_dimensions(self.window)
         # Factor de escala proporcional respecto a la resolución base de diseño (1920x1080)
         self.scale = max(0.5, min(3.0, self.win_h / 1080.0))
 
+        h = max(26, int(round(self.HEIGHT * self.scale)))
         if self.is_top:
             self.y_pos = max(10, int(round(32 * self.scale)))
         else:
-            # En 1080p: 1080 - 210 = 870 px. En 720p: 720 - 140 = 580 px.
-            self.y_pos = self.win_h - int(round(210 * self.scale))
+            bar_top = _detect_playback_bar_top(self.win_w, self.win_h, self.scale)
+            # Situar exactamente 2 píxeles encima de la franja de reproducción
+            self.y_pos = bar_top - h - 2
 
         self.ctrl_num = None
         self.ctrl_badge = None
@@ -587,13 +636,13 @@ class TraktLiveHUD(object):
             # Configuración independiente para el número y para el texto "viendo ahora"
             num_str = f"{count:,}" if count >= 1000 else str(count)
             if count < 10:
-                base_num_w = 16
+                base_num_w = 18
             elif count < 100:
-                base_num_w = 30
+                base_num_w = 34
             elif count < 1000:
-                base_num_w = 44
+                base_num_w = 48
             else:
-                base_num_w = 66
+                base_num_w = 70
             actual_num_w = int(round(base_num_w * scale))
 
             tail_str = "espectadores" if count == 0 else "viendo ahora"
@@ -601,10 +650,11 @@ class TraktLiveHUD(object):
             tail_actual_w = int(round(base_tail_w * scale))
 
             # Bounding boxes amplias con margen generoso para que Kodi NUNCA trunque con puntos suspensivos (...)
-            num_box_w = max(actual_num_w + int(round(25 * scale)), int(round(85 * scale)))
-            tail_box_w = max(tail_actual_w + int(round(50 * scale)), int(round(220 * scale)))
-            live_box_w = int(round(75 * scale))
-            label_h = max(18, int(round(26 * scale)))
+            # En resoluciones como 1280x1024 o fuentes grandes, un ancho generoso evita que el número se convierta en '...'
+            num_box_w = max(120, int(round(120 * scale)))
+            tail_box_w = max(260, int(round(280 * scale)))
+            live_box_w = max(80, int(round(90 * scale)))
+            label_h = max(20, int(round(28 * scale)))
 
             badge_size = self.badge_size
             if count > 4:
@@ -626,7 +676,7 @@ class TraktLiveHUD(object):
             live_offset = dot_offset + dot_size + int(round(6 * scale))
             live_w_base = int(round(56 * scale))
             div_offset = live_offset + live_w_base + int(round(8 * scale))
-            div_w = max(1, int(round(1 * scale)))
+            div_w = max(2, int(round(2 * scale)))
             div_h = max(10, int(round(18 * scale)))
             num_offset = div_offset + div_w + int(round(10 * scale))
             tail_offset = num_offset + actual_num_w + int(round(8 * scale))
@@ -649,7 +699,15 @@ class TraktLiveHUD(object):
 
             # Centrado horizontal exacto respecto al ancho real del lienzo gráfico
             x = (self.win_w - w) // 2
-            y = self.y_pos
+
+            # Recalcular la posición Y con detección en vivo de la franja de reproducción
+            if self.is_top:
+                y = max(10, int(round(32 * scale)))
+            else:
+                bar_top = _detect_playback_bar_top(self.win_w, self.win_h, scale)
+                y = bar_top - h - 2
+            self.y_pos = y
+
             slide_dist = max(18, int(round(35 * scale)))
             init_offset = -slide_dist if self.is_top else slide_dist
 
@@ -688,16 +746,16 @@ class TraktLiveHUD(object):
             self.anims.append(AppleControlAnim(ctrl_live, x + live_offset, live_y, is_label=True, is_top=self.is_top,
                                               label_pattern=live_pattern, slide_dist=slide_dist))
 
-            # 4. Divisor vertical sutil de cristal
+            # 4. Divisor vertical sutil de cristal nítido (2 px)
             white_tex = _get_media_asset('white.png')
             div_y = y + int(round(16 * scale))
             ctrl_div = xbmcgui.ControlImage(x + div_offset, div_y + init_offset, div_w, div_h, white_tex)
             ctrl_div.setColorDiffuse("00FFFFFF")
             self.window.addControl(ctrl_div)
             self.controls.append(ctrl_div)
-            self.anims.append(AppleControlAnim(ctrl_div, x + div_offset, div_y, rgb='FFFFFF', max_alpha=0x35, is_top=self.is_top, slide_dist=slide_dist))
+            self.anims.append(AppleControlAnim(ctrl_div, x + div_offset, div_y, rgb='FFFFFF', max_alpha=0x55, is_top=self.is_top, slide_dist=slide_dist))
 
-            # 5a. Número de espectadores
+            # 5a. Número de espectadores (caja amplia de 120px para cero truncado a '...')
             num_y = y + int(round(6 * scale))
             ctrl_num = xbmcgui.ControlLabel(x + num_offset, num_y + init_offset, num_box_w, label_h, num_pattern(0),
                                             font='font12')
@@ -746,12 +804,11 @@ class TraktLiveHUD(object):
             self.current_count = count
             self.meta = meta
 
-            # Mostrar si es lienzo WindowDialog en menús
-            if self.dialog_canvas is not None:
-                try:
-                    self.dialog_canvas.show()
-                except Exception:
-                    pass
+            # Mostrar diálogo aislado
+            try:
+                self.dialog.show()
+            except Exception:
+                pass
 
         # Disparar animación suave de elevación con desaceleración
         self._animate(forward=True)
@@ -800,12 +857,10 @@ class TraktLiveHUD(object):
                     pass
             self.controls = []
             self.anims = []
-            if self.dialog_canvas is not None:
-                try:
-                    self.dialog_canvas.close()
-                except Exception:
-                    pass
-                self.dialog_canvas = None
+            try:
+                self.dialog.close()
+            except Exception:
+                pass
 
 
 def show_trakt_overlay_timed(meta, duration=6, monitor_token=None):
