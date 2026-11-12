@@ -18,14 +18,6 @@
         <setting id="notify_network_status" type="bool" label="Avisar cuando no haya internet o se restablezca la conexión" default="true" />
         
         <setting type="sep" />
-        <setting type="lsep" label="[COLOR crimson]Trakt.tv • Espectadores en Vivo (Social Overlay):[/COLOR]" />
-        <setting id="trakt_live_watchers_overlay" type="bool" label="Mostrar overlay de espectadores en vivo (Trakt)" default="true" />
-        <setting id="trakt_live_overlay_position" type="enum" label="Posición del overlay en pantalla" values="Abajo (Encima de barra de control)|Arriba (Centro superior / Dynamic Island)" default="0" visible="eq(-1,true)" />
-        <setting id="trakt_live_overlay_duration" type="slider" label="Duración en pantalla al iniciar reproducción (segundos)" default="6" range="3,1,15" option="int" visible="eq(-2,true)" />
-        <setting id="trakt_live_show_on_osd" type="bool" label="Mostrar overlay al abrir la barra de control (OSD) o pausar" default="true" visible="eq(-3,true)" />
-        <setting id="trakt_live_show_when_zero" type="bool" label="Mostrar aviso si no hay espectadores activos (0 personas)" default="false" visible="eq(-4,true)" />
-        
-        <setting type="sep" />
         <setting type="lsep" label="[COLOR gold]Rendimiento de Hilos Concurrentes (CPU / Red):[/COLOR]" />
         <setting id="search_threads_max" type="slider" label="Hilos de búsqueda en canales (Recomendado: 8 - 12)" default="8" range="5,1,35" option="int" />
         <setting id="verify_threads_max" type="slider" label="Hilos de verificación de enlaces (Recomendado: 12 - 16)" default="16" range="1,1,25" option="int" />
