@@ -485,26 +485,13 @@ class AppleControlAnim(object):
             pass
 
 
-class TraktLiveDialog(xbmcgui.WindowDialog):
-    """
-    Lienzo flotante independiente y 100% aislado.
-    Evita cualquier colisión de controles con otros addons de Kodi
-    (como service.guiaparental u otros overlays inyectados en Window 12005).
-    """
-    def __init__(self):
-        super(TraktLiveDialog, self).__init__()
-
-    def onAction(self, action):
-        pass
-
-
 class TraktLiveHUD(object):
     """
     HUD Cápsula Apple Floating (Dynamic Island)
     - Totalmente adaptativo y responsivo a cualquier resolución de pantalla (720p, 1080p, 2K, 4K, 1280x1024)
     - Posición seleccionable: Abajo (exactamente 2 píxeles sobre la franja de reproducción) o Arriba (Dynamic Island)
     - Centrado horizontal exacto respecto al ancho real del lienzo gráfico
-    - Totalmente aislado en TraktLiveDialog para eliminar colisiones de textos con service.guiaparental
+    - Inyectado de forma nativa en Window(12005) para garantizar que el OSD de Kodi sea 100% navegable
     - Avatares circulares limpios e insignia +N con precarga total para animación conjunta
     - Cajas delimitadoras de texto con amplio margen para evitar cualquier truncamiento a '...'
     - Entrada suave con curva cúbica desacelerada (ease-out ~280ms) y salida simultánea (~160ms)
@@ -519,11 +506,9 @@ class TraktLiveHUD(object):
         self.closed = False
         self.is_top = _get_overlay_is_top()
 
-        # Usar siempre un WindowDialog privado e independiente.
-        # Esto aísla al 100% los controles de Trakt Live impidiendo que otros addons
-        # que inyecten en Window(12005) (como service.guiaparental) colisionen o mezclen sus textos.
-        self.dialog = TraktLiveDialog()
-        self.window = self.dialog
+        # Inyectar en Window(12005) (FullscreenVideo) para que el OSD permanezca 100% navegable
+        # y no capture ni bloquee el foco de los botones, mando a distancia ni teclado.
+        self.window = xbmcgui.Window(12005)
 
         # Detección dinámica y robusta de la resolución activa del canvas de Kodi
         self.win_w, self.win_h = _get_screen_dimensions(self.window)
@@ -561,8 +546,9 @@ class TraktLiveHUD(object):
                 a.apply(p)
             time.sleep(delay)
 
-    def _pulse_loop(self, ctrl_dot):
-        """Animación de palpitar (pulsing / breathing) continua para el punto rojo estilo Live"""
+    def _pulse_loop(self, ctrl_dot, tail_pattern_fn=None):
+        """Animación de palpitar (pulsing / breathing) continua para el punto rojo estilo Live
+        y salvaguarda activa para mantener la integridad de los textos contra colisiones de otros addons."""
         start_t = time.time()
         while not self.closed:
             elapsed = time.time() - start_t
@@ -573,6 +559,21 @@ class TraktLiveHUD(object):
                 ctrl_dot.setColorDiffuse(f"{alpha:02X}FFFFFF")
             except Exception:
                 pass
+
+            # Protección activa contra hijacking de textos (p. ej. service.guiaparental u otros addons en Window 12005)
+            try:
+                if self.ctrl_tail and tail_pattern_fn:
+                    lbl = self.ctrl_tail.getLabel()
+                    if lbl and ("viendo ahora" not in lbl and "espectadores" not in lbl):
+                        self.ctrl_tail.setLabel(tail_pattern_fn(0xFF))
+                if self.ctrl_num:
+                    nlbl = self.ctrl_num.getLabel()
+                    c_str = f"{self.current_count:,}" if self.current_count >= 1000 else str(self.current_count)
+                    if nlbl and c_str not in nlbl:
+                        self.ctrl_num.setLabel(f"[COLOR FFFFFFFF][B]{c_str}[/B][/COLOR]")
+            except Exception:
+                pass
+
             time.sleep(0.04)
 
     def _live_watchers_poller(self, meta):
@@ -804,17 +805,11 @@ class TraktLiveHUD(object):
             self.current_count = count
             self.meta = meta
 
-            # Mostrar diálogo aislado
-            try:
-                self.dialog.show()
-            except Exception:
-                pass
-
         # Disparar animación suave de elevación con desaceleración
         self._animate(forward=True)
 
-        # Iniciar animación continua de palpitar (breathing/pulse) estilo Live en el punto rojo
-        t_pulse = threading.Thread(target=self._pulse_loop, args=(ctrl_dot,), daemon=True)
+        # Iniciar animación continua de palpitar (breathing/pulse) estilo Live en el punto rojo con salvaguarda de etiquetas
+        t_pulse = threading.Thread(target=self._pulse_loop, args=(ctrl_dot, tail_pattern), daemon=True)
         t_pulse.name = "TraktDotPulse"
         t_pulse.start()
 
@@ -857,10 +852,6 @@ class TraktLiveHUD(object):
                     pass
             self.controls = []
             self.anims = []
-            try:
-                self.dialog.close()
-            except Exception:
-                pass
 
 
 def show_trakt_overlay_timed(meta, duration=6, monitor_token=None):
@@ -883,12 +874,21 @@ def show_trakt_overlay_timed(meta, duration=6, monitor_token=None):
     if count == 0 and not show_when_zero:
         return
 
-    # Esperar hasta 2.5s a que el vídeo esté en reproducción activa
+    # Si service.guiaparental está instalado y habilitado, esperar a que complete
+    # su propio overlay inicial (~8.5s) para no competir visualmente ni colisionar en Window 12005
     p = xbmc.Player()
-    for _ in range(25):
+    has_parental_service = False
+    try:
+        has_parental_service = bool(xbmc.getCondVisibility("System.HasAddon(service.guiaparental)"))
+    except Exception:
+        has_parental_service = False
+
+    wait_target = 8.5 if has_parental_service else 0.05
+
+    for _ in range(120):  # hasta 12 segundos máximo de espera
         if not p.isPlayingVideo():
             return
-        if p.getTime() > 0.05:
+        if p.getTime() >= wait_target:
             break
         time.sleep(0.1)
 
