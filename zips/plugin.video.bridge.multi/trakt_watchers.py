@@ -634,27 +634,25 @@ class TraktLiveHUD(object):
             scale = self.scale
             h = max(26, int(round(self.HEIGHT * scale)))
 
-            # Configuración independiente para el número y para el texto "viendo ahora"
+            # Configuración óptica precisa y adaptable para cualquier resolución
             num_str = f"{count:,}" if count >= 1000 else str(count)
             if count < 10:
-                base_num_w = 18
+                real_num_w = int(round(11 * scale))
             elif count < 100:
-                base_num_w = 34
+                real_num_w = int(round(20 * scale))
             elif count < 1000:
-                base_num_w = 48
+                real_num_w = int(round(30 * scale))
             else:
-                base_num_w = 70
-            actual_num_w = int(round(base_num_w * scale))
+                real_num_w = int(round(44 * scale))
 
             tail_str = "espectadores" if count == 0 else "viendo ahora"
-            base_tail_w = 156 if count == 0 else 153
-            tail_actual_w = int(round(base_tail_w * scale))
+            # Ancho óptico real del texto en font12 (~76px para "viendo ahora", ~80px para "espectadores")
+            real_tail_w = int(round((80 if count == 0 else 76) * scale))
 
             # Bounding boxes amplias con margen generoso para que Kodi NUNCA trunque con puntos suspensivos (...)
-            # En resoluciones como 1280x1024 o fuentes grandes, un ancho generoso evita que el número se convierta en '...'
-            num_box_w = max(120, int(round(120 * scale)))
-            tail_box_w = max(260, int(round(280 * scale)))
-            live_box_w = max(80, int(round(90 * scale)))
+            num_box_w = max(50, int(round(50 * scale)))
+            tail_box_w = max(130, int(round(130 * scale)))
+            live_box_w = max(50, int(round(50 * scale)))
             label_h = max(20, int(round(28 * scale)))
 
             badge_size = self.badge_size
@@ -675,16 +673,16 @@ class TraktLiveHUD(object):
             dot_offset = int(round(16 * scale))
             dot_size = max(8, int(round(12 * scale)))
             live_offset = dot_offset + dot_size + int(round(6 * scale))
-            live_w_base = int(round(56 * scale))
-            div_offset = live_offset + live_w_base + int(round(8 * scale))
+            live_w = int(round(34 * scale))
+            div_offset = live_offset + live_w + int(round(8 * scale))
             div_w = max(2, int(round(2 * scale)))
             div_h = max(10, int(round(18 * scale)))
-            num_offset = div_offset + div_w + int(round(10 * scale))
-            tail_offset = num_offset + actual_num_w + int(round(8 * scale))
+            num_offset = div_offset + div_w + int(round(8 * scale))
+            tail_offset = num_offset + real_num_w + int(round(5 * scale))
 
-            # Separación calibrada con los 9 px exactos (escalados) respecto al texto
+            # Separación calibrada con los 9 px exactos (escalados) respecto al final real del texto
             avatar_gap_to_text = max(4, int(round(9 * scale)))
-            avatar_start_offset = tail_offset + tail_actual_w + avatar_gap_to_text
+            avatar_start_offset = tail_offset + real_tail_w + avatar_gap_to_text
 
             avatar_size = max(20, int(round(36 * scale)))
             avatar_gap = max(3, int(round(6 * scale)))
@@ -694,9 +692,9 @@ class TraktLiveHUD(object):
                 avatars_total_w = (num_avatars - 1) * avatar_step + avatar_size
                 if has_more:
                     avatars_total_w += avatar_step - avatar_size + badge_size
-                w = avatar_start_offset + avatars_total_w + max(6, int(round(10 * scale)))
+                w = avatar_start_offset + avatars_total_w + max(6, int(round(12 * scale)))
             else:
-                w = avatar_start_offset + max(6, int(round(10 * scale)))
+                w = avatar_start_offset + max(6, int(round(12 * scale)))
 
             # Centrado horizontal exacto respecto al ancho real del lienzo gráfico
             x = (self.win_w - w) // 2
