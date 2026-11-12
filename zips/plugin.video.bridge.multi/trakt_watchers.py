@@ -88,6 +88,44 @@ def _get_overlay_is_top():
     return False
 
 
+def _get_screen_dimensions(window=None):
+    """
+    Obtiene las dimensiones reales del lienzo gráfico de Kodi de forma 100% confiable
+    probando sucesivamente la ventana activa, getScreenWidth/Height y System.ScreenWidth/Height.
+    """
+    w, h = 0, 0
+    if window is not None:
+        try:
+            w = window.getWidth()
+            h = window.getHeight()
+        except Exception:
+            pass
+
+    if not w or not h or w <= 0 or h <= 0:
+        try:
+            w = xbmcgui.getScreenWidth()
+            h = xbmcgui.getScreenHeight()
+        except Exception:
+            pass
+
+    if not w or not h or w <= 0 or h <= 0:
+        try:
+            sw_str = xbmc.getInfoLabel('System.ScreenWidth')
+            sh_str = xbmc.getInfoLabel('System.ScreenHeight')
+            if sw_str and sh_str:
+                w = int(sw_str)
+                h = int(sh_str)
+        except Exception:
+            pass
+
+    if not w or w <= 0:
+        w = 1920
+    if not h or h <= 0:
+        h = 1080
+
+    return w, h
+
+
 def _get_media_asset(filename):
     """Devuelve la ruta absoluta de un archivo gráfico de la skin del addon"""
     p = os.path.join(_get_addon_path(), 'resources', 'skins', 'Default', 'media', filename)
@@ -150,7 +188,8 @@ def _download_and_crop_avatar(avatar_url, username):
                 draw_b = ImageDraw.Draw(img)
                 draw_b.ellipse((0, 0, 143, 143), outline=(255, 255, 255, 38), width=5)
 
-                img = img.resize((36, 36), Image.Resampling.LANCZOS)
+                # Guardar a 72x72 para alta fidelidad tanto en 720p, 1080p como en 4K
+                img = img.resize((72, 72), Image.Resampling.LANCZOS)
                 img.save(out_file, format='PNG')
                 return out_file
             except Exception:
@@ -189,9 +228,10 @@ def _generate_badge_asset(diff, badge_size=38):
         # Borde exterior oscuro
         d.ellipse([0, 0, sz - 1, sz - 1], outline=(15, 16, 21, 255), width=int(2 * scale))
 
-        # Texto centrado con tamaño dinámico y holgado para evitar que se vea apretado
+        # Texto centrado con tamaño dinámico proporcional a badge_size para cualquier resolución
         txt = f'+{diff}'
-        f_size = 13 if len(txt) <= 3 else (11 if len(txt) == 4 else 9.5)
+        f_ratio = 0.35 if len(txt) <= 3 else (0.29 if len(txt) == 4 else 0.25)
+        f_size = max(7.0, badge_size * f_ratio)
         try:
             from PIL import ImageFont
             font = ImageFont.truetype('arial.ttf', int(f_size * scale))
@@ -218,10 +258,13 @@ def _get_apple_pill_texture(w, h):
         return cache_file
 
     if not HAS_PIL:
+        stock_fb = _get_media_asset('apple_pill_500_50.png')
+        if os.path.exists(stock_fb):
+            return stock_fb
         return _get_media_asset('white.png')
 
     try:
-        scale = 4
+        scale = 3
         sw, sh = w * scale, h * scale
         r = (h // 2) * scale
 
@@ -244,6 +287,9 @@ def _get_apple_pill_texture(w, h):
         final_img.save(cache_file, format='PNG')
         return cache_file
     except Exception:
+        stock_fb = _get_media_asset('apple_pill_500_50.png')
+        if os.path.exists(stock_fb):
+            return stock_fb
         return _get_media_asset('white.png')
 
 
@@ -374,7 +420,7 @@ def fetch_live_watchers(meta, timeout=3.5, force=False):
 
 class AppleControlAnim(object):
     """Control animable con elevación/descenso suave y fundido de opacidad coordinado"""
-    def __init__(self, ctrl, base_x, base_y, rgb='FFFFFF', is_label=False, max_alpha=0xFF, is_top=False, label_pattern=None):
+    def __init__(self, ctrl, base_x, base_y, rgb='FFFFFF', is_label=False, max_alpha=0xFF, is_top=False, label_pattern=None, slide_dist=35):
         self.ctrl = ctrl
         self.base_x = base_x
         self.base_y = base_y
@@ -383,12 +429,13 @@ class AppleControlAnim(object):
         self.max_alpha = max_alpha
         self.is_top = is_top
         self.label_pattern = label_pattern
+        self.slide_dist = slide_dist
 
     def apply(self, p):
         p = max(0.0, min(1.0, p))
         alpha = int(round(p * self.max_alpha))
-        # Desplazamiento vertical suave: si está arriba baja desde -35px; si está abajo sube desde +35px
-        dy = int(round((1.0 - p) * (-35 if self.is_top else 35)))
+        # Desplazamiento vertical suave responsivo
+        dy = int(round((1.0 - p) * (-self.slide_dist if self.is_top else self.slide_dist)))
         try:
             self.ctrl.setPosition(self.base_x, self.base_y + dy)
             if not self.is_label:
@@ -404,11 +451,12 @@ class AppleControlAnim(object):
 class TraktLiveHUD(object):
     """
     HUD Cápsula Apple Floating (Dynamic Island)
-    - Posición seleccionable: Abajo (Y = 870 encima del seekbar) o Arriba (Y = 32)
-    - Centrado horizontal exacto (evita el reloj de Kodi y el título)
-    - Alineación óptica milimétrica: todos los elementos en el eje horizontal central Y + 25
-    - Avatares circulares limpios de 36x36 e insignia +N con precarga total para animación conjunta
-    - Textos con anchos generosos (LIVE: 80px, Contador: 260px) que eliminan totalmente '...' y el auto-scroll
+    - Totalmente adaptativo y responsivo a cualquier resolución de pantalla (720p, 1080p, 2K, 4K)
+    - Posición seleccionable: Abajo (encima del seekbar) o Arriba (Dynamic Island)
+    - Centrado horizontal exacto respecto al ancho real del lienzo gráfico
+    - Alineación óptica milimétrica con soporte para pantallas táctiles y televisores
+    - Avatares circulares limpios e insignia +N con precarga total para animación conjunta
+    - Textos con anchos generosos que eliminan totalmente '...' y el auto-scroll
     - Entrada suave con curva cúbica desacelerada (ease-out ~280ms) y salida simultánea (~160ms)
     - Inyectado en Window(12005) para respetar el OSD y la navegación de Kodi
     """
@@ -422,12 +470,6 @@ class TraktLiveHUD(object):
         self.closed = False
         self.dialog_canvas = None
         self.is_top = _get_overlay_is_top()
-        self.y_pos = 32 if self.is_top else 870
-        self.ctrl_num = None
-        self.ctrl_badge = None
-        self.avatar_files = []
-        self.badge_size = 38
-        self.current_count = 0
 
         p = xbmc.Player()
         if not is_preview and p.isPlayingVideo():
@@ -435,6 +477,23 @@ class TraktLiveHUD(object):
         else:
             self.dialog_canvas = xbmcgui.WindowDialog()
             self.window = self.dialog_canvas
+
+        # Detección dinámica y robusta de la resolución activa del canvas de Kodi
+        self.win_w, self.win_h = _get_screen_dimensions(self.window)
+        # Factor de escala proporcional respecto a la resolución base de diseño (1920x1080)
+        self.scale = max(0.5, min(3.0, self.win_h / 1080.0))
+
+        if self.is_top:
+            self.y_pos = max(10, int(round(32 * self.scale)))
+        else:
+            # En 1080p: 1080 - 210 = 870 px. En 720p: 720 - 140 = 580 px.
+            self.y_pos = self.win_h - int(round(210 * self.scale))
+
+        self.ctrl_num = None
+        self.ctrl_badge = None
+        self.avatar_files = []
+        self.badge_size = max(20, int(round(38 * self.scale)))
+        self.current_count = 0
 
     def _animate(self, forward=True):
         if forward:
@@ -522,24 +581,32 @@ class TraktLiveHUD(object):
             count = data.get('count', 0)
             users = data.get('users', [])
 
-            h = self.HEIGHT
+            scale = self.scale
+            h = max(26, int(round(self.HEIGHT * scale)))
 
             # Configuración independiente para el número y para el texto "viendo ahora"
             num_str = f"{count:,}" if count >= 1000 else str(count)
             if count < 10:
-                num_w = 15
+                base_num_w = 16
             elif count < 100:
-                num_w = 29
+                base_num_w = 30
             elif count < 1000:
-                num_w = 43
+                base_num_w = 44
             else:
-                num_w = 64
+                base_num_w = 66
+            actual_num_w = int(round(base_num_w * scale))
 
             tail_str = "espectadores" if count == 0 else "viendo ahora"
-            tail_actual_w = 156 if count == 0 else 153
-            tail_w = 170
+            base_tail_w = 156 if count == 0 else 153
+            tail_actual_w = int(round(base_tail_w * scale))
 
-            badge_size = 38
+            # Bounding boxes amplias con margen generoso para que Kodi NUNCA trunque con puntos suspensivos (...)
+            num_box_w = max(actual_num_w + int(round(25 * scale)), int(round(85 * scale)))
+            tail_box_w = max(tail_actual_w + int(round(50 * scale)), int(round(220 * scale)))
+            live_box_w = int(round(75 * scale))
+            label_h = max(18, int(round(26 * scale)))
+
+            badge_size = self.badge_size
             if count > 4:
                 num_avatars = min(len(users), 3)
                 diff = max(0, count - num_avatars)
@@ -553,35 +620,38 @@ class TraktLiveHUD(object):
             num_pattern = lambda a: f"[COLOR {a:02X}FFFFFF][B]{num_str}[/B][/COLOR]"
             tail_pattern = lambda a: f"[COLOR {int(a*0.7):02X}B0B0B8]{tail_str}[/COLOR]"
 
-            # Posicionamiento horizontal milimétrico y compacto estilo Apple
-            dot_offset = 16
-            dot_w = 12
-            live_offset = dot_offset + dot_w + 6      # 34
-            live_w = 56                               # Holgado para 50px de 'LIVE'
-            div_offset = live_offset + live_w + 8     # 98 (línea divisora)
-            num_offset = div_offset + 1 + 10          # 109
-            tail_offset = num_offset + num_w + 8      # Separación limpia con el número
-            # Separación calibrada con 1 px adicional (9 px) respecto al texto
-            avatar_start_offset = tail_offset + tail_actual_w + 9
+            # Posicionamiento horizontal responsivo milimétrico y compacto estilo Apple
+            dot_offset = int(round(16 * scale))
+            dot_size = max(8, int(round(12 * scale)))
+            live_offset = dot_offset + dot_size + int(round(6 * scale))
+            live_w_base = int(round(56 * scale))
+            div_offset = live_offset + live_w_base + int(round(8 * scale))
+            div_w = max(1, int(round(1 * scale)))
+            div_h = max(10, int(round(18 * scale)))
+            num_offset = div_offset + div_w + int(round(10 * scale))
+            tail_offset = num_offset + actual_num_w + int(round(8 * scale))
 
-            # Avatares e insignia lado a lado (insignia ampliada a 38x38 para mayor desahogo)
-            avatar_size = 36
-            avatar_gap = 6
-            avatar_step = avatar_size + avatar_gap    # 42
+            # Separación calibrada con los 9 px exactos (escalados) respecto al texto
+            avatar_gap_to_text = max(4, int(round(9 * scale)))
+            avatar_start_offset = tail_offset + tail_actual_w + avatar_gap_to_text
+
+            avatar_size = max(20, int(round(36 * scale)))
+            avatar_gap = max(3, int(round(6 * scale)))
+            avatar_step = avatar_size + avatar_gap
 
             if num_avatars > 0:
                 avatars_total_w = (num_avatars - 1) * avatar_step + avatar_size
                 if has_more:
                     avatars_total_w += avatar_step - avatar_size + badge_size
-                # Margen derecho compacto para eliminar cualquier vacío al final de la cápsula
-                w = avatar_start_offset + avatars_total_w + 10
+                w = avatar_start_offset + avatars_total_w + max(6, int(round(10 * scale)))
             else:
-                w = avatar_start_offset + 10
+                w = avatar_start_offset + max(6, int(round(10 * scale)))
 
-            # Centrado horizontal en pantalla
-            x = (1920 - w) // 2
+            # Centrado horizontal exacto respecto al ancho real del lienzo gráfico
+            x = (self.win_w - w) // 2
             y = self.y_pos
-            init_offset = -35 if self.is_top else 35
+            slide_dist = max(18, int(round(35 * scale)))
+            init_offset = -slide_dist if self.is_top else slide_dist
 
             # PASO CRÍTICO: Descargar y recortar TODOS los avatares e insignia ANTES de pintar en Kodi
             avatar_files = []
@@ -598,68 +668,73 @@ class TraktLiveHUD(object):
             ctrl_bg.setColorDiffuse("00FFFFFF")
             self.window.addControl(ctrl_bg)
             self.controls.append(ctrl_bg)
-            self.anims.append(AppleControlAnim(ctrl_bg, x, y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top))
+            self.anims.append(AppleControlAnim(ctrl_bg, x, y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top, slide_dist=slide_dist))
 
-            # 2. Punto rojo brillante estilo Live elevado a y + 18 junto con LIVE
+            # 2. Punto rojo brillante estilo Live elevado
             dot_img = _get_media_asset('apple_live_dot.png')
-            ctrl_dot = xbmcgui.ControlImage(x + dot_offset, y + 18 + init_offset, 12, 12, dot_img)
+            dot_y = y + int(round(18 * scale))
+            ctrl_dot = xbmcgui.ControlImage(x + dot_offset, dot_y + init_offset, dot_size, dot_size, dot_img)
             ctrl_dot.setColorDiffuse("00FFFFFF")
             self.window.addControl(ctrl_dot)
             self.controls.append(ctrl_dot)
-            self.anims.append(AppleControlAnim(ctrl_dot, x + dot_offset, y + 18, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top))
+            self.anims.append(AppleControlAnim(ctrl_dot, x + dot_offset, dot_y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top, slide_dist=slide_dist))
 
-            # 3. Etiqueta "LIVE" en el mismo píxel vertical que el número (y + 6)
-            ctrl_live = xbmcgui.ControlLabel(x + live_offset, y + 6 + init_offset, live_w, 24, live_pattern(0),
+            # 3. Etiqueta "LIVE" en el mismo píxel vertical que el número
+            live_y = y + int(round(6 * scale))
+            ctrl_live = xbmcgui.ControlLabel(x + live_offset, live_y + init_offset, live_box_w, label_h, live_pattern(0),
                                             font='font12')
             self.window.addControl(ctrl_live)
             self.controls.append(ctrl_live)
-            self.anims.append(AppleControlAnim(ctrl_live, x + live_offset, y + 6, is_label=True, is_top=self.is_top,
-                                              label_pattern=live_pattern))
+            self.anims.append(AppleControlAnim(ctrl_live, x + live_offset, live_y, is_label=True, is_top=self.is_top,
+                                              label_pattern=live_pattern, slide_dist=slide_dist))
 
-            # 4. Divisor vertical sutil de cristal mantenido exactamente en su lugar (y + 16, altura 18)
+            # 4. Divisor vertical sutil de cristal
             white_tex = _get_media_asset('white.png')
-            ctrl_div = xbmcgui.ControlImage(x + div_offset, y + 16 + init_offset, 1, 18, white_tex)
+            div_y = y + int(round(16 * scale))
+            ctrl_div = xbmcgui.ControlImage(x + div_offset, div_y + init_offset, div_w, div_h, white_tex)
             ctrl_div.setColorDiffuse("00FFFFFF")
             self.window.addControl(ctrl_div)
             self.controls.append(ctrl_div)
-            self.anims.append(AppleControlAnim(ctrl_div, x + div_offset, y + 16, rgb='FFFFFF', max_alpha=0x35, is_top=self.is_top))
+            self.anims.append(AppleControlAnim(ctrl_div, x + div_offset, div_y, rgb='FFFFFF', max_alpha=0x35, is_top=self.is_top, slide_dist=slide_dist))
 
-            # 5a. Número de espectadores subido 1 px (y + 6)
-            ctrl_num = xbmcgui.ControlLabel(x + num_offset, y + 6 + init_offset, num_w, 24, num_pattern(0),
+            # 5a. Número de espectadores
+            num_y = y + int(round(6 * scale))
+            ctrl_num = xbmcgui.ControlLabel(x + num_offset, num_y + init_offset, num_box_w, label_h, num_pattern(0),
                                             font='font12')
             self.window.addControl(ctrl_num)
             self.controls.append(ctrl_num)
-            self.anims.append(AppleControlAnim(ctrl_num, x + num_offset, y + 6, is_label=True, is_top=self.is_top,
-                                               label_pattern=num_pattern))
+            self.anims.append(AppleControlAnim(ctrl_num, x + num_offset, num_y, is_label=True, is_top=self.is_top,
+                                               label_pattern=num_pattern, slide_dist=slide_dist))
 
-            # 5b. Texto "viendo ahora" ajustado a y + 4
-            ctrl_tail = xbmcgui.ControlLabel(x + tail_offset, y + 4 + init_offset, tail_w, 24, tail_pattern(0),
+            # 5b. Texto "viendo ahora"
+            tail_y = y + int(round(4 * scale))
+            ctrl_tail = xbmcgui.ControlLabel(x + tail_offset, tail_y + init_offset, tail_box_w, label_h, tail_pattern(0),
                                              font='font12')
             self.window.addControl(ctrl_tail)
             self.controls.append(ctrl_tail)
-            self.anims.append(AppleControlAnim(ctrl_tail, x + tail_offset, y + 4, is_label=True, is_top=self.is_top,
-                                               label_pattern=tail_pattern))
+            self.anims.append(AppleControlAnim(ctrl_tail, x + tail_offset, tail_y, is_label=True, is_top=self.is_top,
+                                               label_pattern=tail_pattern, slide_dist=slide_dist))
 
-            # 6. Avatares circulares centrados en el eje Y + 25 (y + 7, tamaño 36x36)
+            # 6. Avatares circulares
             cur_av_x = x + avatar_start_offset
-            av_y = y + 7
+            av_y = y + int(round(7 * scale))
 
             for av_local in avatar_files:
                 ctrl_av = xbmcgui.ControlImage(cur_av_x, av_y + init_offset, avatar_size, avatar_size, av_local)
                 ctrl_av.setColorDiffuse("00FFFFFF")
                 self.window.addControl(ctrl_av)
                 self.controls.append(ctrl_av)
-                self.anims.append(AppleControlAnim(ctrl_av, cur_av_x, av_y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top))
+                self.anims.append(AppleControlAnim(ctrl_av, cur_av_x, av_y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top, slide_dist=slide_dist))
                 cur_av_x += avatar_step
 
-            # 7. Insignia "+N" circular ampliada a 38x38 para que el número quede holgado y cómodo
+            # 7. Insignia "+N" circular
             if has_more and badge_img:
-                badge_y = y + 6
+                badge_y = y + int(round(6 * scale))
                 ctrl_badge = xbmcgui.ControlImage(cur_av_x, badge_y + init_offset, badge_size, badge_size, badge_img)
                 ctrl_badge.setColorDiffuse("00FFFFFF")
                 self.window.addControl(ctrl_badge)
                 self.controls.append(ctrl_badge)
-                self.anims.append(AppleControlAnim(ctrl_badge, cur_av_x, badge_y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top))
+                self.anims.append(AppleControlAnim(ctrl_badge, cur_av_x, badge_y, rgb='FFFFFF', max_alpha=0xFF, is_top=self.is_top, slide_dist=slide_dist))
             else:
                 ctrl_badge = None
 
