@@ -6628,12 +6628,11 @@ class _RadialSearchProgressWindow(xbmcgui.WindowXMLDialog):
 class _RadialSearchProgressDialog(object):
     """Controlador nativo en C++ para el diálogo de progreso con Anillo Radial (progress_radial.xml)."""
 
-    def __init__(self, target_title="", poster_url="", fanart_url="", engine="balandro", extra_info=""):
+    def __init__(self, target_title="", poster_url="", fanart_url="", engine="balandro"):
         self.target_title = target_title or ""
         self.poster_url = poster_url or ""
         self.fanart_url = fanart_url or ""
         self.engine_name = "Alfa" if str(engine).lower() == "alfa" else "Balandro"
-        self.extra_info = extra_info or ""
         self._dlg = None
         self._canceled = False
         self._last_pct = 0
@@ -6656,7 +6655,6 @@ class _RadialSearchProgressDialog(object):
 
             self._set_prop("bridge.search_title", _safe_str(self.target_title))
             self._set_prop("bridge.search_engine", self.engine_name.upper())
-            self._set_prop("bridge.search_extra", _safe_str(_get_single_genre(self.extra_info) or self.extra_info))
             self._set_prop("bridge.search_poster", _safe_str(self.poster_url))
             self._set_prop("bridge.search_fanart", _safe_str(self.fanart_url))
             self._set_prop("bridge.search_pct", "0")
@@ -7128,18 +7126,7 @@ def _run_parallel_search_impl(engine='alfa'):
             ep_tag = 'S%sE%s' % (p_season, p_episode)
         dlg_display_title = ('%s • %s' % (target_title, ep_tag)) if target_title else ep_tag
 
-    p_genre = genre or get_param('genre') or ''
-    if not p_genre:
-        try: p_genre = xbmcgui.Window(10000).getProperty('TMDbHelper.ListItem.Genre') or xbmc.getInfoLabel('ListItem.Genre') or ''
-        except: pass
-    if not p_genre and target_tmdb:
-        try:
-            _g_list = _get_genres(target_tmdb, is_series)
-            if _g_list: p_genre = _g_list[0]
-        except: pass
-    _search_extra = _get_single_genre(p_genre) or (str(target_year).strip() if target_year else '')
-
-    p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine, extra_info=_search_extra)
+    p_dialog = _RadialSearchProgressDialog(target_title=dlg_display_title, poster_url=p_poster, fanart_url=p_fanart, engine=engine)
     p_dialog.create('Multi Bridge (%s)' % engine_name, 'Preparando busqueda en %d canales...' % total_channels)
     # Complementar titulos solo si faltan variantes en películas (en series el nombre ya está resuelto)
     try:
