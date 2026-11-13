@@ -66,10 +66,8 @@ Now:
 
 class Gemini(RequestAPI):
 
-    api_key = get_setting('gemini_apikey', 'str')
-
     def __init__(self, api_key=None):
-        api_key = api_key or self.api_key
+        api_key = api_key or get_setting('gemini_apikey', 'str') or self.api_key
 
         super(Gemini, self).__init__(
             req_api_name='Gemini',
@@ -78,6 +76,14 @@ class Gemini(RequestAPI):
         )
 
         Gemini.api_key = api_key
+
+    @property
+    def api_key(self):
+        return getattr(self, '_api_key', None) or get_setting('gemini_apikey', 'str') or ''
+
+    @api_key.setter
+    def api_key(self, value):
+        self._api_key = value
 
     @property
     def headers(self):
@@ -223,11 +229,16 @@ class Gemini(RequestAPI):
             kodi_log(f'Geimini FAILED: Unable to locate recommendations data', 1)
             return
 
-        from tmdbhelper.lib.addon.thread import ParallelThread
-        with ParallelThread(data, self.get_tmdb_item) as pt:
-            items = pt.queue
+        items = []
+        for i in data:
+            try:
+                item = self.get_tmdb_item(i)
+                if item:
+                    items.append(item)
+            except Exception as exc:
+                kodi_log(f'Geimini get_tmdb_item error for {i}: {exc}', 1)
 
-        return [i for i in items if i]
+        return items
 
     @staticmethod
     def get_candidates(data):

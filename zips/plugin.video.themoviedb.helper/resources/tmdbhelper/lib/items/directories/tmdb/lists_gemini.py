@@ -30,7 +30,12 @@ class ListGemini(ContainerDefaultCacheDirectory):
     def get_prompt_items(self):
         from tmdbhelper.lib.addon.dialog import BusyDialog
         with BusyDialog():
-            data = self.gemini.get_prompt_items(self.query)
+            try:
+                data = self.gemini.get_prompt_items(self.query)
+            except Exception as e:
+                from tmdbhelper.lib.addon.logger import kodi_log
+                kodi_log(f'Gemini get_prompt_items exception: {e}', 1)
+                data = None
         return data
 
     def get_items(self, query=None, **kwargs):

@@ -212,7 +212,30 @@ class TableSearchID(TableID):
     def func_data_id_generator_results(self):
         if not self.func_data_results:
             return
-        return next(self.func_data_id_generator, None)
+        result = next(self.func_data_id_generator, None)
+        if result:
+            return result
+        # Fallback 1: Comprobar por original_title u original_name (crucial cuando TMDb devuelve títulos traducidos al español)
+        for i in self.func_data_results:
+            orig = (i.get('original_title') or i.get('original_name') or '').casefold()
+            if orig and orig == self.query:
+                if self.year:
+                    date_key = 'release_date' if self.tmdb_type == 'movie' else 'first_air_date'
+                    if self.func_data_id_year_comparison(i, date_key, self.year):
+                        return i
+                else:
+                    return i
+        # Fallback 2: Si hay año y coincide con algún resultado de búsqueda
+        if self.year:
+            date_key = 'release_date' if self.tmdb_type == 'movie' else 'first_air_date'
+            for i in self.func_data_results:
+                try:
+                    if self.func_data_id_year_comparison(i, date_key, self.year):
+                        return i
+                except Exception:
+                    pass
+        # Fallback 3: El primer resultado directo que devuelve la búsqueda de TMDb
+        return self.func_data_results[0] if self.func_data_results else None
 
     @cached_property
     def tmdb_id(self):
