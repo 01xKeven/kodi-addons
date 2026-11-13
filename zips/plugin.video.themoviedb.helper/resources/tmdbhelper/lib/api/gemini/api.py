@@ -86,6 +86,42 @@ class Gemini(RequestAPI):
         self._api_key = value
 
     @property
+    def req_connect_err(self):
+        return 0
+
+    @req_connect_err.setter
+    def req_connect_err(self, value):
+        pass
+
+    def connection_error(self, err, wait_time=0, msg_affix='', check_status=False):
+        self.kodi_log(f'Gemini ConnectionError: {err}', 1)
+
+    def fivehundred_error(self, request, wait_time=0):
+        self.kodi_log(f'Gemini 500 error for {request}', 1)
+
+    def get_api_request(self, request=None, postdata=None, headers=None, method=None):
+        import time
+        response = None
+        for attempt in range(2):
+            try:
+                response = self.get_simple_api_request(request, postdata, headers, method)
+                if response is not None and response.status_code == 200:
+                    return response
+                if response is not None and response.status_code in (500, 502, 503, 504, 429) and attempt == 0:
+                    self.kodi_log(f'Gemini HTTP {response.status_code}, reintentando en 1.5s...', 1)
+                    time.sleep(1.5)
+                    continue
+            except Exception as e:
+                self.kodi_log(f'Gemini request attempt error: {e}', 1)
+                if attempt == 0:
+                    time.sleep(1.0)
+                    continue
+            break
+        if response is not None and response.status_code != 200:
+            self.kodi_log(f'Gemini HTTP error {response.status_code}: {getattr(response, "text", "")[:300]}', 1)
+        return response
+
+    @property
     def headers(self):
         return {
             "Content-Type": "application/json",

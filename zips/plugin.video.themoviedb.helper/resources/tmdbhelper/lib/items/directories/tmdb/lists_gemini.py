@@ -1,6 +1,8 @@
 from xbmcgui import Dialog, INPUT_ALPHANUM
-from tmdbhelper.lib.addon.plugin import get_localized, convert_type
+from tmdbhelper.lib.addon.plugin import get_localized, convert_type, PLUGINPATH
 from jurialmunkey.ftools import cached_property
+from jurialmunkey.parser import merge_two_dicts
+from urllib.parse import urlencode
 
 from tmdbhelper.lib.items.container import ContainerDefaultCacheDirectory
 from tmdbhelper.lib.items.directories.lists_default import ItemCache
@@ -24,8 +26,14 @@ class ListGemini(ContainerDefaultCacheDirectory):
         return Gemini()
 
     @ItemCache('ItemContainer.db')
-    def get_cached_response(self):
+    def _fetch_cached(self):
         return self.get_prompt_items()
+
+    def get_cached_response(self):
+        data = self._fetch_cached()
+        if not data:
+            data = self.get_prompt_items()
+        return data
 
     def get_prompt_items(self):
         from tmdbhelper.lib.addon.dialog import BusyDialog
@@ -47,7 +55,18 @@ class ListGemini(ContainerDefaultCacheDirectory):
             return
         items = self.get_cached_response()
         if not items:
+            Dialog().notification('Gemini', 'No se encontraron resultados para la consulta', time=3500)
             return
+
+        # Actualizar la ruta del contenedor para que al dar "Atrás" vuelva limpiamente al menú anterior
+        if not kwargs.get('query'):
+            params = merge_two_dicts(kwargs, {
+                'info': 'gemini',
+                'query': self.query,
+                'update_listing': 'True'})
+            self.container_update = f'{PLUGINPATH}?{urlencode(params)}'
+            self.parent_params = params
+
         self.container_content = convert_type('both', 'container', items=items)
-        self.plugin_name = 'Gemini'
+        self.plugin_name = f'Gemini - {self.query}'
         return items

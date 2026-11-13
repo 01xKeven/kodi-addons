@@ -251,6 +251,8 @@ class ContainerDirectoryCommon(CommonContainerAPIs):
             items = self.get_directory_items()
 
             if not items:
+                from xbmcplugin import endOfDirectory
+                endOfDirectory(self.handle, succeeded=False)
                 return
 
             if not build_items:
