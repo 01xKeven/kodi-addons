@@ -6,7 +6,7 @@ from jurialmunkey.ftools import cached_property
 import re
 
 
-GEMINI_DEFAULT_MODEL_ID = "gemini-2.5-flash-lite"  # "gemini-2.5-flash-lite", "gemini-2.5-flash"
+GEMINI_DEFAULT_MODEL_ID = "gemini-3.5-flash-lite"  # "gemini-2.5-flash-lite", "gemini-2.5-flash"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 QUERY_PROMPT_TEMPLATE_JSON_SHAPE = '''
