@@ -61,9 +61,7 @@
         <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="voe,uqload,torrent" visible="eq(-2,true)" />
         <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
         <setting type="sep" />
-        <setting id="device_platform" type="enum" label="Dispositivo / Plataforma" values="PC (Windows / Linux / Mac)|Android (TV Box / Móvil / Fire TV)" default="0" />
         <setting id="hide_captcha_links" type="bool" label="Ocultar enlaces con verificación Captcha (Powvideo, Streamplay)" default="false" />
-        <setting type="action" label="Reconfigurar asistente de dispositivo (PC / Android)" action="RunPlugin(plugin://plugin.video.bridge.multi/?action=configure_device)" />
-        <setting id="device_platform_configured" type="bool" label="Configuración inicial completada" default="false" visible="false" />
+        <setting id="first_install_setup_done" type="bool" default="false" visible="false" />
     </category>
 </settings>

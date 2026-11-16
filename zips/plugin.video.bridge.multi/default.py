@@ -3927,9 +3927,9 @@ def _is_server_discarded(it, disc_list=None):
     if not it:
         return True
 
-    # Ocultar enlaces con verificacion Captcha si el usuario activo la opcion o configuro Android
+    # Ocultar enlaces con verificacion Captcha si el usuario activo la opcion
     try:
-        if _bridge_addon.getSetting('hide_captcha_links') == 'true' or _bridge_addon.getSetting('device_platform') == '1':
+        if _bridge_addon.getSetting('hide_captcha_links') == 'true':
             srv = (_get_link_server_name(it) or getattr(it, 'server', '') or '').strip().lower()
             if _is_web_captcha_server(srv, it):
                 return True
@@ -4273,7 +4273,7 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
         # Si el usuario activo ocultar captchas, descartar directamente.
         # Comprobacion HTTP ultrarrapida: si responde 200/403 se conserva, si es 404 se descarta como basura.
         if _is_web_captcha_server(actual_srv, prep):
-            if _bridge_addon.getSetting('hide_captcha_links') == 'true' or _bridge_addon.getSetting('device_platform') == '1':
+            if _bridge_addon.getSetting('hide_captcha_links') == 'true':
                 return None
             if _check_web_captcha_link_alive(url):
                 return prep
@@ -8875,7 +8875,7 @@ def show_links_as_directory():
 # Playback Handler (Native Delegates for Alfa & Balandro)
 # ---------------------------------------------------------
 
-def _resolve_link_to_listitem(link, engine, matched_item=None):
+def _resolve_link_to_listitem(link, engine, matched_item=None, allow_captcha=False):
     """Resolve *link* to a playable ListItem by intercepting the engine's setResolvedUrl.
 
     Does NOT consume the real Kodi plugin handle — the interception captures the
@@ -8893,6 +8893,8 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
         return False, None
 
     if _is_web_captcha_server(getattr(prep, 'server', ''), prep):
+        if not allow_captcha:
+            return False, None
         li = _capture_web_captcha_listitem(prep, meta=getattr(matched_item, 'infoLabels', None) if matched_item else None)
         if li:
             return True, li
@@ -9020,8 +9022,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
         return False
 
-    # ── Filter torrents ────────────────────────────────────────────────────
-    normal_links = [l for l in links if not _is_torrent_link(l)]
+    # ── Filter torrents and manual captcha servers ──────────────────────────
+    normal_links = [l for l in links if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)]
     if not normal_links:
         _absorb = xbmcgui.ListItem()
         xbmcplugin.setResolvedUrl(handle, False, _absorb)
@@ -10019,7 +10021,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             sorted_cand = _filter_and_sort_links(current_batch)
             normal_cand = [
                 l for l in sorted_cand
-                if not _is_torrent_link(l) and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
+                if not _is_torrent_link(l)
+                and not _is_web_captcha_server(_get_link_server_name(l), l)
+                and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
             ]
 
             b_prefs = _get_filter_prefs()
@@ -10269,9 +10273,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     while current_attempt <= max_watchdog_attempts:
         mon = xbmc.Monitor()
-        watchdog_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
-        if watchdog_timeout < 10: watchdog_timeout = 10
-        if watchdog_timeout > 16: watchdog_timeout = 16
+        watchdog_timeout = float(_get_int_setting('autoplay_resolve_timeout', 25))
+        if watchdog_timeout < 20: watchdog_timeout = 20.0
 
         t_start = time.time()
         video_started = False
@@ -10289,24 +10292,37 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
             # B) ¿Kodi está buffereando activamente o ya demuxó el stream?
             # Si el servidor ya conectó y está recibiendo datos, NO abortar prematuramente
-            # (evita el "choque entre enlaces").
+            # (evita el choque entre enlaces y permite a Okru y servidores CDN iniciar limpiamente).
             is_loading = False
             try:
-                is_loading = (xbmc.getCondVisibility("Player.Buffering") or 
-                              xbmc.getCondVisibility("Player.HasVideo") or
-                              xbmc.getCondVisibility("Player.HasAudio"))
+                is_loading = (
+                    player.isPlaying() or
+                    bool(player.getPlayingFile()) or
+                    xbmc.getCondVisibility("Player.Buffering") or 
+                    xbmc.getCondVisibility("Player.HasMedia") or
+                    xbmc.getCondVisibility("Player.HasVideo") or
+                    xbmc.getCondVisibility("Player.HasAudio")
+                )
             except Exception:
                 pass
 
             if is_loading:
-                # Si está descargando datos, extender el margen de gracia (hasta 22s máx)
-                if time.time() - t_start > (watchdog_timeout - 2):
-                    watchdog_timeout = min(watchdog_timeout + 1.0, 22.0)
+                # Si está descargando datos o el reproductor está activo, extender el margen de gracia (hasta 40s máx)
+                if time.time() - t_start > (watchdog_timeout - 5):
+                    watchdog_timeout = min(watchdog_timeout + 2.0, 40.0)
 
             xbmc.sleep(250)
 
         if user_aborted:
             return True
+
+        if not video_started and (player.isPlaying() or bool(player.getPlayingFile())):
+            # Margen final de gracia: dar tiempo a que los hilos de audio/video decodifiquen el primer fotograma
+            for _ in range(16):
+                if player.isPlayingVideo():
+                    video_started = True
+                    break
+                xbmc.sleep(250)
 
         if video_started or player.isPlayingVideo():
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
@@ -10342,11 +10358,12 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         if not candidate_pool:
             candidate_pool = list(initial_links)
 
-        # Descartar los enlaces ya probados
+        # Descartar los enlaces ya probados, torrents y captchas que requieren navegador
         filtered_candidates = [
             l for l in candidate_pool
             if (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
             and not _is_torrent_link(l)
+            and not _is_web_captcha_server(_get_link_server_name(l), l)
         ]
 
         # Ordenar según preferencias de idioma y calidad
@@ -10581,7 +10598,7 @@ def _is_web_captcha_server(server_name, item=None):
 
 
 def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
-    if xbmc.getCondVisibility('System.Platform.Android') or _bridge_addon.getSetting('device_platform') == '1':
+    if xbmc.getCondVisibility('System.Platform.Android'):
         xbmcgui.Dialog().notification('Multi Bridge', 'Servidores con captcha no disponibles en Android', '', 4000)
         return None
 
@@ -11300,6 +11317,38 @@ def verify_and_filter_links():
 # ---------------------------------------------------------
 # Player Manager & Migration / Cloud Update Tools
 # ---------------------------------------------------------
+class _DeviceSelectDialog(xbmcgui.WindowXMLDialog):
+    BTN_PC = 100
+    BTN_ANDROID = 200
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.selected = None
+
+    def onInit(self):
+        try:
+            is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
+            target_id = self.BTN_ANDROID if is_android else self.BTN_PC
+            self.setFocusId(target_id)
+        except Exception:
+            pass
+
+    def onClick(self, controlId):
+        if controlId == self.BTN_PC:
+            self.selected = 'pc'
+            self.close()
+        elif controlId == self.BTN_ANDROID:
+            self.selected = 'android'
+            self.close()
+
+    def onAction(self, action):
+        action_id = action.getId()
+        if action_id in (10, 92):
+            is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
+            self.selected = 'android' if is_android else 'pc'
+            self.close()
+
+
 def prompt_first_run_device(addon=None, force=False):
     if addon is None:
         addon = _bridge_addon
@@ -11312,47 +11361,37 @@ def prompt_first_run_device(addon=None, force=False):
         pass
 
     try:
-        if not force and addon.getSetting('device_platform_configured') == 'true':
+        if not force and addon.getSetting('first_install_setup_done') == 'true':
             return
 
-        is_android_detected = False
-        try:
-            is_android_detected = bool(xbmc.getCondVisibility('System.Platform.Android'))
-        except Exception:
-            pass
+        addon_path = ADDON_PATH if ADDON_PATH else xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
+        xml_file = 'device_select.xml'
+        skin_dir = os.path.join(addon_path, 'resources', 'skins', 'Default', '1080i')
 
-        title = "Multi Bridge — Configuración de Plataforma"
-        options = [
-            "PC (Windows / Linux / Mac) — Mantener enlaces Captcha activos",
-            "Android / TV Box / Fire TV — Desactivar enlaces con Captcha"
-        ]
-        preselect = 1 if is_android_detected else 0
+        selected = None
+        if os.path.exists(os.path.join(skin_dir, xml_file)):
+            try:
+                dlg = _DeviceSelectDialog(xml_file, addon_path, 'Default', '1080i')
+                dlg.doModal()
+                selected = dlg.selected
+                del dlg
+            except Exception as e:
+                xbmc.log(f"Multi Bridge: Error abriendo _DeviceSelectDialog: {e}", xbmc.LOGWARNING)
 
-        d = xbmcgui.Dialog()
-        sel = d.select(title, options, preselect=preselect)
+        if not selected:
+            is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
+            selected = 'android' if is_android else 'pc'
 
-        if sel == 0:
-            addon.setSetting('device_platform', '0')
+        if selected == 'pc':
             addon.setSetting('hide_captcha_links', 'false')
-            addon.setSetting('device_platform_configured', 'true')
-            d.notification('Multi Bridge', 'Configurado para PC: Captchas activos', xbmcgui.NOTIFICATION_INFO, 3500)
-            xbmc.log("Multi Bridge: Plataforma configurada -> PC (Captchas activos)", xbmc.LOGINFO)
-        elif sel == 1:
-            addon.setSetting('device_platform', '1')
-            addon.setSetting('hide_captcha_links', 'true')
-            addon.setSetting('device_platform_configured', 'true')
-            d.notification('Multi Bridge', 'Configurado para Android: Captchas desactivados', xbmcgui.NOTIFICATION_INFO, 3500)
-            xbmc.log("Multi Bridge: Plataforma configurada -> Android (Captchas desactivados)", xbmc.LOGINFO)
+            xbmcgui.Dialog().notification('Multi Bridge', 'Configurado para PC: Captchas activos', xbmcgui.NOTIFICATION_INFO, 3500)
+            xbmc.log("Multi Bridge: Configuración inicial -> PC (Captchas activos)", xbmc.LOGINFO)
         else:
-            if not force:
-                if is_android_detected:
-                    addon.setSetting('device_platform', '1')
-                    addon.setSetting('hide_captcha_links', 'true')
-                else:
-                    addon.setSetting('device_platform', '0')
-                    addon.setSetting('hide_captcha_links', 'false')
-                addon.setSetting('device_platform_configured', 'true')
-                xbmc.log("Multi Bridge: Configuración inicial omitida -> asignada por defecto", xbmc.LOGINFO)
+            addon.setSetting('hide_captcha_links', 'true')
+            xbmcgui.Dialog().notification('Multi Bridge', 'Configurado para Android: Captchas desactivados', xbmcgui.NOTIFICATION_INFO, 3500)
+            xbmc.log("Multi Bridge: Configuración inicial -> Android (Captchas desactivados)", xbmc.LOGINFO)
+
+        addon.setSetting('first_install_setup_done', 'true')
     finally:
         try:
             xbmcgui.Window(10000).clearProperty('MultiBridge_DevicePromptOpen')
@@ -11362,7 +11401,7 @@ def prompt_first_run_device(addon=None, force=False):
 
 def check_first_run_device():
     try:
-        if _bridge_addon.getSetting('device_platform_configured') != 'true':
+        if _bridge_addon.getSetting('first_install_setup_done') != 'true':
             prompt_first_run_device(_bridge_addon)
     except Exception:
         pass

@@ -298,7 +298,7 @@ def _inject_active_playback_metadata(player):
 def check_first_run_device_service(monitor=None):
     try:
         addon = xbmcaddon.Addon('plugin.video.bridge.multi')
-        if addon.getSetting('device_platform_configured') == 'true':
+        if addon.getSetting('first_install_setup_done') == 'true':
             return
 
         for _ in range(30):

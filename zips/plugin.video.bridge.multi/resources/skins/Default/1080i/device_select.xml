@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog">
+    <defaultcontrol always="true">100</defaultcontrol>
+    <zorder>150</zorder>
+    <coordinates>
+        <system>1</system>
+        <left>0</left>
+        <top>0</top>
+    </coordinates>
+    <controls>
+        <!-- Oscurecimiento de pantalla de fondo -->
+        <control type="image">
+            <left>0</left><top>0</top>
+            <width>1920</width><height>1080</height>
+            <texture colordiffuse="CC000000">white.png</texture>
+            <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
+            <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
+        </control>
+
+        <!-- TARJETA PRINCIPAL DEL DIÁLOGO (1060 x 580) -->
+        <control type="group">
+            <animation effect="zoom" start="90" end="100" center="960,540" time="250" tween="quadratic" easing="out">WindowOpen</animation>
+            <animation effect="fade" start="0" end="100" time="200">WindowOpen</animation>
+            <animation effect="fade" start="100" end="0" time="150">WindowClose</animation>
+
+            <!-- Fondo oscuro con esquinas redondeadas -->
+            <control type="image">
+                <left>430</left><top>250</top>
+                <width>1060</width><height>580</height>
+                <texture border="32">dialog_bg.png</texture>
+                <colordiffuse>F20E131A</colordiffuse>
+            </control>
+
+            <!-- Borde redondeado dorado tenue -->
+            <control type="image">
+                <left>430</left><top>250</top>
+                <width>1060</width><height>580</height>
+                <texture border="32">dialog_border.png</texture>
+                <colordiffuse>80D4AF37</colordiffuse>
+            </control>
+
+            <!-- CABECERA: MULTI BRIDGE • CONFIGURACIÓN INICIAL -->
+            <control type="label">
+                <left>480</left><top>285</top>
+                <width>960</width><height>25</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>center</align>
+                <label>[B][COLOR FFD4AF37]MULTI BRIDGE[/COLOR][/B]   •   [COLOR FFFFFFFF]CONFIGURACIÓN INICIAL[/COLOR]</label>
+            </control>
+
+            <!-- PREGUNTA PRINCIPAL -->
+            <control type="label">
+                <left>480</left><top>320</top>
+                <width>960</width><height>40</height>
+                <font>font14</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>center</align>
+                <label>[B]¿En qué dispositivo estás utilizando Kodi?[/B]</label>
+            </control>
+
+            <!-- SUBTÍTULO DESCRIPTIVO -->
+            <control type="label">
+                <left>480</left><top>365</top>
+                <width>960</width><height>25</height>
+                <font>font11</font>
+                <textcolor>FFA0AEC0</textcolor>
+                <align>center</align>
+                <label>Optimiza automáticamente los enlaces y la verificación según tu equipo</label>
+            </control>
+
+            <!-- ======================================================== -->
+            <!-- BOTÓN 1: PC / ORDENADOR (ID 100)                        -->
+            <!-- ======================================================== -->
+            <control type="button" id="100">
+                <left>475</left><top>420</top>
+                <width>465</width><height>360</height>
+                <label>[B]PC / Ordenador[/B][CR][CR][COLOR FFA0AEC0]Windows • Linux • Mac[/COLOR][CR][CR][COLOR FF00FF7F]● Enlaces con Captcha ACTIVOS[/COLOR][CR][COLOR FF718096][I](Abre navegador en segundo plano)[/I][/COLOR]</label>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+                <texturefocus border="16" colordiffuse="4000FF7F">white.png</texturefocus>
+                <texturenofocus border="16" colordiffuse="15FFFFFF">white.png</texturenofocus>
+                <align>center</align>
+                <aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>200</onleft>
+                <onright>200</onright>
+                <onup>100</onup>
+                <ondown>100</ondown>
+            </control>
+
+            <!-- ======================================================== -->
+            <!-- BOTÓN 2: ANDROID / TV BOX (ID 200)                      -->
+            <!-- ======================================================== -->
+            <control type="button" id="200">
+                <left>980</left><top>420</top>
+                <width>465</width><height>360</height>
+                <label>[B]Android / TV Box[/B][CR][CR][COLOR FFA0AEC0]TV Box • Móvil • Fire TV[/COLOR][CR][CR][COLOR FFFF9900]● Desactivar enlaces Captcha[/COLOR][CR][COLOR FF718096][I](Evita errores de navegador)[/I][/COLOR]</label>
+                <font>font13</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+                <texturefocus border="16" colordiffuse="40FF9900">white.png</texturefocus>
+                <texturenofocus border="16" colordiffuse="15FFFFFF">white.png</texturenofocus>
+                <align>center</align>
+                <aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>100</onleft>
+                <onright>100</onright>
+                <onup>200</onup>
+                <ondown>200</ondown>
+            </control>
+        </control>
+    </controls>
+</window>
