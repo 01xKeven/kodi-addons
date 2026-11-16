@@ -10,6 +10,11 @@ import xbmcgui
 def get_video_url(page_url, url_referer=''):
     xbmc.log(f"[Balandro Streamplay] Resolviendo enlace: {page_url}", xbmc.LOGINFO)
 
+    # Si estamos en busqueda silenciosa, verificacion de fondo o en autoplay, no abrir navegador
+    w = xbmcgui.Window(10000)
+    if w.getProperty('bridge.silenced_dialogs') == 'true' or w.getProperty('bridge.in_autoplay') == 'true':
+        return []
+
     bridge_addon = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.bridge.multi')
     capture_script = os.path.join(bridge_addon, 'resources', 'lib', 'bridge_capture.py')
     

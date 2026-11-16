@@ -3692,6 +3692,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
     if 'okcdn.ru' in cu or str(server_name or '').lower() in ('okru', 'ok.ru'):
         headers['Referer'] = 'https://ok.ru/'
+        timeout = max(float(timeout or 3.0), 6.0)
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
         for h in pipe_parts.split('&'):
@@ -3911,11 +3912,14 @@ def _is_web_captcha_server(server_name, item=None):
         'powvideo', 'povwideo', 'powwideo', 'povvideo',
         'streamplay', 'straemplay', 'streamp1ay', 'steamplay', 'stremplay'
     )
-    if s in captcha_domains:
+    if any(c in s for c in captcha_domains):
         return True
     if item:
         url = str(getattr(item, 'url', '') or '').lower()
         if any(d in url for d in captcha_domains):
+            return True
+        srv = str(getattr(item, 'server', '') or '').lower()
+        if srv in captcha_domains:
             return True
         other = str(getattr(item, 'other', '') or '').lower()
         if any(d in other for d in captcha_domains):
@@ -4557,6 +4561,9 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
 
     for idx, lnk in enumerate(links):
         if _is_torrent_link(lnk):
+            verified_results[idx] = lnk
+        elif _is_web_captcha_server(_get_link_server_name(lnk), lnk):
+            # Enlaces con captcha (Streamplay, Powvideo) NUNCA se verifican por red ni abren navegadores
             verified_results[idx] = lnk
         else:
             direct_items_to_test.append((idx, lnk))
@@ -9026,7 +9033,14 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
     normal_links = [l for l in links if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)]
     if not normal_links:
         _absorb = xbmcgui.ListItem()
-        xbmcplugin.setResolvedUrl(handle, False, _absorb)
+        try: xbmcplugin.setResolvedUrl(handle, False, _absorb)
+        except: pass
+        if links and tmdb_for_list:
+            _ts = int(time.time())
+            _lu = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (str(tmdb_for_list), _ts)
+            if meta and meta.get('season') and meta.get('episode'):
+                _lu += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
+            _open_links_view(_lu)
         return False
 
     # ── Dismiss handle early (suppress Kodi error dialog via guardian) ─────
@@ -9402,6 +9416,8 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
                 ref = 'https://filelions.to/'
             elif 'goodstream' in srv_lower:
                 ref = 'https://goodstream.uno/'
+            elif 'okru' in srv_lower or 'ok.ru' in srv_lower or 'okcdn.ru' in base_url or 'odnoklassniki' in base_url:
+                ref = 'https://ok.ru/'
             else:
                 parsed = urllib.parse.urlparse(base_url)
                 if parsed.scheme and parsed.netloc:
@@ -9571,6 +9587,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     como el primer canal devuelva enlaces y el primer enlace preferente funcione.
     En segundo plano y con bajo consumo de CPU, se completa la busqueda del resto de
     canales y la verificacion total para nutrir el dialogo de pausa y la lista."""
+    xbmcgui.Window(10000).setProperty('bridge.in_autoplay', 'true')
     global _BG_COLLECTOR_TOKEN
     with _BG_COLLECTOR_LOCK:
         _BG_COLLECTOR_TOKEN += 1
@@ -9672,7 +9689,10 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     if cached_links:
         sorted_cached = _filter_and_sort_links(cached_links)
-        normal_cached = [l for l in sorted_cached if not _is_torrent_link(l)]
+        normal_cached = [
+            l for l in sorted_cached
+            if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)
+        ]
         if normal_cached:
             xbmc.log("Multi Bridge Fast Autoplay: evaluando %d enlaces en caché..." % len(normal_cached), xbmc.LOGINFO)
             _extra_info = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
@@ -10128,7 +10148,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         # Comprobar si hay nuevos enlaces descubiertos que todavia no se han probado
         with results_lock:
             has_untested = any(
-                not _is_torrent_link(l) and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
+                not _is_torrent_link(l)
+                and not _is_web_captcha_server(_get_link_server_name(l), l)
+                and (_safe_str(getattr(l, 'url', '')) or str(id(l))) not in tested_urls
                 for l in all_found_links
             )
 
@@ -10150,7 +10172,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     except: pass
 
     if not fast_link or not fast_li or not fast_url:
-        xbmc.log("Multi Bridge Fast Autoplay: no se encontro enlace rapido funcional en los primeros canales. Evaluando fallback...", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Fast Autoplay: no se encontro enlace rapido funcional en los canales. Evaluando fallback...", xbmc.LOGINFO)
         with results_lock:
             fallback_batch = list(all_found_links)
         if fallback_batch:
@@ -10163,6 +10185,23 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     'engine': engine
                 })
             except Exception: pass
+
+            # Si el usuario no cancelo explicitamente, abrir la lista normal de enlaces (ej. si solo habia captchas o fallaron los directos)
+            if xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled") != "true":
+                xbmc.log("Multi Bridge Fast Autoplay: no hubo directo reproducible pero hay enlaces disponibles -> abriendo lista", xbmc.LOGINFO)
+                if handle >= 0:
+                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                    except: pass
+                _cur_tmdb = str(meta.get('tmdb') or tmdb_id or get_param('tmdb') or '')
+                _ts = int(time.time())
+                _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
+                if meta.get('season') and meta.get('episode'):
+                    _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
+                xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
+                _open_links_view(_win_url)
+                return True
+
+        xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
         return False
 
     # Descartar handle de plugin con guardian para suprimir cualquier dialogo de error espurio de Kodi
@@ -10436,6 +10475,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     # Si se agotaron los intentos sin exito, abrir lista de enlaces para el usuario y gestionar fallback
     if not player.isPlayingVideo():
         xbmc.log("Multi Bridge Fast Autoplay: ningun enlace arranco en autoplay rapido", xbmc.LOGINFO)
+        xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
         _cur_tmdb = str(meta.get('tmdb') or '')
         if _cur_tmdb:
             _ts = int(time.time())
@@ -10443,8 +10483,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             if meta.get('season') and meta.get('episode'):
                 _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
             _open_links_view(_win_url)
-        return False
+        return True
 
+    xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
     return True
 
 def _autoplay_link(link, handle, engine, matched_item=None):
@@ -10585,16 +10626,6 @@ def _clean_dialog_text(text):
     t = re.sub(r'<[^>]+>', '', t)
     return t.strip()
 
-
-def _is_web_captcha_server(server_name, item=None):
-    s = str(server_name or '').strip().lower()
-    if s in ('powvideo', 'povwideo', 'powwideo', 'povvideo'):
-        return True
-    if item:
-        url = str(getattr(item, 'url', '') or '').lower()
-        if any(d in url for d in ('powvideo', 'povwideo', 'powwideo', 'povvideo')):
-            return True
-    return False
 
 
 def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
@@ -15530,6 +15561,14 @@ def main():
                 meta         = meta, seek_to_time=seek_to_time,
                 resume_media_key=media_key,
                 resume_title=meta.get('title', ''))
+            if not played and not xbmc.Player().isPlaying():
+                if not _links_view_active:
+                    _cur_tmdb = str(tmdb_id or get_param('tmdb') or meta.get('tmdb') or '')
+                    _ts = int(time.time())
+                    _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
+                    if meta.get('season') and meta.get('episode'):
+                        _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
+                    _open_links_view(_win_url)
             return
 
         else:
