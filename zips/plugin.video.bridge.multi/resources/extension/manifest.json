@@ -1,0 +1,24 @@
+{
+  "name": "WebStream Bridge",
+  "version": "1.0",
+  "manifest_version": 3,
+  "description": "Intercepts media stream URLs for Kodi Web Stream Bridge",
+  "permissions": [
+    "webRequest",
+    "webRequestAuthProvider"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

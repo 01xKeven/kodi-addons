@@ -295,6 +295,33 @@ def _inject_active_playback_metadata(player):
         xbmc.log("Multi Bridge PlayerService: error configurando Window properties: " + str(_e_win), xbmc.LOGINFO)
 
 
+def check_first_run_device_service(monitor=None):
+    try:
+        addon = xbmcaddon.Addon('plugin.video.bridge.multi')
+        if addon.getSetting('device_platform_configured') == 'true':
+            return
+
+        for _ in range(30):
+            if monitor and monitor.abortRequested():
+                return
+            if xbmc.getCondVisibility('Window.IsVisible(home)') or xbmc.getCondVisibility('Window.IsVisible(10000)'):
+                break
+            if monitor:
+                if monitor.waitForAbort(1):
+                    return
+            else:
+                xbmc.sleep(1000)
+
+        if monitor and monitor.waitForAbort(2):
+            return
+
+        import default
+        if hasattr(default, 'prompt_first_run_device'):
+            default.prompt_first_run_device(addon)
+    except Exception as e:
+        xbmc.log("Multi Bridge Service: Error en check_first_run_device_service: " + str(e), xbmc.LOGWARNING)
+
+
 def run_service():
     # Limpieza inicial de variables y locks de busqueda
     try:
@@ -314,6 +341,8 @@ def run_service():
             default.check_and_run_migration()
         if hasattr(default, 'check_orphan_players'):
             default.check_orphan_players()
+        if hasattr(default, 'sync_captcha_servers'):
+            default.sync_captcha_servers()
     except Exception as e:
         xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
 
@@ -327,9 +356,23 @@ def run_service():
     t_net.name = "BridgeMultiNetworkMonitor"
     t_net.start()
 
+    # Iniciar comprobacion de configuracion inicial de dispositivo (PC vs Android)
+    t_dev = threading.Thread(target=check_first_run_device_service, args=(monitor,), daemon=True)
+    t_dev.name = "BridgeMultiFirstRunDevice"
+    t_dev.start()
+
+    _sync_timer = 0
     while not monitor.abortRequested():
         if monitor.waitForAbort(1):
             break
+        _sync_timer += 1
+        if _sync_timer >= 60:
+            _sync_timer = 0
+            try:
+                if hasattr(default, 'sync_captcha_servers'):
+                    default.sync_captcha_servers()
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

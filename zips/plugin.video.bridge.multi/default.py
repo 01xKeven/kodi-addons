@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import os
 import re
+import subprocess
 import json
 import base64
 import threading
@@ -3078,7 +3079,9 @@ def _get_link_server_name(link):
         ('streamlare', 'Streamlare'), ('supervideo', 'Supervideo'), ('dropload', 'Dropload'),
         ('userload', 'Userload'), ('upstream', 'Upstream'), ('wolfstream', 'Wolfstream'),
         ('hexupload', 'Hexupload'), ('mega', 'Mega'), ('1fichier', '1fichier'),
-        ('okru', 'Okru'), ('ok.ru', 'Okru'), ('kinoger', 'Kinoger'), ('vimeos', 'Vimeos'), ('zures', 'Vimeos')
+        ('okru', 'Okru'), ('ok.ru', 'Okru'), ('kinoger', 'Kinoger'), ('vimeos', 'Vimeos'), ('zures', 'Vimeos'),
+        ('powvideo', 'Powvideo'), ('povwideo', 'Powvideo'), ('powwideo', 'Powvideo'), ('povvideo', 'Powvideo'),
+        ('streamplay', 'Streamplay'), ('straemplay', 'Streamplay'), ('streamp1ay', 'Streamplay'), ('steamplay', 'Streamplay'), ('stremplay', 'Streamplay')
     ]
 
     if not srv or srv.lower() in ('various', 'zures', 'videoapp', 'directo', 'none', ''):
@@ -3686,7 +3689,9 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
     cu = clean_url.lower()
 
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
+    if 'okcdn.ru' in cu or str(server_name or '').lower() in ('okru', 'ok.ru'):
+        headers['Referer'] = 'https://ok.ru/'
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
         for h in pipe_parts.split('&'):
@@ -3900,9 +3905,37 @@ def _is_preferred_lang_candidate(cand, b_prefs, all_done=False):
     return p_val <= best_prio
 
 
+def _is_web_captcha_server(server_name, item=None):
+    s = str(server_name or '').strip().lower()
+    captcha_domains = (
+        'powvideo', 'povwideo', 'powwideo', 'povvideo',
+        'streamplay', 'straemplay', 'streamp1ay', 'steamplay', 'stremplay'
+    )
+    if s in captcha_domains:
+        return True
+    if item:
+        url = str(getattr(item, 'url', '') or '').lower()
+        if any(d in url for d in captcha_domains):
+            return True
+        other = str(getattr(item, 'other', '') or '').lower()
+        if any(d in other for d in captcha_domains):
+            return True
+    return False
+
+
 def _is_server_discarded(it, disc_list=None):
     if not it:
         return True
+
+    # Ocultar enlaces con verificacion Captcha si el usuario activo la opcion o configuro Android
+    try:
+        if _bridge_addon.getSetting('hide_captcha_links') == 'true' or _bridge_addon.getSetting('device_platform') == '1':
+            srv = (_get_link_server_name(it) or getattr(it, 'server', '') or '').strip().lower()
+            if _is_web_captcha_server(srv, it):
+                return True
+    except Exception:
+        pass
+
     if disc_list is None:
         disc_list = _get_discarded_servers_list()
     if not disc_list:
@@ -4170,6 +4203,46 @@ def _link_cache_key(lnk):
 
 _PIPELINE_VERIFIED_SEARCH = False
 
+def _check_web_captcha_link_alive(url, timeout=5.0):
+    """Comprobacion rapida HTTP para servidores protegidos con captcha (ej. Powvideo, Streamplay).
+    Determina si el enlace esta vivo sin lanzar navegador ni abrir ventanas modales.
+    Retorna True si el enlace responde 200 OK (o Cloudflare 403/503), False si devuelve 404/Not Found o archivo borrado."""
+    if not url: return False
+    try:
+        import urllib.request as _urq
+        import urllib.error as _ure
+        check_url = str(url).strip()
+        m = re.search(r'(?:embed-|player-)?([a-zA-Z0-9]+)(?:-[0-9x]+)?\.html', check_url)
+        if m and m.group(1) and ('embed-' in check_url or 'player-' in check_url):
+            base = check_url.split('/player-')[0].split('/embed-')[0].rstrip('/')
+            if '/' in base[8:]:
+                base = base[:base.find('/', 8)]
+            check_url = '%s/%s' % (base, m.group(1))
+
+        req = _urq.Request(
+            check_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        )
+        with _urq.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(2048).decode('utf-8', errors='ignore')
+            body_low = body.lower()
+            if 'file was deleted' in body_low or 'no such file' in body_low:
+                return False
+            if 200 <= resp.status < 400:
+                return True
+    except _ure.HTTPError as e:
+        if e.code == 404:
+            return False
+        if e.code in (403, 503):
+            return True
+        return False
+    except Exception:
+        return False
+    return False
+
 def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
     if not lnk: return None
     if _is_torrent_link(lnk): return lnk
@@ -4194,6 +4267,16 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
         pwd = getattr(prep, 'password', '')
 
         if not url and not getattr(prep, 'video_urls', None):
+            return None
+
+        # Servidores protegidos con captcha (ej. Powvideo):
+        # Si el usuario activo ocultar captchas, descartar directamente.
+        # Comprobacion HTTP ultrarrapida: si responde 200/403 se conserva, si es 404 se descarta como basura.
+        if _is_web_captcha_server(actual_srv, prep):
+            if _bridge_addon.getSetting('hide_captcha_links') == 'true' or _bridge_addon.getSetting('device_platform') == '1':
+                return None
+            if _check_web_captcha_link_alive(url):
+                return prep
             return None
 
         servers_to_try = []
@@ -4225,7 +4308,8 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
                     st_url = stream_entry[1] if isinstance(stream_entry, (list, tuple)) and len(stream_entry) > 1 else (stream_entry if isinstance(stream_entry, str) else '')
                     if not st_url:
                         continue
-                    is_ok, real_res = _check_stream_url_playable(st_url, server_name=actual_srv, timeout=3.0)
+                    check_to = 5.0 if (actual_srv in ('okru', 'ok.ru') or 'okcdn.ru' in st_url) else 3.0
+                    is_ok, real_res = _check_stream_url_playable(st_url, server_name=actual_srv, timeout=check_to)
                     if is_ok:
                         prep.video_urls = valid_streams
                         st_lbl = stream_entry[0] if isinstance(stream_entry, (list, tuple)) and len(stream_entry) > 0 else ''
@@ -7276,13 +7360,28 @@ def _run_parallel_search_impl(engine='alfa'):
                 )
             p_dialog.update(pct, '%s (%d/%d canales)%s\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, v_tag, lines[0], lines[1], active_str))
         else:
+            raw_dir = 0
+            raw_tor = 0
+            for _k, _val in list(results_dict.items()):
+                if _val and len(_val) > 1 and _val[1]:
+                    for _l in _val[1]:
+                        if _is_torrent_link(_l):
+                            raw_tor += 1
+                        else:
+                            raw_dir += 1
             if hasattr(p_dialog, 'set_metrics'):
                 p_dialog.set_metrics(
                     completed_str='%d/%d' % (completed, total_channels),
-                    n_dir=0, n_tor=0, n_ver=0,
+                    n_dir=raw_dir, n_tor=raw_tor, n_ver=0,
                     status_line=lines[0] or active_str
                 )
-            p_dialog.update(pct, '%s (%d/%d canales)\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, lines[0], lines[1], active_str))
+            r_parts = []
+            if raw_dir > 0:
+                r_parts.append('[COLOR lime]%d directos[/COLOR]' % raw_dir)
+            if raw_tor > 0:
+                r_parts.append('[COLOR cyan]%d torrents[/COLOR]' % raw_tor)
+            r_tag = (' • ' + ' | '.join(r_parts)) if r_parts else ''
+            p_dialog.update(pct, '%s (%d/%d canales)%s\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, r_tag, lines[0], lines[1], active_str))
 
         elapsed = now - start_time
         if completed >= total_channels or elapsed > timeout_secs:
@@ -8791,6 +8890,12 @@ def _resolve_link_to_listitem(link, engine, matched_item=None):
         return False, None
 
     if not getattr(prep, 'url', '') and not getattr(prep, 'video_urls', None):
+        return False, None
+
+    if _is_web_captcha_server(getattr(prep, 'server', ''), prep):
+        li = _capture_web_captcha_listitem(prep, meta=getattr(matched_item, 'infoLabels', None) if matched_item else None)
+        if li:
+            return True, li
         return False, None
 
     _resolved_li = [None]
@@ -10464,6 +10569,333 @@ def _clean_dialog_text(text):
     return t.strip()
 
 
+def _is_web_captcha_server(server_name, item=None):
+    s = str(server_name or '').strip().lower()
+    if s in ('powvideo', 'povwideo', 'powwideo', 'povvideo'):
+        return True
+    if item:
+        url = str(getattr(item, 'url', '') or '').lower()
+        if any(d in url for d in ('powvideo', 'povwideo', 'powwideo', 'povvideo')):
+            return True
+    return False
+
+
+def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
+    if xbmc.getCondVisibility('System.Platform.Android') or _bridge_addon.getSetting('device_platform') == '1':
+        xbmcgui.Dialog().notification('Multi Bridge', 'Servidores con captcha no disponibles en Android', '', 4000)
+        return None
+
+    import subprocess
+    page_url = getattr(link, 'url', '') or ''
+    if not page_url:
+        return None
+
+    page_url = page_url.split('|')[0]
+
+    addon_path = ADDON_PATH if ADDON_PATH else xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
+    capture_script = os.path.join(addon_path, 'resources', 'lib', 'bridge_capture.py')
+    if not os.path.exists(capture_script):
+        fallback = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.bridge.multi\resources\lib\bridge_capture.py')
+        if os.path.exists(fallback):
+            capture_script = fallback
+        else:
+            xbmcgui.Dialog().notification('Multi Bridge', 'Falta el modulo de captura web', '', 3500)
+            return None
+
+    python_exe = sys.executable
+    if not python_exe or 'kodi' in python_exe.lower() or not os.path.exists(python_exe):
+        import shutil
+        found = shutil.which('python')
+        if found and os.path.exists(found):
+            python_exe = found
+        else:
+            local_app = os.environ.get("LOCALAPPDATA", "")
+            candidates = [
+                r"C:\Users\ANGEL\AppData\Local\Programs\Python\Python314\python.exe",
+                os.path.join(local_app, r"Programs\Python\Python314\python.exe"),
+                os.path.join(local_app, r"Programs\Python\Python313\python.exe"),
+                os.path.join(local_app, r"Programs\Python\Python312\python.exe"),
+                os.path.join(local_app, r"Programs\Python\Python311\python.exe"),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    python_exe = c
+                    break
+
+    xbmc.log(f"Multi Bridge: Capturando stream web para {page_url} (python={python_exe}, script={capture_script})", xbmc.LOGINFO)
+
+    icon_path = os.path.join(addon_path, 'icon.png')
+    if not os.path.exists(icon_path):
+        icon_path = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.bridge.multi\icon.png')
+    xbmcgui.Dialog().notification(
+        "Multi Bridge - Captcha",
+        "Resuelve el captcha en la ventana flotante...",
+        icon_path,
+        5000
+    )
+
+    # Ventana de diálogo con barra de progreso y tiempo límite considerable
+    total_timeout = 180
+    p_dialog = xbmcgui.DialogProgress()
+    p_dialog.create(
+        'Multi Bridge — Verificación Humana (Captcha)',
+        'Abriendo ventana flotante para resolver captcha...\nResuelve el captcha en la ventana flotante de Chrome.\nEl vídeo se reproducirá automáticamente al finalizar.'
+    )
+
+    clean_env = {k: v for k, v in os.environ.items() if 'python' not in k.lower()}
+    creationflags = 0x08000000 if os.name == 'nt' else 0
+
+    cmd = [python_exe, capture_script, page_url, f"--timeout={total_timeout}", "--app"]
+    xbmc.log(f"Multi Bridge: Intentando Popen cmd={cmd} flags={creationflags}", xbmc.LOGINFO)
+
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=clean_env,
+            creationflags=creationflags
+        )
+        xbmc.log(f"Multi Bridge: Subprocess iniciado pid={proc.pid}", xbmc.LOGINFO)
+    except Exception as e:
+        try: p_dialog.close()
+        except Exception: pass
+        import traceback
+        xbmc.log(f"Multi Bridge: ERROR en Popen: {e}\n{traceback.format_exc()}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification('Multi Bridge', f'Error Popen: {e}', '', 4000)
+        return None
+
+    monitor = xbmc.Monitor()
+    elapsed = 0.0
+    xbmc.log(f"Multi Bridge: Esperando subproceso con DialogProgress (poll={proc.poll()})", xbmc.LOGINFO)
+    while proc.poll() is None:
+        xbmc.sleep(500)
+        elapsed += 0.5
+
+        if p_dialog.iscanceled():
+            xbmc.log("Multi Bridge: Cancelado por el usuario en DialogProgress", xbmc.LOGINFO)
+            try: proc.terminate()
+            except Exception: pass
+            break
+
+        if monitor.abortRequested():
+            xbmc.log("Multi Bridge: Kodi abortRequested=True", xbmc.LOGINFO)
+            try: proc.terminate()
+            except Exception: pass
+            break
+
+        if elapsed >= total_timeout:
+            xbmc.log("Multi Bridge: Tiempo agotado esperando subproceso", xbmc.LOGINFO)
+            try: proc.terminate()
+            except Exception: pass
+            break
+
+        pct = min(99, int((elapsed / float(total_timeout)) * 100))
+        rem = max(0, int(total_timeout - elapsed))
+        mins = rem // 60
+        secs = rem % 60
+        rem_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        p_dialog.update(
+            pct,
+            f'Resuelve el captcha en la ventana flotante de Chrome...\nTiempo restante: {rem_str}\nEl vídeo se reproducirá automáticamente al finalizar.'
+        )
+
+    xbmc.log(f"Multi Bridge: Subproceso salio con poll={proc.poll()} tras {elapsed}s", xbmc.LOGINFO)
+
+    stdout, stderr = proc.communicate()
+    output_text = stdout.strip()
+    xbmc.log(f"Multi Bridge: bridge_capture retcode={proc.returncode} stdout='{output_text}' stderr='{stderr.strip()}'", xbmc.LOGINFO)
+
+    try:
+        data = json.loads(output_text)
+    except Exception as je:
+        try: p_dialog.close()
+        except Exception: pass
+        xbmc.log(f"Multi Bridge: bridge_capture json error: {je}, raw='{output_text}'", xbmc.LOGWARNING)
+        xbmcgui.Dialog().notification('Multi Bridge', 'No se capturo el stream de video', '', 3500)
+        return None
+
+    if data.get("status") != "ok":
+        try: p_dialog.close()
+        except Exception: pass
+        msg = data.get("message", "Error al capturar el video")
+        xbmcgui.Dialog().notification('Multi Bridge', msg[:60], '', 3500)
+        return None
+
+    # Stream capturado correctamente
+    try:
+        p_dialog.update(100, '¡Stream capturado con éxito! Iniciando reproducción...')
+        xbmc.sleep(400)
+        p_dialog.close()
+    except Exception:
+        pass
+
+    stream_url = data.get("url")
+    headers = data.get("headers", {})
+    mime_type = data.get("mime_type", "")
+
+    if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
+        clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
+        query = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
+        stream_url = f"{clean_base}/manifest.mpd{query}"
+
+    ua = headers.get("user-agent") or headers.get("User-Agent") or ""
+    ref = headers.get("referer") or headers.get("Referer") or ""
+    cookie = headers.get("cookie") or headers.get("Cookie") or ""
+
+    pipe_args = []
+    if ua:
+        pipe_args.append(f"User-Agent={urllib.parse.quote(ua)}")
+    if ref:
+        pipe_args.append(f"Referer={urllib.parse.quote(ref)}")
+    if cookie:
+        pipe_args.append(f"Cookie={urllib.parse.quote(cookie)}")
+
+    playback_url = stream_url
+    if pipe_args:
+        playback_url += "|" + "&".join(pipe_args)
+
+    item = xbmcgui.ListItem(path=playback_url)
+    headers_str = "&".join(pipe_args)
+    is_dash = ".mpd" in stream_url.lower() or "dash" in mime_type.lower() or "/dash/" in stream_url.lower()
+    is_hls = ".m3u8" in stream_url.lower() or "mpegurl" in mime_type.lower()
+
+    if is_dash:
+        item.setProperty('inputstream', 'inputstream.adaptive')
+        item.setProperty('inputstream.adaptive.manifest_type', 'mpd')
+        if headers_str:
+            item.setProperty('inputstream.adaptive.manifest_headers', headers_str)
+            item.setProperty('inputstream.adaptive.stream_headers', headers_str)
+        item.setMimeType('application/dash+xml')
+        item.setContentLookup(False)
+    elif is_hls:
+        item.setProperty('inputstream', 'inputstream.adaptive')
+        item.setProperty('inputstream.adaptive.manifest_type', 'hls')
+        if headers_str:
+            item.setProperty('inputstream.adaptive.manifest_headers', headers_str)
+            item.setProperty('inputstream.adaptive.stream_headers', headers_str)
+        item.setMimeType('application/vnd.apple.mpegurl')
+        item.setContentLookup(False)
+    else:
+        item.setMimeType('video/mp4')
+        item.setContentLookup(False)
+
+    item.setProperty('IsPlayable', 'true')
+    sync_tmdbhelper_playerstring(meta)
+    if meta:
+        set_listitem_info(item, meta=meta)
+
+    if seek_to_time > 0:
+        item.setProperty('StartOffset', str(float(seek_to_time)))
+        item.setProperty('ResumeTime', str(float(seek_to_time)))
+        try:
+            vt = item.getVideoInfoTag()
+            if vt: vt.setResumePoint(float(seek_to_time))
+        except Exception: pass
+    else:
+        item.setProperty('StartOffset', '0')
+
+    return item
+
+
+def _resolve_and_play_web_captcha(link, meta=None, seek_to_time=0):
+    item = _capture_web_captcha_listitem(link, meta=meta, seek_to_time=seek_to_time)
+    if not item:
+        return False
+    playback_url = item.getPath()
+    xbmc.Player().play(playback_url, item)
+    return True
+
+
+def sync_captcha_servers():
+    try:
+        balandro_dir = balandro_path if (balandro_path and os.path.isdir(balandro_path)) else xbmcvfs.translatePath('special://home/addons/plugin.video.balandro')
+        if not os.path.isdir(balandro_dir):
+            balandro_dir = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.balandro')
+        balandro_servers = os.path.join(balandro_dir, 'servers')
+        balandro_channels = os.path.join(balandro_dir, 'channels')
+        if not os.path.isdir(balandro_servers):
+            return
+
+        addon_path = ADDON_PATH if ADDON_PATH else xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
+        import shutil
+
+        # 1. Sincronizar conectores de servidores protegidos (Powvideo y Streamplay)
+        for srv in ('powvideo', 'streamplay'):
+            json_file = os.path.join(balandro_servers, f'{srv}.json')
+            need_patch = False
+            if not os.path.exists(json_file):
+                need_patch = True
+            else:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if '"active": false' in content.lower() or 'Requiere' not in content:
+                        need_patch = True
+
+            if need_patch:
+                src_json = os.path.join(addon_path, 'resources', 'servers', f'{srv}.json')
+                src_py = os.path.join(addon_path, 'resources', 'servers', f'{srv}.py')
+                if os.path.exists(src_json):
+                    shutil.copy2(src_json, json_file)
+                if os.path.exists(src_py):
+                    shutil.copy2(src_py, os.path.join(balandro_servers, f'{srv}.py'))
+                xbmc.log(f"Multi Bridge: Servidor protegido ({srv.capitalize()}) sincronizado en Balandro", xbmc.LOGINFO)
+
+        # 2. Asegurar proveedores Powvideo (1) y Streamplay (2) en hdfull.py
+        hdfull_file = os.path.join(balandro_channels, 'hdfull.py')
+        if os.path.exists(hdfull_file):
+            with open(hdfull_file, 'r', encoding='utf-8', errors='ignore') as f:
+                h_content = f.read()
+            mod_h = False
+            if '"1": {"t": "s", "d": "https://powvideo.org/%s"}' not in h_content:
+                if 'provs = {' in h_content:
+                    h_content = h_content.replace(
+                        'provs = {\n',
+                        'provs = {\n             "1": {"t": "s", "d": "https://powvideo.org/%s"},\n'
+                    )
+                    mod_h = True
+            if '"2": {"t": "s", "d": "https://straemplay.org/%s"}' not in h_content:
+                if 'provs = {' in h_content:
+                    h_content = h_content.replace(
+                        'provs = {\n',
+                        'provs = {\n             "2": {"t": "s", "d": "https://straemplay.org/%s"},\n'
+                    )
+                    mod_h = True
+            if mod_h:
+                with open(hdfull_file, 'w', encoding='utf-8') as f:
+                    f.write(h_content)
+                xbmc.log("Multi Bridge: HdFull provs sincronizado con Powvideo y Streamplay", xbmc.LOGINFO)
+
+        # 3. Desbloquear canales de Balandro que descartan powvideo o streamplay con continue
+        if os.path.isdir(balandro_channels):
+            for fname in os.listdir(balandro_channels):
+                if not fname.endswith('.py'): continue
+                fpath = os.path.join(balandro_channels, fname)
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    if ('powvideo' in content or 'streamplay' in content) and 'continue' in content:
+                        lines = content.splitlines()
+                        mod = False
+                        new_lines = []
+                        for line in lines:
+                            is_target = any(k in line for k in ('/powvideo.', 'powvideo', '/streamplay.', 'streamplay'))
+                            if is_target and 'continue' in line and not line.strip().startswith('#'):
+                                new_lines.append('            # MB_UNBLOCKED: ' + line.strip())
+                                mod = True
+                            else:
+                                new_lines.append(line)
+                        if mod:
+                            with open(fpath, 'w', encoding='utf-8') as f:
+                                f.write('\n'.join(new_lines) + '\n')
+                except Exception:
+                    pass
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: Error sincronizando servidores en Balandro: {e}", xbmc.LOGWARNING)
+
+
 def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False, seek_to_time=0, start_beginning=False):
 
     if not link: return False
@@ -10502,6 +10934,10 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         xbmc.log(f"Multi Bridge: enlace sin URL para {server_name}", xbmc.LOGINFO)
         xbmcgui.Dialog().notification('Multi Bridge', f'{server_name} — No se encontró URL reproducible', '', 3500)
         return False
+
+    # 2.5 Servidor web con verificación humana / Captcha (ej. Powvideo)
+    if _is_web_captcha_server(server_name, prepared):
+        return _resolve_and_play_web_captcha(prepared, meta=meta, seek_to_time=seek_to_time)
 
     # 3. Reproductor según el motor
     # ── Balandro: ventana de progreso de conexión, timeout (15s) y aviso de fallo ──
@@ -10864,6 +11300,74 @@ def verify_and_filter_links():
 # ---------------------------------------------------------
 # Player Manager & Migration / Cloud Update Tools
 # ---------------------------------------------------------
+def prompt_first_run_device(addon=None, force=False):
+    if addon is None:
+        addon = _bridge_addon
+    try:
+        w = xbmcgui.Window(10000)
+        if w.getProperty('MultiBridge_DevicePromptOpen') == 'true':
+            return
+        w.setProperty('MultiBridge_DevicePromptOpen', 'true')
+    except Exception:
+        pass
+
+    try:
+        if not force and addon.getSetting('device_platform_configured') == 'true':
+            return
+
+        is_android_detected = False
+        try:
+            is_android_detected = bool(xbmc.getCondVisibility('System.Platform.Android'))
+        except Exception:
+            pass
+
+        title = "Multi Bridge — Configuración de Plataforma"
+        options = [
+            "PC (Windows / Linux / Mac) — Mantener enlaces Captcha activos",
+            "Android / TV Box / Fire TV — Desactivar enlaces con Captcha"
+        ]
+        preselect = 1 if is_android_detected else 0
+
+        d = xbmcgui.Dialog()
+        sel = d.select(title, options, preselect=preselect)
+
+        if sel == 0:
+            addon.setSetting('device_platform', '0')
+            addon.setSetting('hide_captcha_links', 'false')
+            addon.setSetting('device_platform_configured', 'true')
+            d.notification('Multi Bridge', 'Configurado para PC: Captchas activos', xbmcgui.NOTIFICATION_INFO, 3500)
+            xbmc.log("Multi Bridge: Plataforma configurada -> PC (Captchas activos)", xbmc.LOGINFO)
+        elif sel == 1:
+            addon.setSetting('device_platform', '1')
+            addon.setSetting('hide_captcha_links', 'true')
+            addon.setSetting('device_platform_configured', 'true')
+            d.notification('Multi Bridge', 'Configurado para Android: Captchas desactivados', xbmcgui.NOTIFICATION_INFO, 3500)
+            xbmc.log("Multi Bridge: Plataforma configurada -> Android (Captchas desactivados)", xbmc.LOGINFO)
+        else:
+            if not force:
+                if is_android_detected:
+                    addon.setSetting('device_platform', '1')
+                    addon.setSetting('hide_captcha_links', 'true')
+                else:
+                    addon.setSetting('device_platform', '0')
+                    addon.setSetting('hide_captcha_links', 'false')
+                addon.setSetting('device_platform_configured', 'true')
+                xbmc.log("Multi Bridge: Configuración inicial omitida -> asignada por defecto", xbmc.LOGINFO)
+    finally:
+        try:
+            xbmcgui.Window(10000).clearProperty('MultiBridge_DevicePromptOpen')
+        except Exception:
+            pass
+
+
+def check_first_run_device():
+    try:
+        if _bridge_addon.getSetting('device_platform_configured') != 'true':
+            prompt_first_run_device(_bridge_addon)
+    except Exception:
+        pass
+
+
 _migration_checked_flag = False
 
 def check_and_run_migration():
@@ -13580,6 +14084,9 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                 clean_title = '[FALLIDO] ' + clean_title
             elif is_curr_playing and not clean_title.startswith('[EN REPRODUCCIÓN]'):
                 clean_title = '[EN REPRODUCCIÓN] ' + clean_title
+            if _is_web_captcha_server(srv_name, lnk):
+                if '(CAPTCHA)' not in clean_title and '(REQUIERE CAPTCHA)' not in clean_title:
+                    clean_title += ' [COLOR orange](CAPTCHA)[/COLOR]'
 
             # Linea 2: Metadatos estructurados
             parts = []
@@ -13606,6 +14113,8 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                     parts.append('[COLOR FF00E5FF][B]TORRENT[/B][/COLOR]')
             elif srv_name and srv_name.lower() not in ('directo', 'torrent', 'unknown', '', 'http'):
                 parts.append('[COLOR FF00BFFF][B]%s[/B][/COLOR]' % srv_name.upper())
+                if _is_web_captcha_server(srv_name, lnk):
+                    parts.append('[COLOR orange][B](REQUIERE CAPTCHA)[/B][/COLOR]')
             else:
                 parts.append('[COLOR FF00BFFF][B]HTTP[/B][/COLOR]')
 
@@ -14240,6 +14749,7 @@ def main():
 
     if action not in ('switch_source', 'floating_links', 'play_single_link'):
         check_and_run_migration()
+        check_first_run_device()
 
     if clearlogo in ('_', 'None', 'none'):
         clearlogo = ''
@@ -14276,6 +14786,10 @@ def main():
 
     if action == 'verify_remaining_preloaded':
         _verify_remaining_preloaded_impl()
+        return
+
+    if action == 'configure_device':
+        prompt_first_run_device(_bridge_addon, force=True)
         return
 
     if not action and not url:

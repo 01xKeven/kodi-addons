@@ -1,0 +1,17 @@
+{
+  "id": "streamplay",
+  "name": "Streamplay",
+
+  "active": true,
+  "notes": "Requiere recaptcha (Multi Bridge)",
+
+  "find_videos": {
+    "ignore_urls": [],
+    "patterns": [
+      {
+        "pattern": "(?:streamplay|streamp1ay|steamplay|straemplay|stremplay)\\.(?:to|me|gdn|cc|org|net)/(?:embed-|player-|)?([a-z0-9]+)(?:\\.html|)?",
+        "url": "https://straemplay.org/\\1"
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@
     <!-- Categoría 1: General -->
     <category label="General">
         <setting id="default_engine" type="enum" label="Motor de búsqueda al reproducir desde TMDb Helper" values="Preguntar siempre|Alfa siempre|Balandro siempre" default="2" />
-        <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="true" />
+        <setting id="autoplay_enabled" type="bool" label="Autoplay automático al encontrar enlaces" default="false" />
         <setting id="autoplay_fallback_normal_search" type="bool" label="Fallback a búsqueda normal si autoplay rápido falla" default="false" visible="eq(-1,true)" />
         <setting id="auto_verify_links" type="bool" label="Verificar automáticamente los enlaces tras la búsqueda" default="true" />
         <setting id="live_switch_on_pause" type="enum" label="Al pausar la reproducción" values="Preguntar si desea cambiar de enlace (Recomendado)|Abrir ventana de enlaces directamente|Desactivado" default="0" />
@@ -60,5 +60,10 @@
         <setting id="servers_preferred" type="text" label="Servidores [COLOR darkorange][B]Preferidos[/B][/COLOR] (cada Servidor separado por coma)" default="mega,okru,doodstream,vidmoly,streamwish" visible="eq(-1,true)" />
         <setting id="servers_unfavored" type="text" label="Servidores como [COLOR gold][B]Última opción[/B][/COLOR] (cada Servidor separado por coma)" default="voe,uqload,torrent" visible="eq(-2,true)" />
         <setting id="servers_discarded" type="text" label="Servidores [COLOR cyan][B]Descartados[/B][/COLOR] (cada Servidor separado por coma)" default="rapidgator,directo,waaw" visible="eq(-3,true)" />
+        <setting type="sep" />
+        <setting id="device_platform" type="enum" label="Dispositivo / Plataforma" values="PC (Windows / Linux / Mac)|Android (TV Box / Móvil / Fire TV)" default="0" />
+        <setting id="hide_captcha_links" type="bool" label="Ocultar enlaces con verificación Captcha (Powvideo, Streamplay)" default="false" />
+        <setting type="action" label="Reconfigurar asistente de dispositivo (PC / Android)" action="RunPlugin(plugin://plugin.video.bridge.multi/?action=configure_device)" />
+        <setting id="device_platform_configured" type="bool" label="Configuración inicial completada" default="false" visible="false" />
     </category>
 </settings>
