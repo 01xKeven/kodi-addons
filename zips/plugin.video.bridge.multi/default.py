@@ -6989,13 +6989,37 @@ class _AutoplayProgressWindow(xbmcgui.WindowXMLDialog):
 class _AutoplayProgressDialog(object):
     """Controlador nativo para el diálogo de reproducción automática exclusivo (autoplay.xml)."""
 
-    def __init__(self, target_title="", poster_url="", fanart_url="", extra_info=""):
+    def __init__(self, target_title="", poster_url="", fanart_url="", extra_info="", meta=None, season=None, episode=None):
         self.target_title = target_title or ""
         self.poster_url = poster_url or ""
         self.fanart_url = fanart_url or ""
         self.extra_info = extra_info or ""
+        self.meta = meta or {}
         self._dlg = None
         self._canceled = False
+
+        # Extraer temporada y episodio con resolución jerárquica
+        s_val = season
+        e_val = episode
+        if s_val is None and self.meta and isinstance(self.meta, dict):
+            s_val = self.meta.get('season')
+        if e_val is None and self.meta and isinstance(self.meta, dict):
+            e_val = self.meta.get('episode')
+        if s_val is None:
+            try: s_val = globals().get('season') or get_param('season')
+            except Exception: pass
+        if e_val is None:
+            try: e_val = globals().get('episode') or get_param('episode')
+            except Exception: pass
+
+        self.episode_label = ""
+        try:
+            if s_val is not None and e_val is not None and str(s_val).strip() and str(e_val).strip() and str(s_val).strip() not in ('None', '_') and str(e_val).strip() not in ('None', '_'):
+                s_int = int(str(s_val).strip())
+                e_int = int(str(e_val).strip())
+                self.episode_label = "S%02dE%02d" % (s_int, e_int)
+        except Exception:
+            self.episode_label = ""
 
     def _set_prop(self, k, v):
         try:
@@ -7013,6 +7037,11 @@ class _AutoplayProgressDialog(object):
             self._dlg = _AutoplayProgressWindow(xml_file, addon_path, skin_dir, "1080i")
 
             self._set_prop("bridge.autoplay_title", _safe_str(self.target_title))
+            self._set_prop("bridge.autoplay_episode_label", _safe_str(self.episode_label))
+            if self.episode_label:
+                self._set_prop("bridge.autoplay_episode_display", "  " + self.episode_label)
+            else:
+                self._set_prop("bridge.autoplay_episode_display", "")
             self._set_prop("bridge.autoplay_poster", _safe_str(self.poster_url))
             self._set_prop("bridge.autoplay_fanart", _safe_str(self.fanart_url))
             self._set_prop("bridge.autoplay_extra", _safe_str(_get_single_genre(self.extra_info) or self.extra_info))
@@ -7044,6 +7073,17 @@ class _AutoplayProgressDialog(object):
             xbmc.log("Multi Bridge: error abriendo autoplay.xml: %s (fallback a DialogProgress)" % e, xbmc.LOGWARNING)
             self._dlg = xbmcgui.DialogProgress()
             self._dlg.create(heading or "Multi Bridge", line1, line2, line3)
+
+    def set_episode(self, season=None, episode=None):
+        try:
+            if season is not None and episode is not None:
+                s_int = int(str(season).strip())
+                e_int = int(str(episode).strip())
+                self.episode_label = "S%02dE%02d" % (s_int, e_int)
+                self._set_prop("bridge.autoplay_episode_label", self.episode_label)
+                self._set_prop("bridge.autoplay_episode_display", "  " + self.episode_label)
+        except Exception:
+            pass
 
     def set_stream_info(self, server="", quality="", language="", channel="", status=""):
         try:
@@ -9134,7 +9174,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             target_title=_t_title,
             poster_url=meta.get('poster') or meta.get('thumbnail') or '',
             fanart_url=meta.get('fanart') or '',
-            extra_info=_extra_tag
+            extra_info=_extra_tag,
+            meta=meta
         )
         _prog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
         _prog.set_stream_info(server=server, quality=cand_qual or '1080p', language=lang_raw or 'Latino', channel='', status='Iniciando reproducción...')
@@ -9733,7 +9774,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 target_title=target_title,
                 poster_url=meta.get('poster') or '',
                 fanart_url=meta.get('fanart') or '',
-                extra_info=_extra_info
+                extra_info=_extra_info,
+                meta=meta
             )
             p_dialog_c.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
             p_dialog_c.update(25)
@@ -9981,7 +10023,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         target_title=target_title,
         poster_url=meta.get('poster') or '',
         fanart_url=meta.get('fanart') or '',
-        extra_info=_extra_info
+        extra_info=_extra_info,
+        meta=meta
     )
     p_dialog.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
     p_dialog.update(5)

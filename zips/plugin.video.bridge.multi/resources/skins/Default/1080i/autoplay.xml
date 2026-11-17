@@ -82,7 +82,7 @@
                 <width>750</width><height>30</height>
                 <font>font13</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>[B]$INFO[Window(10000).Property(bridge.autoplay_title)][/B]</label>
+                <label>[B]$INFO[Window(10000).Property(bridge.autoplay_title)][/B][COLOR yellow][B]$INFO[Window(10000).Property(bridge.autoplay_episode_display)][/B][/COLOR]</label>
             </control>
 
             <!-- ZONA ANIMADA DEL PLAY (Centrado verticalmente con estado y cuadritos) -->
