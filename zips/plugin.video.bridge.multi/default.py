@@ -3929,6 +3929,8 @@ def _is_preferred_lang_candidate(cand, b_prefs, all_done=False):
 
 def _is_web_captcha_server(server_name, item=None):
     s = str(server_name or '').strip().lower()
+    if 'captcha' in s:
+        return True
     captcha_domains = (
         'powvideo', 'povwideo', 'powwideo', 'povvideo',
         'streamplay', 'straemplay', 'streamp1ay', 'steamplay', 'stremplay'
@@ -3937,13 +3939,13 @@ def _is_web_captcha_server(server_name, item=None):
         return True
     if item:
         url = str(getattr(item, 'url', '') or '').lower()
-        if any(d in url for d in captcha_domains):
+        if any(d in url for d in captcha_domains) or 'captcha' in url:
             return True
         srv = str(getattr(item, 'server', '') or '').lower()
-        if srv in captcha_domains:
+        if any(d in srv for d in captcha_domains) or 'captcha' in srv:
             return True
         other = str(getattr(item, 'other', '') or '').lower()
-        if any(d in other for d in captcha_domains):
+        if any(d in other for d in captcha_domains) or 'captcha' in other:
             return True
     return False
 
@@ -7039,7 +7041,7 @@ class _AutoplayProgressDialog(object):
             self._set_prop("bridge.autoplay_title", _safe_str(self.target_title))
             self._set_prop("bridge.autoplay_episode_label", _safe_str(self.episode_label))
             if self.episode_label:
-                self._set_prop("bridge.autoplay_episode_display", "  " + self.episode_label)
+                self._set_prop("bridge.autoplay_episode_display", "  •  [COLOR yellow][B]" + self.episode_label + "[/B][/COLOR]")
             else:
                 self._set_prop("bridge.autoplay_episode_display", "")
             self._set_prop("bridge.autoplay_poster", _safe_str(self.poster_url))
@@ -7081,7 +7083,7 @@ class _AutoplayProgressDialog(object):
                 e_int = int(str(episode).strip())
                 self.episode_label = "S%02dE%02d" % (s_int, e_int)
                 self._set_prop("bridge.autoplay_episode_label", self.episode_label)
-                self._set_prop("bridge.autoplay_episode_display", "  " + self.episode_label)
+                self._set_prop("bridge.autoplay_episode_display", "  •  [COLOR yellow][B]" + self.episode_label + "[/B][/COLOR]")
         except Exception:
             pass
 
@@ -12779,7 +12781,14 @@ def _get_preloaded_next_episode(meta):
     cache_key = '%s_S%02dE%02d' % (tmdb_id, int(next_s), int(next_e))
     entry = _PRELOADED_NEXT_EPISODE_CACHE.get(cache_key)
     if entry and entry.get('links'):
-        return entry
+        valid_instant = [
+            l for l in entry.get('links', [])
+            if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)
+        ]
+        if valid_instant:
+            entry_copy = dict(entry)
+            entry_copy['links'] = valid_instant
+            return entry_copy
     return None
 
 def _run_phase1_current_episode_verification(meta, my_token, p, mon):
@@ -13131,9 +13140,15 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
     if not sorted_links:
         return
 
+    # Para reproducción instantánea, únicamente evaluar enlaces directos sin captcha ni torrents
+    instant_candidates = [
+        c for c in sorted_links
+        if not _is_torrent_link(c) and not _is_web_captcha_server(_get_link_server_name(c), c)
+    ]
+
     # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
     verified_top3 = []
-    for cand in sorted_links:
+    for cand in instant_candidates:
         if mon.abortRequested() or _get_global_monitor_token() != my_token:
             break
         if not p.isPlayingVideo():
@@ -13143,9 +13158,9 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
         try:
             with silenced_dialogs():
                 v_res = _verify_links_headless([cand], engine='balandro', p_dialog=None)
-            if v_res:
+            if v_res and not _is_torrent_link(v_res[0]) and not _is_web_captcha_server(_get_link_server_name(v_res[0]), v_res[0]):
                 verified_top3.append(v_res[0])
-                xbmc.log("Multi Bridge Pipeline [Fase 2]: Enlace verificado [%d/3]: %s" % (
+                xbmc.log("Multi Bridge Pipeline [Fase 2]: Enlace instantáneo verificado [%d/3]: %s" % (
                     len(verified_top3), _get_link_server_name(v_res[0])), xbmc.LOGINFO)
                 _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
                     'links': list(verified_top3),
@@ -13219,7 +13234,10 @@ def _play_preloaded_episode(preloaded):
     """Reproduce instantáneamente el siguiente episodio usando los enlaces precargados.
     Intenta reproducir los 3 enlaces uno por uno si alguno falla, supervisando la reproducción
     y aplicando todos los metadatos necesarios para Trakt, TMDb Helper y el reproductor."""
-    links = preloaded.get('links', [])
+    links = [
+        l for l in preloaded.get('links', [])
+        if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)
+    ]
     meta = preloaded.get('meta', {})
     matched_item = preloaded.get('matched_item')
     engine = preloaded.get('engine', 'balandro')
@@ -13509,10 +13527,17 @@ def _play_next_episode(meta, next_ep):
             cache_key = '%s_S%02dE%02d' % (str(tmdb_id), int(next_s), int(next_e))
             preloaded = _PRELOADED_NEXT_EPISODE_CACHE.get(cache_key)
             if preloaded and preloaded.get('links'):
-                xbmc.log("Multi Bridge: Iniciando reproducción instantánea de siguiente episodio desde precarga (%s)" % cache_key, xbmc.LOGINFO)
-                success = _play_preloaded_episode(preloaded)
-                if success:
-                    return
+                valid_instant = [
+                    l for l in preloaded.get('links', [])
+                    if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)
+                ]
+                if valid_instant:
+                    xbmc.log("Multi Bridge: Iniciando reproducción instantánea de siguiente episodio desde precarga (%s)" % cache_key, xbmc.LOGINFO)
+                    preloaded_to_play = dict(preloaded)
+                    preloaded_to_play['links'] = valid_instant
+                    success = _play_preloaded_episode(preloaded_to_play)
+                    if success:
+                        return
 
         msg = 'S%02dE%02d' % (next_s, next_e)
         if ep_title:
@@ -13643,8 +13668,14 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             next_e = self.next_ep.get('episode')
             if tmdb_id and next_s is not None and next_e is not None:
                 cache_key = '%s_S%02dE%02d' % (tmdb_id, int(next_s), int(next_e))
-                if cache_key in _PRELOADED_NEXT_EPISODE_CACHE and _PRELOADED_NEXT_EPISODE_CACHE[cache_key].get('links'):
-                    has_instant = True
+                if cache_key in _PRELOADED_NEXT_EPISODE_CACHE:
+                    entry = _PRELOADED_NEXT_EPISODE_CACHE[cache_key]
+                    valid_instant = [
+                        l for l in (entry.get('links') or [])
+                        if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)
+                    ]
+                    if valid_instant:
+                        has_instant = True
 
         if is_touch:
             # === Modo Tactil Celular (moderado y equilibrado, nunca gigante) ===
@@ -14200,11 +14231,15 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         episode_val = self.meta.get('episode') or episode
         try:
             if season_val and episode_val:
-                self.setProperty('bridge.episode_label', 'S%02dE%02d' % (int(season_val), int(episode_val)))
+                ep_txt = 'S%02dE%02d' % (int(season_val), int(episode_val))
+                self.setProperty('bridge.episode_label', ep_txt)
+                self.setProperty('bridge.episode_display', '  •  [COLOR yellow][B]%s[/B][/COLOR]' % ep_txt)
             else:
                 self.setProperty('bridge.episode_label', '')
+                self.setProperty('bridge.episode_display', '')
         except Exception:
             self.setProperty('bridge.episode_label', '')
+            self.setProperty('bridge.episode_display', '')
 
         # Contadores por calidad
         c_4k, c_1080, c_720, c_sd = 0, 0, 0, 0
