@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Web Stream Bridge - Capture Helper (Native Extension Engine)
-Launches Chromium with an internal lightweight background sniffer extension,
+Launches Chromium / Edge with an internal lightweight background sniffer extension,
 clean user session, and zero DevTools/CDP debugging flags.
-Prevents any debugger pauses, bot detection, or overlay issues.
+Works 100% in-process within Kodi's Python or as a standalone CLI script.
+No external Python executable required.
 """
 
 import sys
@@ -19,13 +20,19 @@ import http.server
 import threading
 
 CHROME_CANDIDATES = [
-    r"C:\Users\ANGEL\3D Objects\Chrome\chrome.exe",
-    r"C:\Program Files (x86)\Microsoft\EdgeCore\Optimized\msedge.exe",
-    r"C:\Program Files (x86)\Microsoft\EdgeCore\157.0.4341.57\msedge.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
     r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    r"C:\Program Files\Opera\launcher.exe",
+    r"C:\Program Files (x86)\Opera\launcher.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera\launcher.exe"),
+    r"C:\Program Files\Vivaldi\Application\vivaldi.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe"),
 ]
 
 KNOWN_ADBLOCK_IDS = [
@@ -89,7 +96,27 @@ def find_browser(custom_path=None):
         if os.path.exists(path):
             return path
 
-    for name in ["chrome.exe", "msedge.exe", "brave.exe", "chrome", "msedge"]:
+    # Búsqueda dinámica para Edge / EdgeCore y Chrome con carpetas de versiones
+    dynamic_patterns = [
+        r"C:\Program Files (x86)\Microsoft\Edge*\**\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge*\**\msedge.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge*\**\msedge.exe"),
+        r"C:\Program Files\Google\Chrome*\**\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome*\**\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome*\**\chrome.exe"),
+        r"C:\Program Files\BraveSoftware\Brave-Browser*\**\brave.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser*\**\brave.exe"),
+    ]
+    for pattern in dynamic_patterns:
+        try:
+            matches = glob.glob(pattern, recursive=True)
+            for m in matches:
+                if os.path.isfile(m):
+                    return m
+        except Exception:
+            pass
+
+    for name in ["msedge.exe", "chrome.exe", "brave.exe", "msedge", "chrome"]:
         found = shutil.which(name)
         if found and os.path.exists(found):
             return found
@@ -150,16 +177,21 @@ def sync_cookies_from_main_browser(dest_profile):
             except Exception:
                 pass
 
-def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=False, load_adblock=True):
+def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, load_adblock=True, progress_dialog=None, monitor=None):
     browser_path = find_browser(custom_browser)
     if not browser_path:
-        return {"status": "error", "message": "No se encontro ningun navegador Chromium (Chrome o Edge) en el sistema."}
+        return {"status": "error", "message": "No se encontró ningún navegador Chromium (Chrome o Edge) en el sistema."}
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     ext_dir = os.path.abspath(os.path.join(script_dir, "..", "extension"))
 
     if not os.path.isdir(ext_dir) or not os.path.isfile(os.path.join(ext_dir, "manifest.json")):
-        return {"status": "error", "message": "No se encontro la extension de captura en resources/extension"}
+        # Búsqueda alternativa por ruta canónica de Kodi
+        fallback_ext = os.path.expandvars(r"%APPDATA%\Kodi\addons\plugin.video.bridge.multi\resources\extension")
+        if os.path.isdir(fallback_ext) and os.path.isfile(os.path.join(fallback_ext, "manifest.json")):
+            ext_dir = fallback_ext
+        else:
+            return {"status": "error", "message": "No se encontró la extensión de captura en resources/extension"}
 
     server_port = find_free_port()
     port_config = os.path.join(ext_dir, "port.json")
@@ -205,11 +237,13 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=False,
 
     try:
         server = http.server.HTTPServer(("127.0.0.1", server_port), StreamReceiverHandler)
-        server.timeout = 0.5
     except Exception as e:
         return {"status": "error", "message": f"No se pudo iniciar el servidor receptor: {e}"}
 
-    user_data_dir = os.path.expandvars(r"%APPDATA%\Kodi\userdata\addon_data\plugin.video.webbridge\profile")
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    user_data_dir = os.path.expandvars(r"%APPDATA%\Kodi\userdata\addon_data\plugin.video.bridge.multi\web_profile")
     os.makedirs(user_data_dir, exist_ok=True)
     sync_cookies_from_main_browser(user_data_dir)
 
@@ -229,8 +263,8 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=False,
     ]
 
     if app_mode:
-        width = 800
-        height = 620
+        width = 860
+        height = 640
         pos_x = 0
         pos_y = 0
         try:
@@ -255,27 +289,84 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=False,
             target_url
         ])
 
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bring_browser_to_front(proc.pid, is_app=app_mode)
+    creationflags = 0x08000000 if os.name == 'nt' else 0
+    clean_env = {k: v for k, v in os.environ.items() if 'python' not in k.lower()}
+
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=clean_env,
+            creationflags=creationflags
+        )
+    except Exception as pe:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+        return {"status": "error", "message": f"Error al ejecutar navegador: {pe}"}
+
+    # Elevar ventana del navegador sobre Kodi de forma diferida para esperar su renderizado
+    def _bring_delayed():
+        for _ in range(8):
+            time.sleep(0.35)
+            if proc.poll() is not None or captured_event.is_set():
+                break
+            bring_browser_to_front(proc.pid, is_app=app_mode)
+
+    threading.Thread(target=_bring_delayed, daemon=True).start()
 
     start_time = time.time()
     try:
         while True:
             if proc.poll() is not None:
+                # Margen de gracia por si la extensión interceptó justo al cerrarse
+                for _ in range(6):
+                    if captured_event.is_set():
+                        break
+                    time.sleep(0.25)
                 if captured_event.is_set():
                     break
-                return {"status": "error", "message": "Navegador cerrado por el usuario antes de reproducir."}
+                return {"status": "error", "message": "Navegador cerrado antes de completar la verificación."}
 
             if captured_event.is_set():
                 break
 
             if time.time() - start_time > timeout:
-                return {"status": "error", "message": "Tiempo de espera agotado sin detectar stream de video."}
+                return {"status": "error", "message": "Tiempo de espera agotado sin detectar stream de vídeo."}
 
-            server.handle_request()
+            if progress_dialog:
+                try:
+                    if progress_dialog.iscanceled():
+                        return {"status": "error", "message": "Cancelado por el usuario."}
+                    elapsed = time.time() - start_time
+                    pct = min(99, int((elapsed / float(timeout)) * 100))
+                    rem = max(0, int(timeout - elapsed))
+                    mins = rem // 60
+                    secs = rem % 60
+                    rem_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+                    progress_dialog.update(
+                        pct,
+                        f'Resuelve el captcha en la ventana del navegador...\nTiempo restante: {rem_str}\nEl vídeo se reproducirá automáticamente al finalizar.'
+                    )
+                except Exception:
+                    pass
+
+            if monitor:
+                try:
+                    if monitor.abortRequested():
+                        return {"status": "error", "message": "Kodi se está cerrando."}
+                except Exception:
+                    pass
+
+            time.sleep(0.25)
 
     finally:
         try:
+            server.shutdown()
             server.server_close()
         except Exception:
             pass
@@ -291,7 +382,7 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=False,
     if captured_data and captured_data.get("status") == "ok":
         return captured_data
 
-    return {"status": "error", "message": "No se detecto enlace de reproduccion."}
+    return {"status": "error", "message": "No se detectó enlace de reproducción."}
 
 def main():
     import argparse

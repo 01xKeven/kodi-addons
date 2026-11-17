@@ -1039,13 +1039,16 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
 
-        # Disparar precarga del siguiente episodio en segundo plano si está activado en ajustes
-        if _bridge_addon.getSetting('preload_next_episode') != 'false':
-            if _m_dict.get('season') and _m_dict.get('episode'):
-                try:
-                    threading.Thread(target=_start_next_episode_preloader, args=(_m_dict, my_token), daemon=True).start()
-                except Exception as _pre_e:
-                    xbmc.log("Multi Bridge: error lanzando precarga de siguiente episodio: %s" % str(_pre_e), xbmc.LOGWARNING)
+        # Disparar pipeline secuencial en segundo plano (Fase 1: verificar enlaces faltantes del capitulo actual -> Fase 2: precargar siguiente capitulo)
+        try:
+            threading.Thread(
+                target=_start_playback_background_pipeline,
+                args=(_m_dict, my_token),
+                daemon=True,
+                name="MultiBridgePlaybackPipeline"
+            ).start()
+        except Exception as _pipe_e:
+            xbmc.log("Multi Bridge: error lanzando pipeline en segundo plano: %s" % str(_pipe_e), xbmc.LOGWARNING)
 
         # Re-sincronizar inmediatamente metadatos globales para Trakt y TMDb Helper al iniciar vídeo
         sync_tmdbhelper_playerstring(_m_dict)
@@ -1250,6 +1253,14 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmc.log("Multi Bridge: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
                 break
             try:
+                # Sincronizar active_idx dinámicamente si la Fase 1 reordenó la lista de enlaces
+                try:
+                    _p_idx_prop = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+                    if _p_idx_prop and _p_idx_prop.isdigit():
+                        active_idx = int(_p_idx_prop)
+                except Exception:
+                    pass
+
                 # Mantener IDs de Trakt activos durante el arranque para evitar que eventos stop asíncronos los borren
                 if time.time() < _trakt_reassert_deadline:
                     if not xbmcgui.Window(10000).getProperty('script.trakt.ids'):
@@ -1337,7 +1348,16 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                             switch_ok = _verify_playback_started(is_torrent=is_t)
                                             if not switch_ok:
                                                 _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                if _is_kodi_modal_dialog_open():
+                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
                                                 show_floating_links_dialog()
+                                            return
+                                        else:
+                                            chosen_l = chosen_link or c_links[chosen_idx]
+                                            _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                            if _is_kodi_modal_dialog_open():
+                                                _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                            show_floating_links_dialog()
                                             return
                                     else:
                                         _clear_session_failed_links(cur_mk)
@@ -7701,6 +7721,7 @@ def run_parallel_search(engine='alfa'):
 # ---------------------------------------------------------
 def _serialize_item(it):
     if not it: return None
+    if isinstance(it, dict): return it
     d = {}
     dict_to_use = it.__dict__ if hasattr(it, '__dict__') else {}
     for k in dict_to_use:
@@ -9447,8 +9468,19 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
 
 _BG_COLLECTOR_TOKEN = 0
 _BG_COLLECTOR_LOCK = threading.Lock()
+_BG_COLLECTOR_RUNNING = False
 
 def _fast_autoplay_background_collector(engine, meta, matched_item_holder, playing_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, collector_token=0):
+    global _BG_COLLECTOR_RUNNING
+    with _BG_COLLECTOR_LOCK:
+        _BG_COLLECTOR_RUNNING = True
+    try:
+        _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, playing_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, collector_token)
+    finally:
+        with _BG_COLLECTOR_LOCK:
+            _BG_COLLECTOR_RUNNING = False
+
+def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, playing_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, collector_token=0):
     """Continúa la búsqueda de TODOS los canales restantes en segundo plano
     y verifica todos los enlaces de forma suave (bajo consumo CPU), actualizando la
     caché de sesión para que al pausar (¿Cambiar enlace?) o detener el vídeo estén todos disponibles."""
@@ -10633,7 +10665,6 @@ def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
         xbmcgui.Dialog().notification('Multi Bridge', 'Servidores con captcha no disponibles en Android', '', 4000)
         return None
 
-    import subprocess
     page_url = getattr(link, 'url', '') or ''
     if not page_url:
         return None
@@ -10641,36 +10672,16 @@ def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
     page_url = page_url.split('|')[0]
 
     addon_path = ADDON_PATH if ADDON_PATH else xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
-    capture_script = os.path.join(addon_path, 'resources', 'lib', 'bridge_capture.py')
-    if not os.path.exists(capture_script):
-        fallback = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.bridge.multi\resources\lib\bridge_capture.py')
-        if os.path.exists(fallback):
-            capture_script = fallback
-        else:
-            xbmcgui.Dialog().notification('Multi Bridge', 'Falta el modulo de captura web', '', 3500)
-            return None
+    lib_path = os.path.join(addon_path, 'resources', 'lib')
+    if lib_path not in sys.path:
+        sys.path.insert(0, lib_path)
 
-    python_exe = sys.executable
-    if not python_exe or 'kodi' in python_exe.lower() or not os.path.exists(python_exe):
-        import shutil
-        found = shutil.which('python')
-        if found and os.path.exists(found):
-            python_exe = found
-        else:
-            local_app = os.environ.get("LOCALAPPDATA", "")
-            candidates = [
-                r"C:\Users\ANGEL\AppData\Local\Programs\Python\Python314\python.exe",
-                os.path.join(local_app, r"Programs\Python\Python314\python.exe"),
-                os.path.join(local_app, r"Programs\Python\Python313\python.exe"),
-                os.path.join(local_app, r"Programs\Python\Python312\python.exe"),
-                os.path.join(local_app, r"Programs\Python\Python311\python.exe"),
-            ]
-            for c in candidates:
-                if os.path.exists(c):
-                    python_exe = c
-                    break
-
-    xbmc.log(f"Multi Bridge: Capturando stream web para {page_url} (python={python_exe}, script={capture_script})", xbmc.LOGINFO)
+    try:
+        from bridge_capture import capture_stream
+    except Exception as ie:
+        xbmc.log(f"Multi Bridge: Error importando bridge_capture: {ie}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification('Multi Bridge', 'Error al cargar módulo de captura', '', 3500)
+        return None
 
     icon_path = os.path.join(addon_path, 'icon.png')
     if not os.path.exists(icon_path):
@@ -10687,99 +10698,31 @@ def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
     p_dialog = xbmcgui.DialogProgress()
     p_dialog.create(
         'Multi Bridge — Verificación Humana (Captcha)',
-        'Abriendo ventana flotante para resolver captcha...\nResuelve el captcha en la ventana flotante de Chrome.\nEl vídeo se reproducirá automáticamente al finalizar.'
+        'Abriendo ventana flotante para resolver captcha...\nResuelve el captcha en la ventana del navegador.\nEl vídeo se reproducirá automáticamente al finalizar.'
     )
 
-    clean_env = {k: v for k, v in os.environ.items() if 'python' not in k.lower()}
-    creationflags = 0x08000000 if os.name == 'nt' else 0
-
-    cmd = [python_exe, capture_script, page_url, f"--timeout={total_timeout}", "--app"]
-    xbmc.log(f"Multi Bridge: Intentando Popen cmd={cmd} flags={creationflags}", xbmc.LOGINFO)
-
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=clean_env,
-            creationflags=creationflags
-        )
-        xbmc.log(f"Multi Bridge: Subprocess iniciado pid={proc.pid}", xbmc.LOGINFO)
-    except Exception as e:
-        try: p_dialog.close()
-        except Exception: pass
-        import traceback
-        xbmc.log(f"Multi Bridge: ERROR en Popen: {e}\n{traceback.format_exc()}", xbmc.LOGERROR)
-        xbmcgui.Dialog().notification('Multi Bridge', f'Error Popen: {e}', '', 4000)
-        return None
-
     monitor = xbmc.Monitor()
-    elapsed = 0.0
-    xbmc.log(f"Multi Bridge: Esperando subproceso con DialogProgress (poll={proc.poll()})", xbmc.LOGINFO)
-    while proc.poll() is None:
-        xbmc.sleep(500)
-        elapsed += 0.5
-
-        if p_dialog.iscanceled():
-            xbmc.log("Multi Bridge: Cancelado por el usuario en DialogProgress", xbmc.LOGINFO)
-            try: proc.terminate()
-            except Exception: pass
-            break
-
-        if monitor.abortRequested():
-            xbmc.log("Multi Bridge: Kodi abortRequested=True", xbmc.LOGINFO)
-            try: proc.terminate()
-            except Exception: pass
-            break
-
-        if elapsed >= total_timeout:
-            xbmc.log("Multi Bridge: Tiempo agotado esperando subproceso", xbmc.LOGINFO)
-            try: proc.terminate()
-            except Exception: pass
-            break
-
-        pct = min(99, int((elapsed / float(total_timeout)) * 100))
-        rem = max(0, int(total_timeout - elapsed))
-        mins = rem // 60
-        secs = rem % 60
-        rem_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-        p_dialog.update(
-            pct,
-            f'Resuelve el captcha en la ventana flotante de Chrome...\nTiempo restante: {rem_str}\nEl vídeo se reproducirá automáticamente al finalizar.'
-        )
-
-    xbmc.log(f"Multi Bridge: Subproceso salio con poll={proc.poll()} tras {elapsed}s", xbmc.LOGINFO)
-
-    stdout, stderr = proc.communicate()
-    output_text = stdout.strip()
-    xbmc.log(f"Multi Bridge: bridge_capture retcode={proc.returncode} stdout='{output_text}' stderr='{stderr.strip()}'", xbmc.LOGINFO)
+    data = capture_stream(
+        page_url,
+        timeout=total_timeout,
+        app_mode=True,
+        load_adblock=True,
+        progress_dialog=p_dialog,
+        monitor=monitor
+    )
 
     try:
-        data = json.loads(output_text)
-    except Exception as je:
-        try: p_dialog.close()
-        except Exception: pass
-        xbmc.log(f"Multi Bridge: bridge_capture json error: {je}, raw='{output_text}'", xbmc.LOGWARNING)
-        xbmcgui.Dialog().notification('Multi Bridge', 'No se capturo el stream de video', '', 3500)
-        return None
-
-    if data.get("status") != "ok":
-        try: p_dialog.close()
-        except Exception: pass
-        msg = data.get("message", "Error al capturar el video")
-        xbmcgui.Dialog().notification('Multi Bridge', msg[:60], '', 3500)
-        return None
-
-    # Stream capturado correctamente
-    try:
-        p_dialog.update(100, '¡Stream capturado con éxito! Iniciando reproducción...')
-        xbmc.sleep(400)
         p_dialog.close()
     except Exception:
         pass
 
+    if not data or data.get("status") != "ok":
+        msg = data.get("message", "Error al capturar el video") if isinstance(data, dict) else "No se capturó el stream de video"
+        xbmc.log(f"Multi Bridge: Captura captcha fallida: {msg}", xbmc.LOGWARNING)
+        xbmcgui.Dialog().notification('Multi Bridge', msg[:60], '', 4000)
+        return None
+
+    # Stream capturado correctamente
     stream_url = data.get("url")
     headers = data.get("headers", {})
     mime_type = data.get("mime_type", "")
@@ -10873,23 +10816,29 @@ def sync_captcha_servers():
         # 1. Sincronizar conectores de servidores protegidos (Powvideo y Streamplay)
         for srv in ('powvideo', 'streamplay'):
             json_file = os.path.join(balandro_servers, f'{srv}.json')
+            src_json = os.path.join(addon_path, 'resources', 'servers', f'{srv}.json')
+            src_py = os.path.join(addon_path, 'resources', 'servers', f'{srv}.py')
+            dst_py = os.path.join(balandro_servers, f'{srv}.py')
             need_patch = False
             if not os.path.exists(json_file):
                 need_patch = True
             else:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    if '"active": false' in content.lower() or 'Requiere' not in content:
-                        need_patch = True
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        if '"active": false' in content.lower() or 'Requiere' not in content:
+                            need_patch = True
+                except Exception:
+                    need_patch = True
 
-            if need_patch:
-                src_json = os.path.join(addon_path, 'resources', 'servers', f'{srv}.json')
-                src_py = os.path.join(addon_path, 'resources', 'servers', f'{srv}.py')
-                if os.path.exists(src_json):
-                    shutil.copy2(src_json, json_file)
-                if os.path.exists(src_py):
-                    shutil.copy2(src_py, os.path.join(balandro_servers, f'{srv}.py'))
-                xbmc.log(f"Multi Bridge: Servidor protegido ({srv.capitalize()}) sincronizado en Balandro", xbmc.LOGINFO)
+            if need_patch and os.path.exists(src_json):
+                try: shutil.copy2(src_json, json_file)
+                except Exception: pass
+
+            if os.path.exists(src_py):
+                try: shutil.copy2(src_py, dst_py)
+                except Exception: pass
+            xbmc.log(f"Multi Bridge: Servidor protegido ({srv.capitalize()}) sincronizado en Balandro", xbmc.LOGINFO)
 
         # 2. Asegurar proveedores Powvideo (1) y Streamplay (2) en hdfull.py
         hdfull_file = os.path.join(balandro_channels, 'hdfull.py')
@@ -12788,17 +12737,212 @@ def _get_preloaded_next_episode(meta):
         return entry
     return None
 
-def _start_next_episode_preloader(meta, my_token):
-    """Busca en segundo plano enlaces del siguiente episodio con bajo consumo en CPU y RAM.
+def _run_phase1_current_episode_verification(meta, my_token, p, mon):
+    """FASE 1: Continúa la verificación pasiva y con bajo consumo de CPU de los enlaces faltantes
+    del capítulo actual en segundo plano, reclasificando y ordenando estrictamente según las
+    preferencias del usuario (Idioma, Calidad, Servidores) para nutrir el OSD y el menú de pausa."""
+    global _BG_COLLECTOR_RUNNING
+
+    # Si hay un recolector de Fast Autoplay activo para este capítulo, esperar a que culmine
+    while _BG_COLLECTOR_RUNNING:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            return
+        if mon.waitForAbort(0.5):
+            return
+
+    unverified_list = []
+    curr_verified = []
+    matched_item = None
+    engine = 'balandro'
+
+    cur_tmdb = _norm_id_str(meta.get('tmdb'))
+    cur_season = _norm_id_str(meta.get('season'))
+    cur_ep = _norm_id_str(meta.get('episode'))
+
+    ram = _get_ram_search_cache()
+    if ram and isinstance(ram, dict):
+        r_meta = ram.get('meta') or {}
+        r_tmdb = _norm_id_str(r_meta.get('tmdb') or meta.get('tmdb'))
+        r_season = _norm_id_str(r_meta.get('season') or meta.get('season'))
+        r_ep = _norm_id_str(r_meta.get('episode') or meta.get('episode'))
+
+        matches = True
+        if cur_tmdb and r_tmdb and cur_tmdb != r_tmdb: matches = False
+        if cur_season and r_season and cur_season != r_season: matches = False
+        if cur_ep and r_ep and cur_ep != r_ep: matches = False
+
+        if matches:
+            unverified_list = list(ram.get('unverified_links') or [])
+            curr_verified = list(ram.get('links') or [])
+            matched_item = ram.get('matched_item')
+            engine = ram.get('engine', 'balandro') or 'balandro'
+
+    if not unverified_list:
+        disk_cache = _read_search_cache_atomic()
+        if disk_cache and isinstance(disk_cache, dict):
+            d_meta = disk_cache.get('meta') or {}
+            d_tmdb = _norm_id_str(d_meta.get('tmdb') or meta.get('tmdb'))
+            d_season = _norm_id_str(d_meta.get('season') or meta.get('season'))
+            d_ep = _norm_id_str(d_meta.get('episode') or meta.get('episode'))
+
+            matches = True
+            if cur_tmdb and d_tmdb and cur_tmdb != d_tmdb: matches = False
+            if cur_season and d_season and cur_season != d_season: matches = False
+            if cur_ep and d_ep and cur_ep != d_ep: matches = False
+
+            if matches and disk_cache.get('unverified_links'):
+                engine = disk_cache.get('engine', 'balandro') or 'balandro'
+                unverified_raw = disk_cache.get('unverified_links') or []
+                verified_raw = disk_cache.get('links') or []
+                unverified_list = [_deserialize_item(x, engine) if isinstance(x, dict) else x for x in unverified_raw]
+                unverified_list = [x for x in unverified_list if x and getattr(x, 'url', None)]
+                if not curr_verified:
+                    curr_verified = [_deserialize_item(x, engine) if isinstance(x, dict) else x for x in verified_raw]
+                    curr_verified = [x for x in curr_verified if x and getattr(x, 'url', None)]
+                if not matched_item:
+                    matched_item = _deserialize_item(disk_cache.get('item'), engine) if isinstance(disk_cache.get('item'), dict) else disk_cache.get('item')
+
+    if not unverified_list:
+        xbmc.log("Multi Bridge Pipeline [Fase 1]: No hay enlaces pendientes por verificar para el capítulo actual.", xbmc.LOGINFO)
+        return
+
+    xbmc.log("Multi Bridge Pipeline [Fase 1]: Iniciando verificación pasiva de %d enlace(s) faltante(s) del capítulo actual..." % len(unverified_list), xbmc.LOGINFO)
+
+    # Identificar enlace actualmente en reproducción para preservar su selección en OSD
+    global _current_playing_link_index
+    playing_url = None
+    playing_uid = None
+    try:
+        cur_p_idx_str = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+        if cur_p_idx_str and cur_p_idx_str.isdigit():
+            cur_idx = int(cur_p_idx_str)
+            if 0 <= cur_idx < len(curr_verified):
+                playing_link = curr_verified[cur_idx]
+                playing_url = getattr(playing_link, 'url', None)
+                playing_uid = _get_link_unique_id(playing_link)
+    except Exception:
+        pass
+
+    remaining_unverified = list(unverified_list)
+    for cand in unverified_list:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
+            return
+
+        # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
+        while _floating_dialog_active or _is_dialog_active_global():
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+                return
+            if mon.waitForAbort(0.5):
+                return
+
+        cand_url = getattr(cand, 'url', None)
+        if cand_url and any(getattr(v, 'url', None) == cand_url for v in curr_verified):
+            if cand in remaining_unverified:
+                remaining_unverified.remove(cand)
+            continue
+
+        is_valid = False
+        verified_cand = None
+
+        if _is_torrent_link(cand):
+            is_valid = True
+            verified_cand = cand
+        elif _is_web_captcha_server(_get_link_server_name(cand), cand):
+            if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                if _check_web_captcha_link_alive(cand_url or ''):
+                    is_valid = True
+                    verified_cand = cand
+        else:
+            try:
+                with silenced_dialogs():
+                    v_res = _verify_links_headless([cand], engine=engine, p_dialog=None)
+                    if v_res and len(v_res) > 0:
+                        is_valid = True
+                        verified_cand = v_res[0]
+            except Exception as _ve:
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Error verificando enlace candidato: %s" % str(_ve), xbmc.LOGDEBUG)
+
+        if cand in remaining_unverified:
+            remaining_unverified.remove(cand)
+
+        if is_valid and verified_cand:
+            try: verified_cand.bridge_engine = engine
+            except Exception: pass
+            curr_verified.append(verified_cand)
+
+            # Re-clasificar y ordenar estrictamente según preferencias del usuario (Idioma, Calidad, Servidores)
+            sorted_verified = _filter_and_sort_links(curr_verified)
+            curr_verified = sorted_verified
+
+            # Actualizar el índice del enlace actualmente en reproducción
+            if playing_uid or playing_url:
+                new_p_idx = -1
+                for i, l in enumerate(sorted_verified):
+                    if playing_uid and _get_link_unique_id(l) == playing_uid:
+                        new_p_idx = i
+                        break
+                    if playing_url and getattr(l, 'url', None) == playing_url:
+                        new_p_idx = i
+                        break
+                if new_p_idx >= 0:
+                    _current_playing_link_index = new_p_idx
+                    try:
+                        xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentPlayingIndex', str(new_p_idx))
+                    except Exception:
+                        pass
+
+            # Guardar progresivamente en caché RAM y disco
+            meta_copy = dict(meta)
+            try:
+                _store_ram_search_cache(curr_verified, matched_item, meta_copy, engine, unverified_links=remaining_unverified)
+                _save_search_cache_atomic({
+                    'item': _serialize_item(matched_item),
+                    'links': [_serialize_item(l) for l in curr_verified],
+                    'unverified_links': [_serialize_item(l) for l in remaining_unverified],
+                    'meta': meta_copy,
+                    'engine': engine,
+                    'is_preloaded_session': bool(remaining_unverified)
+                })
+                if _in_own_list():
+                    xbmc.executebuiltin('Container.Refresh')
+            except Exception as _save_e:
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Error guardando caché incremental: %s" % str(_save_e), xbmc.LOGWARNING)
+
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Nuevo enlace verificado y añadido al OSD/menú (%s). Total verificados: %d" % (
+                _get_link_server_name(verified_cand), len(curr_verified)
+            ), xbmc.LOGINFO)
+
+        # Micro-pausa pasiva para mantener la CPU en reposo
+        if mon.waitForAbort(0.2):
+            return
+
+    # Fin de Fase 1: guardar estado definitivo limpio
+    try:
+        meta_copy = dict(meta)
+        _store_ram_search_cache(curr_verified, matched_item, meta_copy, engine, unverified_links=[])
+        _save_search_cache_atomic({
+            'item': _serialize_item(matched_item),
+            'links': [_serialize_item(l) for l in curr_verified],
+            'unverified_links': [],
+            'meta': meta_copy,
+            'engine': engine,
+            'is_preloaded_session': False
+        })
+        if _in_own_list():
+            xbmc.executebuiltin('Container.Refresh')
+    except Exception:
+        pass
+
+    xbmc.log("Multi Bridge Pipeline [Fase 1]: Completada con éxito. %d enlaces totales verificados y listos." % len(curr_verified), xbmc.LOGINFO)
+
+
+def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
+    """FASE 2: Busca en segundo plano enlaces del siguiente capítulo con bajo consumo en CPU y RAM.
     Verifica los enlaces y guarda en memoria los 3 primeros respetando las preferencias del usuario."""
-    p = xbmc.Player()
-    mon = xbmc.Monitor()
-
-    xbmc.log("Multi Bridge Preload: Monitor activo, esperando 30s reales de reproducción antes de buscar...", xbmc.LOGINFO)
-
-    # Esperar 30 segundos reales (tiempo de reloj, no de reproducción)
+    # Esperar suavemente al menos 8 segundos de reproducción para dar estabilidad
     start_real_time = time.time()
-    while (time.time() - start_real_time) < 30.0:
+    while (time.time() - start_real_time) < 8.0:
         if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
             return
         if mon.waitForAbort(0.5):
@@ -12806,7 +12950,7 @@ def _start_next_episode_preloader(meta, my_token):
 
     next_ep = _get_next_episode_info(meta)
     if not next_ep:
-        xbmc.log("Multi Bridge Preload: No hay siguiente episodio disponible para precargar", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: No hay siguiente episodio disponible para precargar", xbmc.LOGINFO)
         return
 
     tmdb_id = str(meta.get('tmdb') or meta.get('tmdb_id') or '')
@@ -12815,10 +12959,10 @@ def _start_next_episode_preloader(meta, my_token):
     cache_key = '%s_S%02dE%02d' % (tmdb_id, next_s, next_e)
 
     if cache_key in _PRELOADED_NEXT_EPISODE_CACHE and _PRELOADED_NEXT_EPISODE_CACHE[cache_key].get('links'):
-        xbmc.log("Multi Bridge Preload: Episodio %s ya precargado en memoria" % cache_key, xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: Episodio %s ya precargado en memoria" % cache_key, xbmc.LOGINFO)
         return
 
-    xbmc.log("Multi Bridge Preload: Iniciando búsqueda en segundo plano de %s..." % cache_key, xbmc.LOGINFO)
+    xbmc.log("Multi Bridge Pipeline [Fase 2]: Iniciando búsqueda en segundo plano de %s..." % cache_key, xbmc.LOGINFO)
 
     next_meta = dict(meta)
     next_meta['season'] = next_s
@@ -12870,7 +13014,7 @@ def _start_next_episode_preloader(meta, my_token):
         enabled_players.append(ch_info)
 
     if not enabled_players:
-        xbmc.log("Multi Bridge Preload: No hay canales de series activos en Balandro", xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: No hay canales de series activos en Balandro", xbmc.LOGINFO)
         return
 
     all_found_links = []
@@ -12934,7 +13078,7 @@ def _start_next_episode_preloader(meta, my_token):
         time.sleep(0.2)
 
     if not all_found_links:
-        xbmc.log("Multi Bridge Preload: No se encontraron enlaces para %s" % cache_key, xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: No se encontraron enlaces para %s" % cache_key, xbmc.LOGINFO)
         return
 
     # Filtrar y ordenar enlaces según las preferencias del usuario (Idioma, Calidad, Servidores)
@@ -12942,15 +13086,12 @@ def _start_next_episode_preloader(meta, my_token):
     if not sorted_links:
         return
 
-    # Verificar en segundo plano hasta encontrar 3 enlaces funcionales.
-    # Si no se llega a 3, se guarda con los que hayan funcionado (1 o 2).
-    # Si no hay ningún enlace funcional, no pasa nada y el proceso se cierra silenciosamente.
+    # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
     verified_top3 = []
     for cand in sorted_links:
         if mon.abortRequested() or _get_global_monitor_token() != my_token:
             break
         if not p.isPlayingVideo():
-            # Si el usuario detuvo o pausó el vídeo, salir del bucle conservando los funcionales ya verificados
             break
         if len(verified_top3) >= 3:
             break
@@ -12959,9 +13100,8 @@ def _start_next_episode_preloader(meta, my_token):
                 v_res = _verify_links_headless([cand], engine='balandro', p_dialog=None)
             if v_res:
                 verified_top3.append(v_res[0])
-                xbmc.log("Multi Bridge Preload: Enlace verificado [%d/3]: %s" % (
+                xbmc.log("Multi Bridge Pipeline [Fase 2]: Enlace verificado [%d/3]: %s" % (
                     len(verified_top3), _get_link_server_name(v_res[0])), xbmc.LOGINFO)
-                # Guardar inmediatamente de forma incremental: listo desde el 1er o 2do enlace funcional
                 _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
                     'links': list(verified_top3),
                     'all_links': sorted_links,
@@ -12976,22 +13116,59 @@ def _start_next_episode_preloader(meta, my_token):
                 except Exception:
                     pass
         except Exception as _ve:
-            xbmc.log("Multi Bridge Preload: Error verificando enlace: %s" % str(_ve), xbmc.LOGDEBUG)
+            xbmc.log("Multi Bridge Pipeline [Fase 2]: Error verificando enlace: %s" % str(_ve), xbmc.LOGDEBUG)
         time.sleep(0.1)
 
     if verified_top3:
-        xbmc.log("Multi Bridge Preload: ¡Listo! %d enlace(s) funcional(es) guardado(s) en memoria para reproducción instantánea de %s" % (
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: ¡Listo! %d enlace(s) funcional(es) guardado(s) en memoria para reproducción instantánea de %s" % (
             len(verified_top3), cache_key), xbmc.LOGINFO)
     else:
-        # Si no hay ningún enlace funcional, simplemente no pasa nada y se cierra el proceso silenciosamente sin mostrar nada en pantalla
         _PRELOADED_NEXT_EPISODE_CACHE.pop(cache_key, None)
         try:
             if xbmcgui.Window(10000).getProperty('BridgeMulti.PreloadedNextEpKey') == str(cache_key):
                 xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', '')
         except Exception:
             pass
-        xbmc.log("Multi Bridge Preload: Ningún enlace funcional encontrado para %s. Proceso cerrado silenciosamente sin mostrar nada en pantalla." % cache_key, xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: Ningún enlace funcional encontrado para %s." % cache_key, xbmc.LOGINFO)
+
+
+def _start_playback_background_pipeline(meta, my_token):
+    """Pipeline orquestador de dos fases en segundo plano:
+    FASE 1: Verifica suavemente los enlaces pendientes del capítulo actual y actualiza el OSD y menú de pausa.
+    FASE 2: Una vez terminada la Fase 1, precarga los enlaces del siguiente capítulo para reproducción instantánea."""
+    p = xbmc.Player()
+    mon = xbmc.Monitor()
+
+    xbmc.log("Multi Bridge Pipeline: Iniciando orquestador de dos fases en segundo plano...", xbmc.LOGINFO)
+
+    # Ejecutar FASE 1
+    try:
+        _run_phase1_current_episode_verification(meta, my_token, p, mon)
+    except Exception as e:
+        xbmc.log("Multi Bridge Pipeline: Error en Fase 1: %s" % str(e), xbmc.LOGWARNING)
+
+    # Validar que la reproducción continúa activa antes de pasar a Fase 2
+    if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+        xbmc.log("Multi Bridge Pipeline: Descartado antes de Fase 2 (reproducción terminada o nueva sesión)", xbmc.LOGINFO)
         return
+
+    if _bridge_addon.getSetting('preload_next_episode') == 'false':
+        xbmc.log("Multi Bridge Pipeline: Precarga de siguiente capítulo desactivada en ajustes.", xbmc.LOGINFO)
+        return
+
+    if not meta or not meta.get('season') or not meta.get('episode'):
+        return
+
+    # Ejecutar FASE 2
+    try:
+        _run_phase2_next_episode_preloader(meta, my_token, p, mon)
+    except Exception as e:
+        xbmc.log("Multi Bridge Pipeline: Error en Fase 2: %s" % str(e), xbmc.LOGWARNING)
+
+
+def _start_next_episode_preloader(meta, my_token):
+    """Wrapper de compatibilidad: redirige al pipeline unificado de dos fases."""
+    _start_playback_background_pipeline(meta, my_token)
 
 def _play_preloaded_episode(preloaded):
     """Reproduce instantáneamente el siguiente episodio usando los enlaces precargados.
@@ -13044,7 +13221,7 @@ def _play_preloaded_episode(preloaded):
             and not _is_torrent_link(l)
         ]
 
-        _store_ram_search_cache(initial_verified, matched_item, meta, engine)
+        _store_ram_search_cache(initial_verified, matched_item, meta, engine, unverified_links=unverified_pending)
         _save_search_cache_atomic({
             'item': _serialize_item(matched_item),
             'links': [_serialize_item(l) for l in initial_verified],
@@ -14541,6 +14718,49 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
     return False
 
 
+def _is_kodi_modal_dialog_open():
+    """Detecta de forma fiable si Kodi tiene visible o activo algun dialogo modal de error o confirmacion."""
+    for cond in (
+        "Window.IsVisible(10100)",
+        "Window.IsActive(10100)",
+        "Window.IsVisible(okdialog)",
+        "Window.IsActive(okdialog)",
+        "Window.IsVisible(dialogok)",
+        "Window.IsActive(dialogok)",
+        "Window.IsVisible(10101)",
+        "Window.IsActive(10101)",
+        "Window.IsVisible(dialogconfirm)",
+        "Window.IsActive(dialogconfirm)",
+        "Window.IsVisible(yesnodialog)",
+        "Window.IsActive(yesnodialog)",
+    ):
+        try:
+            if xbmc.getCondVisibility(cond):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _wait_for_kodi_modal_dialog_to_dismiss(mon=None, max_wait=60.0):
+    """Espera pacientemente a que el usuario presione Aceptar / OK / Cerrar en cualquier dialogo modal de Kodi."""
+    if mon is None:
+        mon = xbmc.Monitor()
+    t0 = time.time()
+    saw = False
+    if _is_kodi_modal_dialog_open():
+        saw = True
+        xbmc.log("Multi Bridge: detectada ventana de error / dialogo modal de Kodi. Esperando a que el usuario presione Aceptar...", xbmc.LOGINFO)
+        while _is_kodi_modal_dialog_open():
+            if mon.abortRequested() or (time.time() - t0) > max_wait:
+                break
+            xbmc.sleep(80)
+        # Esperar a que la animacion de cierre del dialogo termine completamente en Kodi
+        xbmc.sleep(250)
+        xbmc.log("Multi Bridge: dialogo modal de Kodi cerrado por el usuario.", xbmc.LOGINFO)
+    return saw
+
+
 def _verify_playback_started(is_torrent=False, timeout=None):
     p = xbmc.Player()
     mon = xbmc.Monitor()
@@ -14548,40 +14768,29 @@ def _verify_playback_started(is_torrent=False, timeout=None):
         timeout = 40.0 if is_torrent else 25.0
     start_t = time.time()
 
+    xbmc.sleep(100)
+
     while (time.time() - start_t) < timeout:
         if mon.abortRequested():
             return False
 
-        # 1. Video ya en reproduccion real activa: exito inmediato
-        if p.isPlayingVideo():
-            return True
-
-        # 2. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
+        # 1. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
         # Kodi muestra este dialogo modal nativo al fallar la reproduccion.
-        if xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
-            xbmc.log("Multi Bridge: detectada ventana de error de reproduccion de Kodi. Esperando a que el usuario presione Aceptar / OK...", xbmc.LOGINFO)
-            # Mantenerse en espera silenciosa mientras el cartel de Kodi siga en pantalla
-            while xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
-                if mon.abortRequested():
-                    return False
-                xbmc.sleep(80)
-
-            # En el instante exacto en que el usuario presiona Aceptar / OK, el dialogo se cierra.
-            # Retornamos False de inmediato para que el llamador notifique y reabra la lista al instante.
-            xbmc.sleep(100)
+        if _is_kodi_modal_dialog_open():
+            _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
             xbmc.log("Multi Bridge: el usuario presiono Aceptar en la ventana de error de Kodi. Retornando fallo para reabrir ventana...", xbmc.LOGINFO)
             return False
+
+        # 2. Video ya en reproduccion real activa: exito inmediato
+        if p.isPlayingVideo():
+            return True
 
         if mon.waitForAbort(0.15):
             return False
 
     # Al expirar el tiempo de espera maximo, verificar si justo esta visible el dialogo
-    if xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
-        while xbmc.getCondVisibility("Window.IsVisible(dialogok) | Window.IsVisible(okdialog) | Window.IsVisible(10100)"):
-            if mon.abortRequested():
-                return False
-            xbmc.sleep(80)
-        xbmc.sleep(100)
+    if _is_kodi_modal_dialog_open():
+        _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
         return False
 
     return bool(p.isPlayingVideo())
@@ -14646,6 +14855,10 @@ def _show_floating_links_dialog_impl(offset=0):
     on_fail_setting = str(_bridge_addon.getSetting('on_link_fail') or '0').strip()
 
     while True:
+        # Asegurar que ningun dialogo modal de error de Kodi este abierto antes de mostrar la lista
+        if _is_kodi_modal_dialog_open():
+            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+
         # Si todos los enlaces disponibles han fallado, notificar y salir
         if len(failed_indices) >= len(c_links) and len(c_links) > 0:
             _show_bridge_notification('Multi Bridge', 'Todos los enlaces probados han fallado', 3500)
@@ -14725,6 +14938,18 @@ def _show_floating_links_dialog_impl(offset=0):
 
         if on_fail_setting == '1':
             return False
+
+        # Enlace fallido: si played fue False (o Kodi aun esta por lanzar DialogOK),
+        # dar una ventana de gracia de hasta 1.5s para atrapar la apertura del cartel nativo
+        if not played:
+            for _chk in range(15):
+                if _is_kodi_modal_dialog_open():
+                    break
+                xbmc.sleep(100)
+
+        # Si el cartel de error de Kodi esta en pantalla, esperar pacientemente a que el usuario presione Aceptar
+        if _is_kodi_modal_dialog_open():
+            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
 
         # Enlace fallido: registrar y reabrir
         if chosen_link:

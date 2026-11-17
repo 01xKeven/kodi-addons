@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 import sys
 import os
-import json
-import subprocess
 import urllib.parse
 import xbmc
 import xbmcgui
@@ -16,80 +14,54 @@ def get_video_url(page_url, url_referer=''):
         return []
 
     bridge_addon = os.path.expandvars(r'%APPDATA%\Kodi\addons\plugin.video.bridge.multi')
-    capture_script = os.path.join(bridge_addon, 'resources', 'lib', 'bridge_capture.py')
-    
-    if not os.path.exists(capture_script):
-        return 'Falta el modulo de captura web en Multi Bridge'
+    lib_path = os.path.join(bridge_addon, 'resources', 'lib')
+    if lib_path not in sys.path:
+        sys.path.insert(0, lib_path)
 
-    python_exe = sys.executable
-    if not python_exe or 'kodi' in python_exe.lower():
-        local_app = os.environ.get("LOCALAPPDATA", "")
-        candidates = [
-            r"C:\Users\ANGEL\AppData\Local\Programs\Python\Python314\python.exe",
-            os.path.join(local_app, r"Programs\Python\Python314\python.exe"),
-            os.path.join(local_app, r"Programs\Python\Python313\python.exe"),
-            os.path.join(local_app, r"Programs\Python\Python312\python.exe"),
-            os.path.join(local_app, r"Programs\Python\Python311\python.exe"),
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                python_exe = c
-                break
+    try:
+        from bridge_capture import capture_stream
+    except Exception as e:
+        xbmc.log(f"[Balandro Powvideo] Error importando bridge_capture: {e}", xbmc.LOGERROR)
+        return 'Falta el modulo de captura web en Multi Bridge'
 
     icon_path = os.path.join(bridge_addon, "icon.png") if os.path.exists(os.path.join(bridge_addon, "icon.png")) else ""
     xbmcgui.Dialog().notification(
-        "Powvideo (Balandro)",
+        "Powvideo",
         "Resuelve el captcha en la ventana flotante...",
         icon_path,
         5000
     )
 
-    clean_env = os.environ.copy()
-    clean_env.pop("PYTHONPATH", None)
-    clean_env.pop("PYTHONHOME", None)
-    creationflags = 0x08000000 if os.name == 'nt' else 0
-
-    cmd = [python_exe, capture_script, page_url, "--timeout=180", "--app"]
-
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=clean_env,
-            creationflags=creationflags
-        )
-    except Exception as e:
-        return f"Error al abrir navegador: {e}"
+    p_dialog = xbmcgui.DialogProgress()
+    p_dialog.create(
+        "Powvideo",
+        "Abriendo ventana flotante para resolver captcha...\nResuelve el captcha en la ventana del navegador.\nEl vídeo se reproducirá automáticamente al finalizar."
+    )
 
     monitor = xbmc.Monitor()
-    elapsed = 0
-    while proc.poll() is None:
-        if monitor.waitForAbort(1):
-            proc.terminate()
-            break
-        elapsed += 1
-        if elapsed >= 185:
-            proc.terminate()
-            break
-
-    stdout, stderr = proc.communicate()
-    output_text = stdout.strip()
+    data = capture_stream(
+        page_url,
+        timeout=180,
+        app_mode=True,
+        load_adblock=True,
+        progress_dialog=p_dialog,
+        monitor=monitor
+    )
 
     try:
-        data = json.loads(output_text)
+        p_dialog.close()
     except Exception:
-        return 'Tiempo agotado o ventana cerrada sin capturar stream'
+        pass
 
-    if data.get("status") != "ok":
-        return data.get("message", "Error al capturar el video")
+    if not data or data.get("status") != "ok":
+        msg = data.get("message", "Error al capturar el video") if isinstance(data, dict) else "No se capturó el stream"
+        return msg
 
     stream_url = data.get("url")
     headers = data.get("headers", {})
     mime_type = data.get("mime_type", "")
 
-    # Normalize DASH fragments to master manifest
+    # Normalizar fragmentos DASH a manifest maestro
     if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
         clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
         query = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
@@ -107,16 +79,9 @@ def get_video_url(page_url, url_referer=''):
     if cookie:
         pipe_args.append(f"Cookie={urllib.parse.quote(cookie)}")
 
-    playback_url = stream_url
+    final_url = stream_url
     if pipe_args:
-        playback_url += "|" + "&".join(pipe_args)
+        final_url += "|" + "&".join(pipe_args)
 
-    video_urls = []
-    if ".mpd" in stream_url.lower() or "/dash/" in stream_url.lower() or "dash" in mime_type.lower():
-        video_urls.append(["mpd", playback_url])
-    elif ".m3u8" in stream_url.lower() or "mpegurl" in mime_type.lower():
-        video_urls.append(["m3u8", playback_url])
-    else:
-        video_urls.append(["mp4", playback_url])
-
+    video_urls = [[f"Powvideo [Direct]", final_url]]
     return video_urls
