@@ -1244,7 +1244,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         last_saved_time = 0
         tot_time = 0
         last_pause_state = False
-        pause_cooldown = time.time() + 2.5
+        pause_cooldown = time.time() + 5.0
         active_idx = current_link_index
 
         _trakt_reassert_deadline = time.time() + 15.0
@@ -1285,7 +1285,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
                 if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
                     now = time.time()
-                    if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active and not _is_dialog_active_global():
+                    if now > pause_cooldown and cur_time >= 2.0 and not _floating_dialog_active and not _is_dialog_active_global():
                         xbmc.log("Multi Bridge: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
                         with _floating_dialog_lock:
                             _floating_dialog_active = True
@@ -1346,18 +1346,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                             srv_n = _get_link_server_name(chosen_l) or 'Servidor'
                                             is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
                                             switch_ok = _verify_playback_started(is_torrent=is_t)
-                                            if not switch_ok:
+                                            if not switch_ok and not p.isPlayingVideo():
                                                 _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
                                                 if _is_kodi_modal_dialog_open():
                                                     _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
                                                 show_floating_links_dialog()
                                             return
                                         else:
-                                            chosen_l = chosen_link or c_links[chosen_idx]
-                                            _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                            if _is_kodi_modal_dialog_open():
-                                                _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
-                                            show_floating_links_dialog()
+                                            if not p.isPlayingVideo():
+                                                chosen_l = chosen_link or c_links[chosen_idx]
+                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                if _is_kodi_modal_dialog_open():
+                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                                show_floating_links_dialog()
                                             return
                                     else:
                                         _clear_session_failed_links(cur_mk)
@@ -10715,6 +10716,7 @@ def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
         p_dialog.close()
     except Exception:
         pass
+    xbmc.sleep(120)
 
     if not data or data.get("status") != "ok":
         msg = data.get("message", "Error al capturar el video") if isinstance(data, dict) else "No se capturó el stream de video"
@@ -14719,7 +14721,7 @@ def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='a
 
 
 def _is_kodi_modal_dialog_open():
-    """Detecta de forma fiable si Kodi tiene visible o activo algun dialogo modal de error o confirmacion."""
+    """Detecta de forma fiable si Kodi tiene visible o activo el dialogo modal de error nativo (DialogOK: 10100)."""
     for cond in (
         "Window.IsVisible(10100)",
         "Window.IsActive(10100)",
@@ -14727,12 +14729,6 @@ def _is_kodi_modal_dialog_open():
         "Window.IsActive(okdialog)",
         "Window.IsVisible(dialogok)",
         "Window.IsActive(dialogok)",
-        "Window.IsVisible(10101)",
-        "Window.IsActive(10101)",
-        "Window.IsVisible(dialogconfirm)",
-        "Window.IsActive(dialogconfirm)",
-        "Window.IsVisible(yesnodialog)",
-        "Window.IsActive(yesnodialog)",
     ):
         try:
             if xbmc.getCondVisibility(cond):
@@ -14743,7 +14739,7 @@ def _is_kodi_modal_dialog_open():
 
 
 def _wait_for_kodi_modal_dialog_to_dismiss(mon=None, max_wait=60.0):
-    """Espera pacientemente a que el usuario presione Aceptar / OK / Cerrar en cualquier dialogo modal de Kodi."""
+    """Espera pacientemente a que el usuario presione Aceptar / OK / Cerrar en el dialogo de error de Kodi."""
     if mon is None:
         mon = xbmc.Monitor()
     t0 = time.time()
@@ -14774,21 +14770,24 @@ def _verify_playback_started(is_torrent=False, timeout=None):
         if mon.abortRequested():
             return False
 
-        # 1. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
+        # 1. Video ya en reproduccion real activa: exito inmediato
+        if p.isPlayingVideo():
+            return True
+
+        # 2. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
         # Kodi muestra este dialogo modal nativo al fallar la reproduccion.
         if _is_kodi_modal_dialog_open():
             _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
             xbmc.log("Multi Bridge: el usuario presiono Aceptar en la ventana de error de Kodi. Retornando fallo para reabrir ventana...", xbmc.LOGINFO)
             return False
 
-        # 2. Video ya en reproduccion real activa: exito inmediato
-        if p.isPlayingVideo():
-            return True
-
         if mon.waitForAbort(0.15):
             return False
 
-    # Al expirar el tiempo de espera maximo, verificar si justo esta visible el dialogo
+    # Al expirar el tiempo de espera maximo, verificar si el video esta reproduciendose
+    if p.isPlayingVideo():
+        return True
+
     if _is_kodi_modal_dialog_open():
         _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
         return False
@@ -14933,7 +14932,7 @@ def _show_floating_links_dialog_impl(offset=0):
         if played:
             playback_ok = _verify_playback_started(is_torrent=is_tor)
 
-        if playback_ok:
+        if playback_ok or p.isPlayingVideo():
             return True
 
         if on_fail_setting == '1':

@@ -3,7 +3,7 @@
 """
 Web Stream Bridge - Capture Helper (Universal Engine)
 Launches Chromium / Edge / Chrome with strict popup blocking,
-pure-Python CDP network interception, and local receiver fallback.
+pure-Python non-blocking CDP network interception, and ultra-low latency capture.
 Works 100% in-process within Kodi's Python or as a standalone CLI script.
 No external Python dependencies required.
 """
@@ -14,6 +14,7 @@ import json
 import glob
 import subprocess
 import socket
+import select
 import shutil
 import time
 import base64
@@ -46,7 +47,7 @@ KNOWN_AD_DOMAINS = [
 ]
 
 class SimpleWebSocket:
-    """Lightweight RFC 6455 client implemented purely with standard library."""
+    """Ultra-fast RFC 6455 client implemented purely with standard library."""
     def __init__(self, ws_url):
         parts = ws_url.replace("ws://", "").split("/", 1)
         host, port_str = parts[0].split(":")
@@ -98,8 +99,24 @@ class SimpleWebSocket:
         except Exception:
             pass
 
-    def recv_msg(self, timeout=0.05):
-        self.sock.settimeout(timeout)
+    def has_data(self):
+        try:
+            r, _, _ = select.select([self.sock], [], [], 0)
+            return bool(r)
+        except Exception:
+            return False
+
+    def recv_msg(self, timeout=0.0):
+        if timeout > 0:
+            try:
+                r, _, _ = select.select([self.sock], [], [], timeout)
+                if not r:
+                    return None
+            except Exception:
+                return None
+        elif not self.has_data():
+            return None
+
         try:
             head = self.sock.recv(2)
             if not head or len(head) < 2:
@@ -278,18 +295,6 @@ def is_stream_url(url):
             return True
     return False
 
-def is_ad_domain(url):
-    if not url or not isinstance(url, str):
-        return False
-    u = url.lower()
-    patterns = [
-        "aliexpress", "adcash", "popunder", "propeller", "ay267", "cdclub",
-        "doubleclick", "double?", "onclickperf", "roadster24", "official-app",
-        "clickadu", "adsterra", "exoclick", "bet365", "1xbet", "casino",
-        "syndication", "adservices"
-    ]
-    return any(p in u for p in patterns)
-
 def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, load_adblock=True, progress_dialog=None, monitor=None):
     browser_path = find_browser(custom_browser)
     if not browser_path:
@@ -359,14 +364,14 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
     p_ws = None
     main_page_id = None
 
-    # Wait for DevTools port to be ready
+    # Ultra-fast connection to DevTools port (50ms interval)
     ws_ready = False
-    for _ in range(30):
+    for _ in range(60):
         if proc.poll() is not None:
             break
         try:
             v_url = f"http://127.0.0.1:{cdp_port}/json/version"
-            resp = urllib.request.urlopen(v_url, timeout=1.0).read()
+            resp = urllib.request.urlopen(v_url, timeout=0.8).read()
             v_info = json.loads(resp.decode('utf-8'))
             browser_ws_url = v_info.get("webSocketDebuggerUrl")
             if browser_ws_url:
@@ -376,14 +381,14 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
                 ws_ready = True
                 break
         except Exception:
-            time.sleep(0.2)
+            time.sleep(0.04)
 
     # Connect to the main page target
     if ws_ready:
-        for _ in range(20):
+        for _ in range(30):
             try:
                 t_url = f"http://127.0.0.1:{cdp_port}/json"
-                targets = json.loads(urllib.request.urlopen(t_url, timeout=1.0).read().decode('utf-8'))
+                targets = json.loads(urllib.request.urlopen(t_url, timeout=0.8).read().decode('utf-8'))
                 main_page = next((t for t in targets if t.get('type') == 'page'), None)
                 if main_page and main_page.get("webSocketDebuggerUrl"):
                     main_page_id = main_page.get("id")
@@ -491,7 +496,7 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
                     })
                     break
             except Exception:
-                time.sleep(0.2)
+                time.sleep(0.04)
 
     start_time = time.time()
     captured_headers = {}
@@ -531,33 +536,30 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
                 except Exception:
                     pass
 
-            # 1. Check Browser WS events (Strict Popup Killer)
-            if b_ws:
-                b_msg = b_ws.recv_msg(timeout=0.04)
-                if b_msg:
+            # 1. Non-blocking check of Browser WS events (Strict Popup Killer)
+            if b_ws and b_ws.has_data():
+                while b_ws.has_data():
+                    b_msg = b_ws.recv_msg(timeout=0)
+                    if not b_msg:
+                        break
                     try:
                         d = json.loads(b_msg)
                         method = d.get("method", "")
-                        if "Target.targetCreated" in method:
+                        if "Target.targetCreated" in method or "Target.attachedToTarget" in method:
                             t_info = d.get("params", {}).get("targetInfo", {})
                             t_id = t_info.get("targetId")
-                            t_type = t_info.get("type")
-                            t_url = t_info.get("url", "")
-                            if t_type == "page" and t_id != main_page_id:
-                                # Immediately kill popup tab/window
-                                b_ws.send_json({"id": 99, "method": "Target.closeTarget", "params": {"targetId": t_id}})
-                        elif "Target.attachedToTarget" in method:
-                            t_info = d.get("params", {}).get("targetInfo", {})
-                            t_id = t_info.get("targetId")
-                            if t_id and t_id != main_page_id:
+                            t_type = t_info.get("type", "")
+                            if (t_type == "page" or "page" in str(t_type)) and t_id != main_page_id:
                                 b_ws.send_json({"id": 99, "method": "Target.closeTarget", "params": {"targetId": t_id}})
                     except Exception:
                         pass
 
-            # 2. Check Page WS events (Network & Media Stream Sniffer)
-            if p_ws:
-                p_msg = p_ws.recv_msg(timeout=0.04)
-                if p_msg:
+            # 2. Non-blocking drain of Page WS events (Network & Media Stream Sniffer)
+            if p_ws and p_ws.has_data():
+                while p_ws.has_data():
+                    p_msg = p_ws.recv_msg(timeout=0)
+                    if not p_msg:
+                        break
                     try:
                         d = json.loads(p_msg)
                         method = d.get("method", "")
@@ -609,22 +611,22 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
                                 break
                     except Exception:
                         pass
-            else:
-                time.sleep(0.08)
+                if captured_data:
+                    break
+
+            time.sleep(0.015)
 
     finally:
         if p_ws:
-            p_ws.close()
+            try: p_ws.close()
+            except Exception: pass
         if b_ws:
-            b_ws.close()
+            try: b_ws.close()
+            except Exception: pass
         try:
-            proc.terminate()
-            proc.wait(timeout=2)
+            proc.kill()
         except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            pass
 
     if captured_data and captured_data.get("status") == "ok":
         return captured_data

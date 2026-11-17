@@ -52,6 +52,7 @@ def get_video_url(page_url, url_referer=''):
         p_dialog.close()
     except Exception:
         pass
+    xbmc.sleep(120)
 
     if not data or data.get("status") != "ok":
         msg = data.get("message", "Error al capturar el video") if isinstance(data, dict) else "No se capturó el stream"
