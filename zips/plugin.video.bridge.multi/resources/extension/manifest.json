@@ -1,11 +1,13 @@
 {
   "name": "WebStream Bridge",
-  "version": "1.0",
+  "version": "2.0",
   "manifest_version": 3,
-  "description": "Intercepts media stream URLs for Kodi Web Stream Bridge",
+  "description": "Intercepts media stream URLs for Kodi Web Stream Bridge and blocks popups",
   "permissions": [
     "webRequest",
-    "webRequestAuthProvider"
+    "webRequestExtraHeaders",
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -16,9 +18,15 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["port.js", "content.js"],
       "run_at": "document_start",
-      "all_frames": false
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["port.js", "port.json", "page_hook.js"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
