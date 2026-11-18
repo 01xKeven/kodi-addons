@@ -4616,8 +4616,21 @@ class _PipelineLinkVerifier:
             try: p_dialog.update(100)
             except: pass
         self.global_stop.set()
+        for t in list(self.threads):
+            try:
+                if t.is_alive():
+                    t.join(timeout=0.05)
+            except Exception:
+                pass
 
     def get_results(self, fallback_links=None):
+        self.global_stop.set()
+        for t in list(self.threads):
+            try:
+                if t.is_alive():
+                    t.join(timeout=0.05)
+            except Exception:
+                pass
         with self.lock:
             all_v = self.verified_direct + self.verified_torrents + self.verified_captchas
             if all_v:
@@ -4684,7 +4697,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
         return _resolve_single_link_for_verification(lnk, engine=engine, servertools=servertools)
 
     def _test_worker(orig_idx, lnk):
-        if stop_event.is_set(): return
+        if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
         # Doble salvaguarda: si es torrent o captcha, jamás verificar por red ni contar como funcional
         if _is_torrent_link(lnk):
             with lock:
@@ -4705,19 +4718,20 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             return
 
         try:
+            if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
             _ckey = _link_cache_key(lnk)
             with lock:
                 _hit = prep_cache.get(_ckey, _CACHE_MISS)
             if _hit is _CACHE_MISS:
-                if stop_event.is_set(): return
+                if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
                 _res = _resolve_one(lnk)
+                if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
                 with lock:
                     prep_cache[_ckey] = _res
             else:
                 _res = _hit
-            if _res is None:
+            if _res is None or stop_event.is_set() or xbmc.Monitor().abortRequested():
                 return
-            if stop_event.is_set(): return
             _cp = _res.clone() if hasattr(_res, 'clone') else _res
             with lock:
                 if orig_idx not in finished_indices:
@@ -4793,7 +4807,16 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             time.sleep(0.1)
     finally:
         stop_event.set()
-        socket.setdefaulttimeout(orig_timeout)
+        for _orig_idx, _t, _st in list(running):
+            try:
+                if _t.is_alive():
+                    _t.join(timeout=0.05)
+            except Exception:
+                pass
+        try:
+            socket.setdefaulttimeout(orig_timeout or 10.0)
+        except Exception:
+            pass
 
     return [verified_results[orig_idx] for orig_idx in sorted(verified_results.keys()) if orig_idx in verified_results]
 
@@ -7734,20 +7757,22 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
         except: pass
     return added
 
-def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=120):
+def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=25):
     """Espera hilos rezagados tras el cierre y anexa sus enlaces a la lista
     abierta. Se aborta si otra busqueda toma el relevo o al expirar deadline."""
     try:
         mon = xbmc.Monitor()
         t0 = time.time()
         done_pfs = set()
-        time.sleep(0.5)
+        if mon.waitForAbort(0.3):
+            return
         while time.time() - t0 < deadline and not mon.abortRequested():
             try:
-                if _LAST_SEARCH_TOKEN != token:
+                if _LAST_SEARCH_TOKEN != token or mon.abortRequested():
                     return
                 avail_batch = []
                 for pf_tuple in list(_LAST_SEARCH_THREADS):
+                    if mon.abortRequested(): return
                     try:
                         ch_name, th, ch_key = pf_tuple
                     except Exception:
@@ -7765,7 +7790,7 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
                     elif not th.is_alive():
                         done_pfs.add(ch_name)
 
-                if avail_batch:
+                if avail_batch and not mon.abortRequested():
                     all_batch_links = []
                     channel_names = []
                     for pf, links, ch_name in avail_batch:
@@ -7789,12 +7814,12 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=1
                                 alive = True
                                 break
                         except: pass
-                    if not alive:
+                    if not alive or mon.abortRequested():
                         return
                 except: return
             except: pass
-            try: time.sleep(1.2)
-            except: return
+            if mon.waitForAbort(0.8):
+                return
     except: pass
 
 _LAST_SEARCH_THREADS = []
@@ -9619,6 +9644,8 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
 
     # Función para ejecutar canales que no se iniciaron en la fase instantánea
     def _bg_ch_worker(ch_info):
+        if mon.abortRequested() or collector_token != _BG_COLLECTOR_TOKEN:
+            return
         try:
             ch_key = ch_info.get('id') or ch_info.get('channel')
             with silenced_dialogs():
@@ -9627,7 +9654,7 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
                     p_season, p_episode, all_names, alt_terms=alt_terms,
                     target_tmdb=p_tmdb, target_imdb=p_imdb
                 )
-            if links:
+            if links and not mon.abortRequested() and collector_token == _BG_COLLECTOR_TOKEN:
                 links = _filter_discarded_links(links)
                 if links:
                     for l in links:
@@ -9668,7 +9695,8 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
 
         if i_rem >= len(bg_threads) and len(active_workers) == 0:
             break
-        time.sleep(0.5)
+        if mon.waitForAbort(0.25):
+            return
 
     if mon.abortRequested():
         return
