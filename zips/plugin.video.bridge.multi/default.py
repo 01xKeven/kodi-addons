@@ -1333,9 +1333,48 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     chosen_link = getattr(dlg, 'selected_link', None)
                                     del dlg
                                     xbmc.sleep(150)
-                                    if chosen_idx == 'other_engine':
+                                    if chosen_idx == 'force_search':
+                                        try:
+                                            if p.isPlayingVideo():
+                                                p.stop()
+                                        except Exception:
+                                            pass
+                                        _u = 'plugin://plugin.video.bridge.multi/?action=force_search'
+                                        _t_id = str(c_meta.get('tmdb') or c_meta.get('tmdb_id') or '')
+                                        _s = str(c_meta.get('season') or '')
+                                        _e = str(c_meta.get('episode') or '')
+                                        _t = str(c_meta.get('title') or '')
+                                        _sn = str(c_meta.get('showname') or '')
+                                        _y = str(c_meta.get('year') or '')
+                                        _sy = str(c_meta.get('showyear') or '')
+                                        _imdb = str(c_meta.get('imdb') or c_meta.get('imdb_id') or '')
+                                        _eng = str(c_eng or c_meta.get('engine') or '')
+                                        if _t_id: _u += '&tmdb=' + _t_id
+                                        if _s and _e: _u += '&season=' + _s + '&episode=' + _e
+                                        if _t: _u += '&title=' + uparse.quote_plus(_t)
+                                        if _sn: _u += '&showname=' + uparse.quote_plus(_sn)
+                                        if _y: _u += '&year=' + _y
+                                        if _sy: _u += '&showyear=' + _sy
+                                        if _imdb: _u += '&imdb=' + _imdb
+                                        if _eng: _u += '&engine=' + _eng
+                                        xbmc.executebuiltin('RunPlugin(%s)' % _u)
+                                        return
+                                    elif chosen_idx == 'other_engine':
+                                        try:
+                                            if p.isPlayingVideo():
+                                                p.stop()
+                                        except Exception:
+                                            pass
                                         _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
                                         xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
+                                        return
+                                    elif chosen_idx == 'verify_links':
+                                        try:
+                                            if p.isPlayingVideo():
+                                                p.stop()
+                                        except Exception:
+                                            pass
+                                        xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=verify_links)')
                                         return
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
                                         if chosen_link is None and 0 <= chosen_idx < len(c_links):
@@ -11384,6 +11423,7 @@ def verify_and_filter_links():
             'engine': engine
         })
     except: pass
+    _open_links_view()
     xbmc.executebuiltin('Container.Refresh')
 
 # ---------------------------------------------------------
@@ -15024,14 +15064,47 @@ def _show_floating_links_dialog_impl(offset=0):
         xbmc.sleep(150)
 
         if chosen_idx == 'force_search':
-            xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=force_search)')
+            try:
+                if p.isPlayingVideo():
+                    p.stop()
+            except Exception:
+                pass
+            _u = 'plugin://plugin.video.bridge.multi/?action=force_search'
+            _t_id = str(c_meta.get('tmdb') or c_meta.get('tmdb_id') or '')
+            _s = str(c_meta.get('season') or '')
+            _e = str(c_meta.get('episode') or '')
+            _t = str(c_meta.get('title') or '')
+            _sn = str(c_meta.get('showname') or '')
+            _y = str(c_meta.get('year') or '')
+            _sy = str(c_meta.get('showyear') or '')
+            _imdb = str(c_meta.get('imdb') or c_meta.get('imdb_id') or '')
+            _eng = str(c_eng or c_meta.get('engine') or '')
+            if _t_id: _u += '&tmdb=' + _t_id
+            if _s and _e: _u += '&season=' + _s + '&episode=' + _e
+            if _t: _u += '&title=' + uparse.quote_plus(_t)
+            if _sn: _u += '&showname=' + uparse.quote_plus(_sn)
+            if _y: _u += '&year=' + _y
+            if _sy: _u += '&showyear=' + _sy
+            if _imdb: _u += '&imdb=' + _imdb
+            if _eng: _u += '&engine=' + _eng
+            xbmc.executebuiltin('RunPlugin(%s)' % _u)
             return True
 
         if chosen_idx == 'verify_links':
+            try:
+                if p.isPlayingVideo():
+                    p.stop()
+            except Exception:
+                pass
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=verify_links)')
             return True
 
         if chosen_idx == 'other_engine':
+            try:
+                if p.isPlayingVideo():
+                    p.stop()
+            except Exception:
+                pass
             _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
             return True
@@ -15239,6 +15312,12 @@ def main():
         return
 
     if action == 'search_other_engine':
+        try:
+            _p = xbmc.Player()
+            if _p.isPlayingVideo():
+                _p.stop()
+        except Exception:
+            pass
 
         _se_engine = get_param('engine') or 'alfa'
 
@@ -15326,13 +15405,19 @@ def main():
 
     if action == 'force_search':
         xbmc.log("Multi Bridge: 'Forzar nueva búsqueda' solicitado desde menú contextual", xbmc.LOGINFO)
+        try:
+            _p = xbmc.Player()
+            if _p.isPlayingVideo():
+                _p.stop()
+        except Exception:
+            pass
         _force_meta = {}
-        _force_engine = 'alfa'
+        _force_engine = get_param('engine') or 'alfa'
         try:
             _fc = _read_search_cache_atomic()
             if _fc and isinstance(_fc, dict):
                 _force_meta = _fc.get('meta', {}) or {}
-                _force_engine = _fc.get('engine', 'alfa') or 'alfa'
+                _force_engine = _fc.get('engine', _force_engine) or _force_engine
         except Exception:
             pass
 
