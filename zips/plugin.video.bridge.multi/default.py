@@ -4390,6 +4390,7 @@ class _PipelineLinkVerifier:
         
         self.seq_counter = 0
         self.verified_torrents = []
+        self.verified_captchas = []
         self.verified_direct = []
         self.active_workers = 0
         self.threads = []
@@ -4427,9 +4428,13 @@ class _PipelineLinkVerifier:
                     continue
                 self.seen_keys.add(ckey)
 
-                # Torrents se conservan siempre directamente sin verificar y NUNCA detienen enlaces directos
+                # Torrents y Captchas se envían directamente sin verificar como funcionales
+                # y NUNCA cuentan para la meta de enlaces directos funcionales
                 if _is_torrent_link(lnk):
                     self.verified_torrents.append(lnk)
+                elif _is_web_captcha_server(_get_link_server_name(lnk), lnk):
+                    if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                        self.verified_captchas.append(lnk)
                 else:
                     # Si ya alcanzamos la meta de directos funcionales, no sobrecargar cola
                     if self.verify_max_functional > 0 and len(self.verified_direct) >= self.verify_max_functional:
@@ -4477,9 +4482,16 @@ class _PipelineLinkVerifier:
                 if res is not None and not self.global_stop.is_set():
                     cp = res.clone() if hasattr(res, 'clone') else res
                     with self.lock:
-                        self.verified_direct.append(cp)
-                        if self.verify_max_functional > 0 and len(self.verified_direct) >= self.verify_max_functional:
-                            self.direct_done.set()
+                        if _is_torrent_link(cp):
+                            self.verified_torrents.append(cp)
+                        elif _is_web_captcha_server(_get_link_server_name(cp), cp):
+                            # Salvaguarda: si resultó ser captcha, enviar directamente sin contar como funcional
+                            if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                                self.verified_captchas.append(cp)
+                        else:
+                            self.verified_direct.append(cp)
+                            if self.verify_max_functional > 0 and len(self.verified_direct) >= self.verify_max_functional:
+                                self.direct_done.set()
             except Exception:
                 pass
             finally:
@@ -4492,7 +4504,7 @@ class _PipelineLinkVerifier:
 
     def get_stats(self):
         with self.lock:
-            return len(self.verified_direct), len(self.verified_torrents), self.active_workers, self.queue.qsize()
+            return len(self.verified_direct), len(self.verified_torrents), len(self.verified_captchas), self.active_workers, self.queue.qsize()
 
     def finish_post_search(self, target_title='', p_dialog=None):
         """Continúa verificando enlaces prioritarios tras la búsqueda de canales hasta alcanzar meta de directos o timeout."""
@@ -4519,6 +4531,7 @@ class _PipelineLinkVerifier:
             with self.lock:
                 n_dir = len(self.verified_direct)
                 n_tor = len(self.verified_torrents)
+                n_cap = len(self.verified_captchas)
                 q_size = self.queue.qsize()
                 n_act = self.active_workers
 
@@ -4543,6 +4556,7 @@ class _PipelineLinkVerifier:
                 parts = []
                 if n_dir > 0: parts.append('[COLOR lime]%d directos[/COLOR]' % n_dir)
                 if n_tor > 0: parts.append('[COLOR cyan]%d torrents[/COLOR]' % n_tor)
+                if n_cap > 0: parts.append('[COLOR orange]%d captchas[/COLOR]' % n_cap)
                 if n_act > 0 or q_size > 0: parts.append('[COLOR yellow]comprobando (%d)[/COLOR]' % (n_act + q_size))
                 status_str = ' • '.join(parts) if parts else 'Comprobando servidores...'
 
@@ -4551,7 +4565,7 @@ class _PipelineLinkVerifier:
                 l3 = '[COLOR grey]Cancelar para abrir los enlaces disponibles ahora[/COLOR]'
                 if hasattr(p_dialog, 'set_metrics'):
                     p_dialog.set_metrics(
-                        n_dir=n_dir, n_tor=n_tor, n_ver=n_act + q_size,
+                        n_dir=n_dir, n_tor=n_tor + n_cap, n_ver=n_act + q_size,
                         status_line=status_str
                     )
                 try: p_dialog.update(pct, '%s\n%s\n%s' % (l1, l2, l3))
@@ -4566,7 +4580,7 @@ class _PipelineLinkVerifier:
 
     def get_results(self, fallback_links=None):
         with self.lock:
-            all_v = self.verified_direct + self.verified_torrents
+            all_v = self.verified_direct + self.verified_torrents + self.verified_captchas
             if all_v:
                 return all_v
         return fallback_links or []
@@ -4576,23 +4590,28 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     links = _filter_discarded_links(links)
     if not links: return []
 
-    # Separar enlaces torrent de enlaces directos.
-    # Los enlaces torrent NUNCA se verifican (no son streaming directo ni usan hosters/resolvers HTTP).
-    # Se conservan automáticamente en su posición original como disponibles.
+    # Separar enlaces torrent y captcha de enlaces directos.
+    # Torrents y Captchas se envían directamente sin verificar como funcionales
+    # y NUNCA cuentan para la meta de enlaces directos funcionales.
     verified_results = {}
     direct_items_to_test = []
+    direct_verified_indices = set()
+    torrent_indices = set()
+    captcha_indices = set()
 
     for idx, lnk in enumerate(links):
         if _is_torrent_link(lnk):
             verified_results[idx] = lnk
+            torrent_indices.add(idx)
         elif _is_web_captcha_server(_get_link_server_name(lnk), lnk):
-            # Enlaces con captcha (Streamplay, Powvideo) NUNCA se verifican por red ni abren navegadores
-            verified_results[idx] = lnk
+            if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                verified_results[idx] = lnk
+                captcha_indices.add(idx)
         else:
             direct_items_to_test.append((idx, lnk))
 
     if not direct_items_to_test:
-        xbmc.log("Multi Bridge: _verify_links_headless - todos los enlaces son torrents (%d), ninguno a verificar" % len(links), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge: _verify_links_headless - todos los enlaces son torrents/captchas (%d), ninguno a verificar" % len(links), xbmc.LOGINFO)
         return [verified_results[idx] for idx in sorted(verified_results.keys())]
 
     mods = _get_alfa_modules() if engine == 'alfa' else _get_balandro_modules()
@@ -4600,8 +4619,6 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
 
     servertools = mods['servertools']
     total_to_check = len(direct_items_to_test)
-    # Torrents ya verificados de entrada (se conservan sin comprobar)
-    _n_torrents = len(links) - total_to_check
     checked_count = [0]
     finished_indices = set()
     lock = threading.Lock()
@@ -4629,12 +4646,22 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
 
     def _test_worker(orig_idx, lnk):
         if stop_event.is_set(): return
-        # Doble salvaguarda: si es torrent, jamás verificar por red
+        # Doble salvaguarda: si es torrent o captcha, jamás verificar por red ni contar como funcional
         if _is_torrent_link(lnk):
             with lock:
                 if orig_idx not in finished_indices:
                     finished_indices.add(orig_idx)
                     verified_results[orig_idx] = lnk
+                    torrent_indices.add(orig_idx)
+                checked_count[0] += 1
+            return
+        if _is_web_captcha_server(_get_link_server_name(lnk), lnk):
+            with lock:
+                if orig_idx not in finished_indices:
+                    finished_indices.add(orig_idx)
+                    if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                        verified_results[orig_idx] = lnk
+                        captcha_indices.add(orig_idx)
                 checked_count[0] += 1
             return
 
@@ -4656,7 +4683,16 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             with lock:
                 if orig_idx not in finished_indices:
                     finished_indices.add(orig_idx)
-                    verified_results[orig_idx] = _cp
+                    if _is_torrent_link(_cp):
+                        verified_results[orig_idx] = _cp
+                        torrent_indices.add(orig_idx)
+                    elif _is_web_captcha_server(_get_link_server_name(_cp), _cp):
+                        if _bridge_addon.getSetting('hide_captcha_links') != 'true':
+                            verified_results[orig_idx] = _cp
+                            captcha_indices.add(orig_idx)
+                    else:
+                        verified_results[orig_idx] = _cp
+                        direct_verified_indices.add(orig_idx)
         except Exception: pass
         finally:
             with lock:
@@ -4687,11 +4723,11 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
 
             with lock:
                 done = checked_count[0]
-                # Funcionales = resultados guardados menos los torrents de entrada
-                funcionales = len(verified_results) - _n_torrents
+                # Funcionales = SOLO los enlaces directos verificados correctamente
+                funcionales = len(direct_verified_indices)
             if verify_max_functional > 0 and funcionales >= verify_max_functional:
                 stop_event.set()
-                xbmc.log("Multi Bridge: límite de enlaces funcionales alcanzado (%d >= %d), finalizando verificación anticipadamente" % (funcionales, verify_max_functional), xbmc.LOGINFO)
+                xbmc.log("Multi Bridge: límite de enlaces directos funcionales alcanzado (%d >= %d), finalizando verificación anticipadamente" % (funcionales, verify_max_functional), xbmc.LOGINFO)
                 if p_dialog:
                     _l1 = 'Verificando %d enlaces' % len(links)
                     _l2 = '[COLOR lime]%d Funcionales alcanzados (límite)[/COLOR]' % funcionales
@@ -4706,8 +4742,10 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 _l2parts = []
                 if funcionales > 0:
                     _l2parts.append('[COLOR lime]%d Funcionales[/COLOR]' % funcionales)
-                if _n_torrents > 0:
-                    _l2parts.append('[COLOR cyan]%d Torrents[/COLOR]' % _n_torrents)
+                if len(torrent_indices) > 0:
+                    _l2parts.append('[COLOR cyan]%d Torrents[/COLOR]' % len(torrent_indices))
+                if len(captcha_indices) > 0:
+                    _l2parts.append('[COLOR orange]%d Captchas[/COLOR]' % len(captcha_indices))
                 _l2 = ' · '.join(_l2parts)
                 _l3 = '[COLOR grey]Cerrar para reproducir los enlaces[/COLOR]' if funcionales > 0 else ''
                 p_dialog.update(pct, '%s\n%s\n%s' % (_l1, _l2, _l3))
@@ -7413,36 +7451,41 @@ def _run_parallel_search_impl(engine='alfa'):
         active_names = [clean_name(enabled_players[idx]) for idx in started_indices if idx not in completed_indices and threads[idx].is_alive()][:3]
         active_str = ', '.join(active_names) if active_names else 'Finalizando...'
         if pipeline_verifier:
-            v_dir, v_tor, v_act, v_q = pipeline_verifier.get_stats()
+            v_dir, v_tor, v_cap, v_act, v_q = pipeline_verifier.get_stats()
             v_parts = []
             if v_dir > 0:
                 v_parts.append('[COLOR lime]%d funcionales[/COLOR]' % v_dir)
             if v_tor > 0:
                 v_parts.append('[COLOR cyan]%d torrents[/COLOR]' % v_tor)
+            if v_cap > 0:
+                v_parts.append('[COLOR orange]%d captchas[/COLOR]' % v_cap)
             if v_act > 0 or v_q > 0:
                 v_parts.append('[COLOR yellow]verificando (%d)[/COLOR]' % (v_act + v_q))
             v_tag = (' • ' + ' | '.join(v_parts)) if v_parts else ''
             if hasattr(p_dialog, 'set_metrics'):
                 p_dialog.set_metrics(
                     completed_str='%d/%d' % (completed, total_channels),
-                    n_dir=v_dir, n_tor=v_tor, n_ver=v_act + v_q,
+                    n_dir=v_dir, n_tor=v_tor + v_cap, n_ver=v_act + v_q,
                     status_line=lines[0] or active_str
                 )
             p_dialog.update(pct, '%s (%d/%d canales)%s\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, v_tag, lines[0], lines[1], active_str))
         else:
             raw_dir = 0
             raw_tor = 0
+            raw_cap = 0
             for _k, _val in list(results_dict.items()):
                 if _val and len(_val) > 1 and _val[1]:
                     for _l in _val[1]:
                         if _is_torrent_link(_l):
                             raw_tor += 1
+                        elif _is_web_captcha_server(_get_link_server_name(_l), _l):
+                            raw_cap += 1
                         else:
                             raw_dir += 1
             if hasattr(p_dialog, 'set_metrics'):
                 p_dialog.set_metrics(
                     completed_str='%d/%d' % (completed, total_channels),
-                    n_dir=raw_dir, n_tor=raw_tor, n_ver=0,
+                    n_dir=raw_dir, n_tor=raw_tor + raw_cap, n_ver=0,
                     status_line=lines[0] or active_str
                 )
             r_parts = []
@@ -7450,6 +7493,8 @@ def _run_parallel_search_impl(engine='alfa'):
                 r_parts.append('[COLOR lime]%d directos[/COLOR]' % raw_dir)
             if raw_tor > 0:
                 r_parts.append('[COLOR cyan]%d torrents[/COLOR]' % raw_tor)
+            if raw_cap > 0:
+                r_parts.append('[COLOR orange]%d captchas[/COLOR]' % raw_cap)
             r_tag = (' • ' + ' | '.join(r_parts)) if r_parts else ''
             p_dialog.update(pct, '%s (%d/%d canales)%s\n%s\n%s\nBuscando: %s' % (target_title, completed, total_channels, r_tag, lines[0], lines[1], active_str))
 
@@ -14080,13 +14125,16 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         self.last_cm_time = 0
         self.display_items = []
 
-        # Separar directos y torrents para clasificacion e informacion
+        # Separar directos, torrents y captchas para clasificacion e informacion
         self.direct_links = []
         self.torrent_links = []
+        self.captcha_links = []
         for l in self.all_links:
             srv = _get_link_server_name(l).strip().lower()
             if srv == 'torrent' or _is_torrent_link(l):
                 self.torrent_links.append(l)
+            elif _is_web_captcha_server(srv, l):
+                self.captcha_links.append(l)
             else:
                 self.direct_links.append(l)
 
@@ -14322,6 +14370,8 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
             filtered = [l for l in self.all_links if l in self.direct_links]
         elif self.active_filter == 'filter_torrent':
             filtered = [l for l in self.all_links if l in self.torrent_links]
+        elif self.active_filter == 'filter_captcha':
+            filtered = [l for l in self.all_links if l in self.captcha_links]
         elif self.active_filter == 'filter_4k':
             filtered = [l for l in self.all_links if self._get_quality_bucket(l) == '4K']
         elif self.active_filter == 'filter_1080p':
@@ -14361,7 +14411,8 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
             qb = self._get_quality_bucket(lnk)
             srv_name = _get_link_server_name(lnk) or ''
             is_torrent = (srv_name.lower() == 'torrent' or _is_torrent_link(lnk))
-            type_label = 'TORRENT' if is_torrent else 'HTTP'
+            is_captcha = _is_web_captcha_server(srv_name, lnk)
+            type_label = 'TORRENT' if is_torrent else ('CAPTCHA' if is_captcha else 'HTTP')
             if is_failed:
                 type_label = 'FALLIDO'
 
@@ -14381,6 +14432,11 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                 hl_focus = '3500E5FF'
                 hl_dim = '1800E5FF'
                 title_color_focus = 'FFE0FFFF'
+            elif is_captcha:
+                base_color = 'FFFFA500'  # Naranja distintivo para Captchas
+                hl_focus = '35FFA500'
+                hl_dim = '18FFA500'
+                title_color_focus = 'FFFFD700'
             else:
                 if qb == '4K': base_color = 'FFFF00FF'
                 elif qb == '1080p': base_color = 'FFDAA520'
@@ -14594,6 +14650,8 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         # Filtros rapidos
         opts_items.append(('[B]Filtrar: Solo HTTP[/B]', 'filter_direct'))
         opts_items.append(('[B]Filtrar: Solo Torrents[/B]', 'filter_torrent'))
+        if self.captcha_links:
+            opts_items.append(('[B]Filtrar: Solo Captchas[/B]', 'filter_captcha'))
         opts_items.append(('[B]Filtrar: Solo 4K[/B]', 'filter_4k'))
         opts_items.append(('[B]Filtrar: Solo 1080p[/B]', 'filter_1080p'))
         opts_items.append(('[B]Filtrar: Solo 720p[/B]', 'filter_720p'))
