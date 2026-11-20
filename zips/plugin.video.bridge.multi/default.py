@@ -821,6 +821,7 @@ _floating_dialog_lock = threading.Lock()
 _playback_monitor_token = 0
 _playback_monitor_lock = threading.Lock()
 _current_playing_link_index = -1
+_BG_TASK_ABORT_EVENT = threading.Event()
 
 def _get_global_monitor_token():
     try:
@@ -975,6 +976,7 @@ def _release_search_lock_atomic():
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
+    _BG_TASK_ABORT_EVENT.clear()
     with _playback_monitor_lock:
         _playback_monitor_token += 1
         my_token = "%f_%d_%d" % (time.time(), _playback_monitor_token, random.randint(10000, 99999))
@@ -1424,6 +1426,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
             if mon.waitForAbort(0.25): break
 
+        _BG_TASK_ABORT_EVENT.set()
         if _get_global_monitor_token() != my_token:
             xbmc.log("Multi Bridge: monitor anterior finalizado limpiamente (control transferido al nuevo servidor)", xbmc.LOGINFO)
             return
@@ -4682,6 +4685,9 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     if verify_max_functional < 0: verify_max_functional = 0
     if max_workers < 1: max_workers = 1
     if verify_timeout < 3: verify_timeout = 3
+    if not p_dialog:
+        # Modo segundo plano: timeout estricto de socket (máx 5s) para evitar hilos huérfanos
+        verify_timeout = min(verify_timeout, 5)
 
     orig_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(verify_timeout)
@@ -4697,7 +4703,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
         return _resolve_single_link_for_verification(lnk, engine=engine, servertools=servertools)
 
     def _test_worker(orig_idx, lnk):
-        if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
+        if stop_event.is_set() or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set(): return
         # Doble salvaguarda: si es torrent o captcha, jamás verificar por red ni contar como funcional
         if _is_torrent_link(lnk):
             with lock:
@@ -4718,19 +4724,19 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
             return
 
         try:
-            if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
+            if stop_event.is_set() or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set(): return
             _ckey = _link_cache_key(lnk)
             with lock:
                 _hit = prep_cache.get(_ckey, _CACHE_MISS)
             if _hit is _CACHE_MISS:
-                if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
+                if stop_event.is_set() or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set(): return
                 _res = _resolve_one(lnk)
-                if stop_event.is_set() or xbmc.Monitor().abortRequested(): return
+                if stop_event.is_set() or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set(): return
                 with lock:
                     prep_cache[_ckey] = _res
             else:
                 _res = _hit
-            if _res is None or stop_event.is_set() or xbmc.Monitor().abortRequested():
+            if _res is None or stop_event.is_set() or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                 return
             _cp = _res.clone() if hasattr(_res, 'clone') else _res
             with lock:
@@ -4761,7 +4767,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     i = 0
     try:
         _verify_loop_start = time.time()
-        while (i < len(threads) or running) and not xbmc.Monitor().abortRequested():
+        while (i < len(threads) or running) and not xbmc.Monitor().abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
             if p_dialog and p_dialog.iscanceled() and (time.time() - _verify_loop_start > 0.5):
                 xbmc.log("Multi Bridge: usuario canceló diálogo de verificación de enlaces", xbmc.LOGINFO)
                 break
@@ -4804,13 +4810,14 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 p_dialog.update(pct, '%s\n%s\n%s' % (_l1, _l2, _l3))
 
             if not running and i >= len(threads): break
-            time.sleep(0.1)
+            if xbmc.Monitor().waitForAbort(0.08) or _BG_TASK_ABORT_EVENT.is_set():
+                break
     finally:
         stop_event.set()
         for _orig_idx, _t, _st in list(running):
             try:
                 if _t.is_alive():
-                    _t.join(timeout=0.05)
+                    _t.join(timeout=0.1)
             except Exception:
                 pass
         try:
@@ -9642,9 +9649,12 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
 
     (is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms, p_tmdb, p_imdb) = search_params
 
+    orig_sock_to = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5.0)
+
     # Función para ejecutar canales que no se iniciaron en la fase instantánea
     def _bg_ch_worker(ch_info):
-        if mon.abortRequested() or collector_token != _BG_COLLECTOR_TOKEN:
+        if mon.abortRequested() or collector_token != _BG_COLLECTOR_TOKEN or _BG_TASK_ABORT_EVENT.is_set():
             return
         try:
             ch_key = ch_info.get('id') or ch_info.get('channel')
@@ -9654,7 +9664,7 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
                     p_season, p_episode, all_names, alt_terms=alt_terms,
                     target_tmdb=p_tmdb, target_imdb=p_imdb
                 )
-            if links and not mon.abortRequested() and collector_token == _BG_COLLECTOR_TOKEN:
+            if links and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set() and collector_token == _BG_COLLECTOR_TOKEN:
                 links = _filter_discarded_links(links)
                 if links:
                     for l in links:
@@ -9682,24 +9692,34 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
     i_rem = 0
     deadline = time.time() + 45.0
 
-    while time.time() < deadline and not mon.abortRequested():
-        if collector_token != _BG_COLLECTOR_TOKEN:
-            xbmc.log('Multi Bridge Fast Autoplay BgCollector: nueva sesion activa, cancelando recolector previo.', xbmc.LOGINFO)
-            return
-        active_workers = [t for t in active_workers if t.is_alive()]
-        while i_rem < len(bg_threads) and len(active_workers) < max_bg_workers:
-            th = bg_threads[i_rem]
-            th.start()
-            active_workers.append(th)
-            i_rem += 1
+    try:
+        while time.time() < deadline and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
+            if collector_token != _BG_COLLECTOR_TOKEN:
+                xbmc.log('Multi Bridge Fast Autoplay BgCollector: nueva sesion activa, cancelando recolector previo.', xbmc.LOGINFO)
+                return
+            active_workers = [t for t in active_workers if t.is_alive()]
+            while i_rem < len(bg_threads) and len(active_workers) < max_bg_workers:
+                th = bg_threads[i_rem]
+                th.start()
+                active_workers.append(th)
+                i_rem += 1
 
-        if i_rem >= len(bg_threads) and len(active_workers) == 0:
-            break
-        if mon.waitForAbort(0.25):
-            return
+            if i_rem >= len(bg_threads) and len(active_workers) == 0:
+                break
+            if mon.waitForAbort(0.25):
+                return
 
-    if mon.abortRequested():
-        return
+        if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+            return
+    finally:
+        for _th in active_workers:
+            try:
+                if _th.is_alive():
+                    _th.join(0.15)
+            except Exception: pass
+        try:
+            socket.setdefaulttimeout(orig_sock_to or 10.0)
+        except Exception: pass
 
     xbmc.log("Multi Bridge Fast Autoplay: búsqueda de todos los canales completada en segundo plano. Recolectando enlaces...", xbmc.LOGINFO)
 
@@ -10540,7 +10560,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 if time.time() - t_start > (watchdog_timeout - 5):
                     watchdog_timeout = min(watchdog_timeout + 2.0, 40.0)
 
-            xbmc.sleep(250)
+            if mon.waitForAbort(0.25):
+                user_aborted = True
+                break
 
         if user_aborted:
             return True
@@ -10551,7 +10573,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 if player.isPlayingVideo():
                     video_started = True
                     break
-                xbmc.sleep(250)
+                if mon.waitForAbort(0.25):
+                    user_aborted = True
+                    break
 
         if video_started or player.isPlayingVideo():
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
@@ -12912,7 +12936,7 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
 
     # Si hay un recolector de Fast Autoplay activo para este capítulo, esperar a que culmine
     while _BG_COLLECTOR_RUNNING:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
             return
         if mon.waitForAbort(0.5):
             return
@@ -12992,13 +13016,13 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
 
     remaining_unverified = list(unverified_list)
     for cand in unverified_list:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
             xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
             return
 
         # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
         while _floating_dialog_active or _is_dialog_active_global():
-            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
                 return
             if mon.waitForAbort(0.5):
                 return
@@ -13204,7 +13228,7 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
 
     def _preload_channel_worker(ch_info):
         nonlocal matched_item
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
             return
         try:
             with silenced_dialogs():
@@ -13225,32 +13249,44 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
             pass
 
     # Ejecutar búsqueda con baja concurrencia (máximo 2 hilos) y pausas
+    orig_sock_p2 = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5.0)
     active_threads = []
-    for ch_info in enabled_players:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
-            return
-        while len([t for t in active_threads if t.is_alive()]) >= 2:
-            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
+    try:
+        for ch_info in enabled_players:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
                 return
-            time.sleep(0.15)
-        t = threading.Thread(target=_preload_channel_worker, args=(ch_info,), daemon=True)
-        t.start()
-        active_threads.append(t)
-        time.sleep(0.1)
+            while len([t for t in active_threads if t.is_alive()]) >= 2:
+                if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                    return
+                time.sleep(0.15)
+            t = threading.Thread(target=_preload_channel_worker, args=(ch_info,), daemon=True)
+            t.start()
+            active_threads.append(t)
+            time.sleep(0.1)
 
-    wait_end = time.time() + 25.0
-    while any(t.is_alive() for t in active_threads) and time.time() < wait_end:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
-            return
-        time.sleep(0.2)
+        wait_end = time.time() + 25.0
+        while any(t.is_alive() for t in active_threads) and time.time() < wait_end:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                return
+            time.sleep(0.2)
+    finally:
+        for _th in active_threads:
+            try:
+                if _th.is_alive():
+                    _th.join(0.15)
+            except Exception: pass
+        try:
+            socket.setdefaulttimeout(orig_sock_p2 or 10.0)
+        except Exception: pass
 
-    if not all_found_links:
+    if not all_found_links or _BG_TASK_ABORT_EVENT.is_set() or mon.abortRequested():
         xbmc.log("Multi Bridge Pipeline [Fase 2]: No se encontraron enlaces para %s" % cache_key, xbmc.LOGINFO)
         return
 
     # Filtrar y ordenar enlaces según las preferencias del usuario (Idioma, Calidad, Servidores)
     sorted_links = _filter_and_sort_links(all_found_links)
-    if not sorted_links:
+    if not sorted_links or _BG_TASK_ABORT_EVENT.is_set() or mon.abortRequested():
         return
 
     # Para reproducción instantánea, únicamente evaluar enlaces directos sin captcha ni torrents
@@ -13262,7 +13298,7 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
     # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
     verified_top3 = []
     for cand in instant_candidates:
-        if mon.abortRequested() or _get_global_monitor_token() != my_token:
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or _BG_TASK_ABORT_EVENT.is_set():
             break
         if not p.isPlayingVideo():
             break
@@ -13721,9 +13757,10 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         def _watch():
             p = xbmc.Player()
             mon = xbmc.Monitor()
-            while not getattr(self, '_is_closed', False) and not mon.abortRequested():
+            while not getattr(self, '_is_closed', False) and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
                 if not p.isPlayingVideo():
-                    xbmc.sleep(150)
+                    if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set():
+                        break
                     if not p.isPlayingVideo() and not getattr(self, '_is_closed', False):
                         self.selected = -1
                         try:
@@ -13731,7 +13768,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                         except Exception:
                             pass
                         break
-                if mon.waitForAbort(0.2):
+                if mon.waitForAbort(0.2) or _BG_TASK_ABORT_EVENT.is_set():
                     break
         t = threading.Thread(target=_watch, daemon=True)
         t.name = "PausePromptWatchdog"
@@ -14251,9 +14288,10 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         def _watch():
             p = xbmc.Player()
             mon = xbmc.Monitor()
-            while not getattr(self, '_is_closed', False) and not mon.abortRequested():
+            while not getattr(self, '_is_closed', False) and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
                 if not p.isPlayingVideo():
-                    xbmc.sleep(150)
+                    if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set():
+                        break
                     if not p.isPlayingVideo() and not getattr(self, '_is_closed', False):
                         self.selected = -1
                         try:
@@ -14261,7 +14299,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                         except Exception:
                             pass
                         break
-                if mon.waitForAbort(0.2):
+                if mon.waitForAbort(0.2) or _BG_TASK_ABORT_EVENT.is_set():
                     break
         t = threading.Thread(target=_watch, daemon=True)
         t.name = "FloatingLinksWatchdog"
