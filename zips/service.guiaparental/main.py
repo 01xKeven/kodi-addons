@@ -1,5 +1,6 @@
 import sys
 import re
+import json
 import xbmc
 import xbmcgui
 import xbmcaddon
@@ -247,6 +248,244 @@ TMDB_KEYWORD_MID = 179431   # "during-credits stinger"
 # Caché en memoria por sesión: imdb_id -> conteo (0-2) o None si no se pudo resolver
 _tmdb_stinger_cache = {}
 
+# Caché en memoria por sesión para la guía parental completa
+_parental_guide_cache = {}
+
+# API Key predeterminada de MDBList (oculta en código, no expuesta en ajustes)
+_DEFAULT_MDBLIST_API_KEY = "0cmajscves055oixkk32bjd5z"
+
+
+def get_mdblist_api_key():
+    """Devuelve la API key predeterminada de MDBList."""
+    return _DEFAULT_MDBLIST_API_KEY
+
+
+TMDB_GENRE_NAMES = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
+    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History",
+    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Sci-Fi",
+    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western",
+    10759: "Action & Adventure", 10762: "Kids", 10763: "News", 10764: "Reality",
+    10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics"
+}
+
+
+def get_tmdb_genres(imdb_id):
+    """Obtiene géneros en inglés desde TMDb /find."""
+    api_key = get_tmdb_api_key()
+    if not api_key:
+        return []
+    try:
+        r = requests.get(
+            f'https://api.themoviedb.org/3/find/{imdb_id}',
+            params={'api_key': api_key, 'external_source': 'imdb_id'},
+            timeout=5
+        )
+        if r.status_code == 200:
+            data = r.json()
+            genre_ids = []
+            for key in ('movie_results', 'tv_results'):
+                items = data.get(key, [])
+                if items and items[0].get('genre_ids'):
+                    genre_ids = items[0]['genre_ids']
+                    break
+            return [TMDB_GENRE_NAMES[gid] for gid in genre_ids if gid in TMDB_GENRE_NAMES]
+    except Exception:
+        pass
+    return []
+
+
+def _match_kw_term(term, kw):
+    """Comprueba si el término coincide exactamente o como token delimitado por guiones."""
+    target = f'-{term}-'
+    subject = f'-{kw}-'
+    return target in subject
+
+
+def get_mdblist_parental_guide(imdb_id):
+    """
+    Obtiene la guía parental y metadatos desde MDBList.
+    Clasifica las 5 categorías oficiales utilizando keywords granulares,
+    certificación y puntuación de Common Sense Media.
+    """
+    mdblist_key = get_mdblist_api_key()
+    if not mdblist_key:
+        return None
+
+    tmdb_key = get_tmdb_api_key()
+
+    try:
+        url = f'https://mdblist.com/api/?apikey={mdblist_key}&i={imdb_id}'
+        r = requests.get(url, timeout=6)
+        if r.status_code != 200:
+            log(f"MDBList devolvió código HTTP {r.status_code} para {imdb_id}", level=xbmc.LOGWARNING)
+            return None
+
+        d = r.json()
+
+        # Si no se encuentra (ej. es ID de episodio) y tenemos TMDb key, buscar la serie padre
+        if d.get('response') is False and tmdb_key:
+            try:
+                r_find = requests.get(
+                    f'https://api.themoviedb.org/3/find/{imdb_id}',
+                    params={'api_key': tmdb_key, 'external_source': 'imdb_id'},
+                    timeout=5
+                )
+                if r_find.status_code == 200:
+                    ep_res = r_find.json().get('tv_episode_results', [])
+                    if ep_res and ep_res[0].get('show_id'):
+                        show_id = ep_res[0]['show_id']
+                        r_ext = requests.get(
+                            f'https://api.themoviedb.org/3/tv/{show_id}/external_ids',
+                            params={'api_key': tmdb_key},
+                            timeout=5
+                        )
+                        if r_ext.status_code == 200:
+                            parent_imdb = r_ext.json().get('imdb_id')
+                            if parent_imdb and parent_imdb != imdb_id:
+                                log(f"ID {imdb_id} es un episodio; consultando serie padre {parent_imdb} en MDBList")
+                                return get_mdblist_parental_guide(parent_imdb)
+            except Exception as e:
+                log(f"Error resolviendo serie padre en TMDb para MDBList: {e}", level=xbmc.LOGWARNING)
+
+        if not d or d.get('response') is False or not d.get('title'):
+            return None
+
+        title = d.get('title')
+        cert = str(d.get('certification') or '').upper()
+        cs = d.get('commonsense') or 0
+        try:
+            cs = int(cs)
+        except Exception:
+            cs = 0
+
+        is_adult = any(x in cert for x in ['18', 'R', 'TV-MA', 'NC-17', 'MA 15', 'ADULT']) or cs >= 16
+        is_teen = any(x in cert for x in ['16', '15', '14', 'PG-13', 'TV-14', 'M']) or (13 <= cs < 16)
+        is_kids = any(x == cert for x in ['G', 'TV-Y', 'TV-G', 'TV-Y7', 'U', 'AL']) or (0 < cs <= 8)
+
+        kws = [k['name'].lower() for k in d.get('keywords', []) if isinstance(k, dict) and 'name' in k]
+
+        def has_any(term_list):
+            for term in term_list:
+                for kw in kws:
+                    if _match_kw_term(term, kw):
+                        return True
+            return False
+
+        def calc_sev(severe_kws, moderate_kws, mild_kws, adult_weight=False):
+            if is_kids:
+                return "none"
+            if has_any(severe_kws):
+                return "severe" if (is_adult or not is_kids) else "moderate"
+            if has_any(moderate_kws):
+                return "severe" if (is_adult and adult_weight) else "moderate"
+            if has_any(mild_kws):
+                return "moderate" if (is_adult and adult_weight) else "mild"
+            if is_adult and adult_weight:
+                return "mild"
+            return "none"
+
+        sex_sev = calc_sev(
+            ['full-frontal-nudity', 'explicit-sex', 'hardcore', 'eroticism', 'naked-female-breasts', 'gangbang', 'sexual-assault', 'incest', 'rape'],
+            ['nudity', 'sex-scene', 'female-nudity', 'male-nudity', 'erotic', 'nude', 'rear-nudity', 'topless'],
+            ['kiss', 'cleavage', 'bikini', 'underwear', 'seduction', 'flirting', 'innuendo']
+        )
+        if is_kids:
+            sex_sev = "none"
+
+        viol_sev = calc_sev(
+            ['bloody-violence', 'extreme-violence', 'gore', 'torture', 'mutilation', 'decapitation', 'massacre', 'brutal', 'slaughter'],
+            ['violence', 'blood', 'murder', 'shotgun', 'machine-gun', 'gunfight', 'stabbing', 'kill', 'assassin', 'dead-body', 'corpse'],
+            ['fight', 'gun', 'weapon', 'police', 'chase', 'combat', 'brawl', 'punch', 'martial-arts'],
+            adult_weight=True
+        )
+        if is_kids:
+            viol_sev = "mild" if has_any(['fight', 'chase', 'danger', 'action']) else "none"
+
+        if is_kids:
+            prof_sev = "none"
+        elif has_any(['f-word', 'profanity', 'strong-language', 'foul-language', 'swearing', 'vulgarity', 'f-bomb']):
+            prof_sev = "severe" if is_adult else "moderate"
+        elif is_adult:
+            prof_sev = "moderate"
+        elif is_teen:
+            prof_sev = "mild"
+        else:
+            prof_sev = "none"
+
+        drug_sev = calc_sev(
+            ['illegal-drug', 'drug-trafficking', 'drug-dealer', 'drug-ring', 'drug-use', 'cocaine', 'heroin', 'meth', 'overdose', 'drug-addiction', 'substance-abuse'],
+            ['drugs', 'marijuana', 'cannabis', 'alcoholism', 'drunk', 'drugged', 'intoxication'],
+            ['alcohol', 'smoking', 'cigarette', 'cigar', 'beer', 'wine', 'bar', 'drinking']
+        )
+        if is_kids:
+            drug_sev = "none"
+
+        fear_sev = calc_sev(
+            ['cosmic-horror', 'psychological-horror', 'supernatural-horror', 'terrifying', 'gore-horror', 'nightmare-inducing', 'gruesome'],
+            ['horror', 'terror', 'chilling', 'horror-elements', 'creepy', 'demon', 'haunted', 'slasher', 'disturbing'],
+            ['suspense', 'fear', 'tension', 'thriller', 'mystery', 'dark', 'claustrophobia']
+        )
+        if is_kids:
+            fear_sev = "mild" if has_any(['fear', 'monster', 'dark']) else "none"
+
+        cats_map = {
+            'SEXUAL_CONTENT': sex_sev,
+            'VIOLENCE': viol_sev,
+            'PROFANITY': prof_sev,
+            'ALCOHOL_DRUGS': drug_sev,
+            'FRIGHTENING_INTENSE_SCENES': fear_sev
+        }
+
+        guide = []
+        for cat_key in CATEGORY_ORDER:
+            cat_label = get_string(cat_key)
+            sev = cats_map.get(cat_key, "none")
+            sev_text, sev_class = severity_to_class(sev)
+            guide.append({
+                'category':      cat_label,
+                'raw_category':  cat_key,
+                'severity_text': sev_text,
+                'severity_class': sev_class,
+                'item_list':     [],
+                'is_default':    False
+            })
+
+        imdb_rating, imdb_votes = None, None
+        for r_item in d.get('ratings', []):
+            if r_item.get('source') == 'imdb':
+                imdb_rating = r_item.get('value')
+                imdb_votes = r_item.get('votes')
+                break
+
+        certificate = d.get('certification')
+        if not certificate and cs:
+            certificate = f"{cs}+"
+
+        runtime_min = d.get('runtime') or 0
+        runtime_sec = int(runtime_min) * 60 if runtime_min else None
+
+        genres = []
+        if d.get('genres'):
+            for g in d['genres']:
+                if isinstance(g, dict) and g.get('name'):
+                    genres.append(g['name'])
+                elif isinstance(g, str):
+                    genres.append(g)
+
+        meta = {
+            'rating': imdb_rating,
+            'votes': imdb_votes,
+            'certificate': certificate,
+            'year': d.get('year'),
+            'runtime': runtime_sec,
+            'genres': genres
+        }
+        return title, guide, meta
+    except Exception as err:
+        log(f"Error consultando MDBList: {err}", level=xbmc.LOGWARNING)
+        return None
+
 
 def get_tmdb_api_key():
     """Devuelve la API key de TMDB configurada en los ajustes (o cadena vacía)."""
@@ -400,7 +639,33 @@ def get_bool_setting(setting_id, default=True):
     return str(val).strip().lower() in ('true', '1', 'yes', 'on')
 
 def get_episode_imdb_id(series_id, season, episode):
-    """Resuelve el IMDb ID específico de un episodio usando la API de GraphQL de IMDb."""
+    """Resuelve el IMDb ID específico de un episodio usando TMDb o GraphQL de IMDb."""
+    tmdb_key = get_tmdb_api_key()
+    if tmdb_key:
+        try:
+            r = requests.get(
+                f'https://api.themoviedb.org/3/find/{series_id}',
+                params={'api_key': tmdb_key, 'external_source': 'imdb_id'},
+                timeout=5
+            )
+            if r.status_code == 200:
+                tv_res = r.json().get('tv_results', [])
+                if tv_res and tv_res[0].get('id'):
+                    tv_id = tv_res[0]['id']
+                    r_ep = requests.get(
+                        f'https://api.themoviedb.org/3/tv/{tv_id}/season/{season}/episode/{episode}/external_ids',
+                        params={'api_key': tmdb_key},
+                        timeout=5
+                    )
+                    if r_ep.status_code == 200:
+                        ep_imdb = r_ep.json().get('imdb_id')
+                        if ep_imdb and ep_imdb.startswith('tt'):
+                            log(f"ID de episodio S{season:02d}E{episode:02d} resuelto vía TMDb: {ep_imdb}")
+                            return ep_imdb
+        except Exception as e:
+            log(f"Error resolviendo episodio con TMDb: {e}", level=xbmc.LOGWARNING)
+
+    # Intento con IMDb GraphQL (con timeout corto para no demorar la reproducción)
     try:
         url = 'https://api.graphql.imdb.com/'
         query = """
@@ -434,26 +699,23 @@ def get_episode_imdb_id(series_id, season, episode):
             'Accept': '*/*',
             'Accept-Language': 'en-US,en;q=0.9,es;q=0.8'
         }
-        r = requests.post(url, json={'query': query}, headers=headers, timeout=12)
-        if r.status_code != 200:
+        r = requests.post(url, json={'query': query}, headers=headers, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            edges = data.get('data', {}).get('title', {}).get('episodes', {}).get('episodes', {}).get('edges', [])
+            for edge in edges:
+                node = edge.get('node', {})
+                ep_num_str = node.get('series', {}).get('displayableEpisodeNumber', {}).get('episodeNumber', {}).get('episodeNumber')
+                if ep_num_str and int(ep_num_str) == int(episode):
+                    ep_id = node.get('id', '')
+                    if ep_id.startswith('tt'):
+                        return ep_id
+        else:
             log(f"IMDb GraphQL devolvió código {r.status_code} al buscar episodios", level=xbmc.LOGWARNING)
-            return None
-            
-        data = r.json()
-        edges = data.get('data', {}).get('title', {}).get('episodes', {}).get('episodes', {}).get('edges', [])
-        
-        for edge in edges:
-            node = edge.get('node', {})
-            ep_num_str = node.get('series', {}).get('displayableEpisodeNumber', {}).get('episodeNumber', {}).get('episodeNumber')
-            if ep_num_str and int(ep_num_str) == int(episode):
-                ep_id = node.get('id', '')
-                if ep_id.startswith('tt'):
-                    return ep_id
-                    
-        log(f"Episodio S{season:02d}E{episode:02d} no encontrado en la respuesta de GraphQL", level=xbmc.LOGWARNING)
     except Exception as e:
         log(f"Error buscando ID de episodio en GraphQL: {e}", level=xbmc.LOGWARNING)
     return None
+
 
 def empty_guide():
     """Guía de 5 filas marcadas como sin información (distinto de votado 'ninguna')."""
@@ -474,9 +736,9 @@ def is_empty_guide(guide):
 
 def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=None):
     """
-    Obtiene la guía parental directamente de IMDb usando la API de GraphQL.
-    Devuelve (title, parental_guide_list, stinger_info, meta) o (None, None, None, None) en caso de error.
-    meta = { 'rating': float|None, 'votes': int|None, 'certificate': str|None }
+    Obtiene la guía parental y metadatos de IMDb.
+    Si la API de IMDb no responde o es bloqueada (ej. 403 WAF), devuelve None
+    para que el overlay no se muestre de forma errónea o vacía.
     """
     if not imdb_id or not imdb_id.startswith('tt') or not imdb_id[2:].isdigit():
         log(f"ID de IMDb inválido: {imdb_id}", level=xbmc.LOGERROR)
@@ -484,161 +746,163 @@ def get_parental_guide(imdb_id, progress_dialog=None, silent=False, media_type=N
             xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_format"))
         return None, None, None, None
 
+    if imdb_id in _parental_guide_cache:
+        log(f"Guía parental recuperada de caché para {imdb_id}")
+        return _parental_guide_cache[imdb_id]
+
     if progress_dialog:
         progress_dialog.update(20, get_string("connecting"))
 
+    movie_title = None
+    parental_guide = None
+    meta = {}
+
+    # 1. Intentar resolver con MDBList (fuente primaria precisa, sin bloqueo CloudFront WAF)
     try:
-        url = 'https://api.graphql.imdb.com/'
-        query = """
-        query {
-          title(id: "%s") {
-            id
-            titleText {
-              text
-            }
-            ratingsSummary {
-              aggregateRating
-              voteCount
-            }
-            certificate {
-              rating
-            }
-            releaseYear {
-              year
-            }
-            runtime {
-              seconds
-            }
-            genres {
-              genres {
-                text
-              }
-            }
-            parentsGuide {
-              categories {
-                category {
-                  id
+        mdblist_res = get_mdblist_parental_guide(imdb_id)
+        if mdblist_res:
+            movie_title, parental_guide, meta = mdblist_res
+            log(f"Guía parental obtenida exitosamente vía MDBList para: {movie_title}")
+    except Exception as e:
+        log(f"Error procesando guía con MDBList: {e}", level=xbmc.LOGWARNING)
+
+    # 2. Fallback secundario: IMDb GraphQL (si estuviera accesible)
+    if not parental_guide:
+        try:
+            url = 'https://api.graphql.imdb.com/'
+            query = """
+            query {
+              title(id: "%s") {
+                id
+                titleText {
                   text
                 }
-                severity {
-                  id
+                ratingsSummary {
+                  aggregateRating
+                  voteCount
+                }
+                certificate {
+                  rating
+                }
+                releaseYear {
+                  year
+                }
+                runtime {
+                  seconds
+                }
+                genres {
+                  genres {
+                    text
+                  }
+                }
+                parentsGuide {
+                  categories {
+                    category {
+                      id
+                      text
+                    }
+                    severity {
+                      id
+                    }
+                  }
                 }
               }
             }
-          }
-        }
-        """ % imdb_id
+            """ % imdb_id
 
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-            'Referer': 'https://www.imdb.com/',
-            'Origin': 'https://www.imdb.com',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9,es;q=0.8'
-        }
-        
-        log(f"Consultando IMDb GraphQL para la guía parental y post-créditos: {imdb_id}")
-        r = requests.post(url, json={'query': query}, headers=headers, timeout=12)
+            headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+                'Referer': 'https://www.imdb.com/',
+                'Origin': 'https://www.imdb.com',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9,es;q=0.8'
+            }
+            
+            log(f"Consultando IMDb GraphQL para la guía parental: {imdb_id}")
+            r = requests.post(url, json={'query': query}, headers=headers, timeout=5)
 
-        if r.status_code != 200:
-            log(f"IMDb GraphQL respondió con código {r.status_code}", level=xbmc.LOGWARNING)
-            return imdb_id, None, None, None
+            if r.status_code == 200:
+                data = r.json()
+                title_data = data.get("data", {}).get("title")
+                if title_data:
+                    movie_title = title_data.get("titleText", {}).get("text", imdb_id)
+                    ratings_summary = title_data.get("ratingsSummary") or {}
+                    genres = []
+                    try:
+                        for g in ((title_data.get("genres") or {}).get("genres") or []):
+                            if g and g.get("text"):
+                                genres.append(g["text"])
+                    except Exception:
+                        genres = []
+                    meta = {
+                        'rating': ratings_summary.get("aggregateRating"),
+                        'votes': ratings_summary.get("voteCount"),
+                        'certificate': (title_data.get("certificate") or {}).get("rating"),
+                        'year': (title_data.get("releaseYear") or {}).get("year"),
+                        'runtime': (title_data.get("runtime") or {}).get("seconds"),
+                        'genres': genres,
+                    }
+                    parents_guide = title_data.get("parentsGuide")
+                    categories = parents_guide.get("categories", []) if parents_guide else []
+                    if categories:
+                        graphql_cat_map = {
+                            "NUDITY": "SEXUAL_CONTENT",
+                            "VIOLENCE": "VIOLENCE",
+                            "PROFANITY": "PROFANITY",
+                            "ALCOHOL": "ALCOHOL_DRUGS",
+                            "FRIGHTENING": "FRIGHTENING_INTENSE_SCENES"
+                        }
+                        entries_by_cat = {}
+                        for cat_item in categories:
+                            g_cat_id = cat_item.get("category", {}).get("id")
+                            internal_key = graphql_cat_map.get(g_cat_id)
+                            if internal_key:
+                                entries_by_cat[internal_key] = cat_item
 
-        data = r.json()
-        title_data = data.get("data", {}).get("title")
-        if not title_data:
-            log(f"No hay datos de título en GraphQL para ID: {imdb_id}")
-            return imdb_id, None, None, None
+                        pg = []
+                        for cat_key in CATEGORY_ORDER:
+                            cat_label = get_string(cat_key)
+                            entry = entries_by_cat.get(cat_key)
+                            if entry and entry.get("severity"):
+                                sev_id = entry["severity"].get("id", "noneVotes")
+                                level = sev_id.replace("Votes", "")
+                                sev_text, sev_class = severity_to_class(level)
+                            else:
+                                sev_text, sev_class = get_string("no_data"), "noneVotes"
+                            pg.append({
+                                'category':      cat_label,
+                                'raw_category':  cat_key,
+                                'severity_text': sev_text,
+                                'severity_class': sev_class,
+                                'item_list':     [],
+                                'is_default':    False
+                            })
+                        parental_guide = pg
+                        log(f"Guía parental de IMDb GraphQL obtenida con éxito para {movie_title}")
+            else:
+                log(f"IMDb GraphQL respondió con código {r.status_code} (bloqueo WAF CloudFront)", level=xbmc.LOGWARNING)
+        except Exception as err:
+            log(f"Error al consultar IMDb GraphQL: {err}", level=xbmc.LOGWARNING)
 
-        movie_title = title_data.get("titleText", {}).get("text", imdb_id)
-        parents_guide = title_data.get("parentsGuide")
-
-        # Rating + votos + clasificación por edades (certificado IMDb)
-        ratings_summary = title_data.get("ratingsSummary") or {}
-        genres = []
-        try:
-            for g in ((title_data.get("genres") or {}).get("genres") or []):
-                if g and g.get("text"):
-                    genres.append(g["text"])
-        except Exception:
-            genres = []
-        meta = {
-            'rating': ratings_summary.get("aggregateRating"),
-            'votes': ratings_summary.get("voteCount"),
-            'certificate': (title_data.get("certificate") or {}).get("rating"),
-            'year': (title_data.get("releaseYear") or {}).get("year"),
-            'runtime': (title_data.get("runtime") or {}).get("seconds"),
-            'genres': genres,
-        }
-
-        # Post-créditos: solo desde TMDB (número de tramos 0-2). Sin key -> None (sin fila).
-        stinger_info = get_tmdb_stinger_info(imdb_id)
-
-        if not parents_guide:
-            log(f"No hay guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, empty_guide(), stinger_info, meta
-
-        categories = parents_guide.get("categories", [])
-        if not categories:
-            log(f"No hay categorías de guía parental en GraphQL para ID: {imdb_id}")
-            return movie_title, empty_guide(), stinger_info, meta
-
-    except Exception as err:
-        log(f"Error al conectar con IMDb GraphQL: {err}", level=xbmc.LOGERROR)
-        if not silent:
-            xbmcgui.Dialog().ok(get_string("error_title"), get_string("error_connect").format(error=err))
+    # Si no se obtuvieron categorías válidas, NO mostramos el overlay (falla silenciosa intencionada)
+    if not parental_guide:
+        log(f"No se pudo obtener guía parental válida para {imdb_id} (API sin datos o no disponible). Overlay desactivado.")
         return None, None, None, None
 
-    if progress_dialog:
-        progress_dialog.update(70, get_string("processing"))
+    # Post-créditos desde TMDb
+    stinger_info = get_tmdb_stinger_info(imdb_id)
 
-    # Map GraphQL category IDs to our internal category keys
-    # GraphQL category IDs: NUDITY, VIOLENCE, PROFANITY, ALCOHOL, FRIGHTENING
-    graphql_cat_map = {
-        "NUDITY": "SEXUAL_CONTENT",
-        "VIOLENCE": "VIOLENCE",
-        "PROFANITY": "PROFANITY",
-        "ALCOHOL": "ALCOHOL_DRUGS",
-        "FRIGHTENING": "FRIGHTENING_INTENSE_SCENES"
-    }
-
-    # Indexar por categoría interna
-    entries_by_cat = {}
-    for cat_item in categories:
-        g_cat_id = cat_item.get("category", {}).get("id")
-        internal_key = graphql_cat_map.get(g_cat_id)
-        if internal_key:
-            entries_by_cat[internal_key] = cat_item
-
-    parental_guide = []
-    for cat_key in CATEGORY_ORDER:
-        cat_label = get_string(cat_key)
-        entry = entries_by_cat.get(cat_key)
-
-        if entry and entry.get("severity"):
-            # GraphQL severity.id can be: noneVotes, mildVotes, moderateVotes, severeVotes
-            sev_id = entry["severity"].get("id", "noneVotes")
-            # Map severity.id back to clean level: none, mild, moderate, severe
-            level = sev_id.replace("Votes", "")
-            sev_text, sev_class = severity_to_class(level)
-        else:
-            # Sin entrada o sin severidad: no hay información (distinto de votado "ninguna")
-            sev_text, sev_class = get_string("no_data"), "noneVotes"
-
-        parental_guide.append({
-            'category':      cat_label,
-            'raw_category':  cat_key,
-            'severity_text': sev_text,
-            'severity_class': sev_class,
-            'item_list':     [],
-            'is_default':    False
-        })
+    # Rellenar géneros desde TMDb si vienen vacíos
+    if not meta.get('genres'):
+        meta['genres'] = get_tmdb_genres(imdb_id)
 
     if progress_dialog:
         progress_dialog.update(95, get_string("finalizing"))
 
-    return movie_title, parental_guide, stinger_info, meta
+    result = (movie_title, parental_guide, stinger_info, meta)
+    _parental_guide_cache[imdb_id] = result
+    return result
 
 
 def process_id(imdb_id):

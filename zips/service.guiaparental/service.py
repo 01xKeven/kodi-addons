@@ -736,9 +736,9 @@ class ParentalPlayer(xbmc.Player):
                 else:
                     movie_title, guide, stinger_info, meta = None, None, None, {}
 
-                # Si es un episodio y no tiene guía propia en IMDb, heredar la guía general de la serie
-                if media_type == 'show' and main.is_empty_guide(guide) and show_imdb_id and show_imdb_id != imdb_id:
-                    log(f"El episodio no tiene guía propia en IMDb, obteniendo guía de la serie: {show_imdb_id}")
+                # Si es un episodio y no tiene guía propia, heredar la guía general de la serie
+                if media_type == 'show' and (not guide or main.is_empty_guide(guide)) and show_imdb_id and show_imdb_id != imdb_id:
+                    log(f"El episodio no tiene guía propia, obteniendo guía de la serie: {show_imdb_id}")
                     s_res = main.get_parental_guide(show_imdb_id, progress_dialog=None, silent=True, media_type='show')
                     if s_res and len(s_res) >= 2 and s_res[1]:
                         guide = s_res[1]
@@ -750,8 +750,8 @@ class ParentalPlayer(xbmc.Player):
                 log(f"Error al descargar la guía parental: {e}", level=xbmc.LOGERROR)
                 return
 
-            if movie_title is None:
-                log(f"No se pudo resolver información para el ID: {imdb_id}.")
+            if not movie_title or not guide or main.is_empty_guide(guide):
+                log(f"No se pudo resolver guía parental válida para el ID: {imdb_id}. No se muestra overlay.")
                 return
 
             if self.stop_event.is_set() or not self.isPlayingVideo():
