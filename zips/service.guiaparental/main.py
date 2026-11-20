@@ -352,18 +352,22 @@ def get_mdblist_parental_guide(imdb_id):
             return None
 
         title = d.get('title')
-        cert = str(d.get('certification') or '').upper()
+        cert = str(d.get('certification') or '').upper().strip()
         cs = d.get('commonsense') or 0
         try:
             cs = int(cs)
         except Exception:
             cs = 0
 
-        is_adult = any(x in cert for x in ['18', 'R', 'TV-MA', 'NC-17', 'MA 15', 'ADULT']) or cs >= 16
-        is_teen = any(x in cert for x in ['16', '15', '14', 'PG-13', 'TV-14', 'M']) or (13 <= cs < 16)
-        is_kids = any(x == cert for x in ['G', 'TV-Y', 'TV-G', 'TV-Y7', 'U', 'AL']) or (0 < cs <= 8)
+        tokens = cert.replace('-', ' ').replace('+', ' ').split()
+        is_unrated = cert in ['', 'NR', 'UR', 'NOT RATED', 'UNRATED']
+        is_adult = (not is_unrated) and (any(x == cert or x in tokens for x in ['18', 'R', 'TV-MA', 'NC-17', 'MA15', 'ADULT', 'X']) or cs >= 16)
+        is_teen = (not is_unrated) and (any(x == cert or x in tokens for x in ['16', '15', '14', 'PG-13', 'TV-14', 'M']) or (13 <= cs < 16))
+        is_kids = any(x == cert or x in tokens for x in ['G', 'TV-Y', 'TV-G', 'TV-Y7', 'U', 'AL']) or (0 < cs <= 8)
+        has_cert = is_adult or is_teen or is_kids
 
         kws = [k['name'].lower() for k in d.get('keywords', []) if isinstance(k, dict) and 'name' in k]
+        has_good_kws = len(kws) >= 10
 
         def has_any(term_list):
             for term in term_list:
@@ -373,17 +377,19 @@ def get_mdblist_parental_guide(imdb_id):
             return False
 
         def calc_sev(severe_kws, moderate_kws, mild_kws, adult_weight=False):
-            if is_kids:
-                return "none"
             if has_any(severe_kws):
                 return "severe" if (is_adult or not is_kids) else "moderate"
             if has_any(moderate_kws):
                 return "severe" if (is_adult and adult_weight) else "moderate"
             if has_any(mild_kws):
                 return "moderate" if (is_adult and adult_weight) else "mild"
+            if is_kids:
+                return "none"
             if is_adult and adult_weight:
                 return "mild"
-            return "none"
+            if has_good_kws or has_cert:
+                return "none"
+            return "no_data"
 
         sex_sev = calc_sev(
             ['full-frontal-nudity', 'explicit-sex', 'hardcore', 'eroticism', 'naked-female-breasts', 'gangbang', 'sexual-assault', 'incest', 'rape'],
@@ -402,16 +408,18 @@ def get_mdblist_parental_guide(imdb_id):
         if is_kids:
             viol_sev = "mild" if has_any(['fight', 'chase', 'danger', 'action']) else "none"
 
-        if is_kids:
-            prof_sev = "none"
-        elif has_any(['f-word', 'profanity', 'strong-language', 'foul-language', 'swearing', 'vulgarity', 'f-bomb']):
+        if has_any(['f-word', 'profanity', 'strong-language', 'foul-language', 'swearing', 'vulgarity', 'f-bomb']):
             prof_sev = "severe" if is_adult else "moderate"
         elif is_adult:
             prof_sev = "moderate"
         elif is_teen:
             prof_sev = "mild"
-        else:
+        elif is_kids:
             prof_sev = "none"
+        elif has_good_kws:
+            prof_sev = "none"
+        else:
+            prof_sev = "no_data"
 
         drug_sev = calc_sev(
             ['illegal-drug', 'drug-trafficking', 'drug-dealer', 'drug-ring', 'drug-use', 'cocaine', 'heroin', 'meth', 'overdose', 'drug-addiction', 'substance-abuse'],
@@ -440,7 +448,7 @@ def get_mdblist_parental_guide(imdb_id):
         guide = []
         for cat_key in CATEGORY_ORDER:
             cat_label = get_string(cat_key)
-            sev = cats_map.get(cat_key, "none")
+            sev = cats_map.get(cat_key, "no_data")
             sev_text, sev_class = severity_to_class(sev)
             guide.append({
                 'category':      cat_label,
@@ -448,7 +456,7 @@ def get_mdblist_parental_guide(imdb_id):
                 'severity_text': sev_text,
                 'severity_class': sev_class,
                 'item_list':     [],
-                'is_default':    False
+                'is_default':    (sev == "no_data")
             })
 
         imdb_rating, imdb_votes = None, None
@@ -571,8 +579,10 @@ def severity_to_class(level):
         "mild":     (get_string("mild"),  "mildVotes"),
         "moderate": (get_string("moderate"), "moderateVotes"),
         "severe":   (get_string("severe"),   "severeVotes"),
+        "no_data":  (get_string("no_data"),  "noneVotes"),
     }
-    return mapping.get(level, (get_string("none"), "noneVotes"))
+    key = str(level).lower().replace("votes", "") if level else "no_data"
+    return mapping.get(key, (get_string("no_data"), "noneVotes"))
 
 
 def format_votes(n):

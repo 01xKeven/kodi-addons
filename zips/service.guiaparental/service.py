@@ -750,8 +750,8 @@ class ParentalPlayer(xbmc.Player):
                 log(f"Error al descargar la guía parental: {e}", level=xbmc.LOGERROR)
                 return
 
-            if not movie_title or not guide or main.is_empty_guide(guide):
-                log(f"No se pudo resolver guía parental válida para el ID: {imdb_id}. No se muestra overlay.")
+            if movie_title is None or guide is None:
+                log(f"No se pudo resolver información para el ID: {imdb_id} (error de API o sin respuesta). Overlay desactivado.")
                 return
 
             if self.stop_event.is_set() or not self.isPlayingVideo():
