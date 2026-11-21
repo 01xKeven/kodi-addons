@@ -399,6 +399,65 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def handle_recaptcha_proxy(self, is_post=False):
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        target = qs.get("url", [""])[0]
+        if not target:
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target))
+        target_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+        target_co = base64.b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
+
+        parsed = urllib.parse.urlsplit(target)
+        q_dict = urllib.parse.parse_qs(parsed.query)
+        if "co" in q_dict or "anchor" in parsed.path or "bframe" in parsed.path:
+            q_dict["co"] = [target_co]
+        new_query = urllib.parse.urlencode(q_dict, doseq=True)
+        real_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+
+        headers = {
+            "User-Agent": self.user_agent,
+            "Referer": target_origin + "/",
+            "Origin": target_origin
+        }
+
+        post_data = None
+        if is_post:
+            length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(length)
+            if "Content-Type" in self.headers:
+                headers["Content-Type"] = self.headers["Content-Type"]
+
+        req = urllib.request.Request(real_url, data=post_data, headers=headers)
+        try:
+            resp = urllib.request.urlopen(req, timeout=14)
+            content = resp.read()
+            c_type = resp.headers.get("Content-Type", "text/html")
+
+            self.send_response(resp.status if hasattr(resp, "status") else 200)
+            self.send_header("Content-Type", c_type)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            if "text/html" in c_type:
+                html_str = content.decode("utf-8", errors="ignore")
+                html_str = html_str.replace("https://www.google.com/recaptcha/api2/", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api2/')}")
+                self.wfile.write(html_str.encode("utf-8"))
+            elif "javascript" in c_type:
+                js_str = content.decode("utf-8", errors="ignore")
+                js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';",
+                                        f"w['__recaptcha_api']='/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api2/')}';")
+                self.wfile.write(js_str.encode("utf-8"))
+            else:
+                self.wfile.write(content)
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(str(e).encode("utf-8"))
+
     def do_GET(self):
         clean_path = self.path.split("?")[0]
         if clean_path in ["/", "/captcha"]:
@@ -604,6 +663,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
                 if "text/html" in content_type:
                     html_str = content.decode("utf-8", errors="ignore")
+                    html_str = html_str.replace("https://www.google.com/recaptcha/api.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api.js')}")
+                    html_str = html_str.replace("https://www.google.com/recaptcha/enterprise.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/enterprise.js')}")
+                    html_str = html_str.replace("//www.google.com/recaptcha/api.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api.js')}")
                     direct_url = extract_stream_from_html(html_str)
                     if direct_url:
                         if "/dash/" in direct_url.lower() and not direct_url.lower().endswith(".mpd"):
@@ -740,6 +802,30 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 }}
                             }}, true);
                         }} catch(e) {{}}
+                        try {{
+                            var origIframeSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+                            if (origIframeSrc && origIframeSrc.set) {{
+                                var origIframeSrcSet = origIframeSrc.set;
+                                Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
+                                    set: function(val) {{
+                                        if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
+                                            val = '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                                        }}
+                                        return origIframeSrcSet.call(this, val);
+                                    }},
+                                    get: origIframeSrc.get,
+                                    configurable: true
+                                }});
+                            }}
+
+                            var origSetAttr = HTMLIFrameElement.prototype.setAttribute;
+                            HTMLIFrameElement.prototype.setAttribute = function(name, val) {{
+                                if (name && name.toLowerCase() === 'src' && val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
+                                    val = '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                                }}
+                                return origSetAttr.call(this, name, val);
+                            }};
+                        }} catch(e) {{}}
                     }})();
                     </script>
                     """
@@ -755,6 +841,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(str(e).encode("utf-8"))
+        elif clean_path == "/recaptcha_proxy":
+            self.handle_recaptcha_proxy(is_post=False)
         elif clean_path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -770,7 +858,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_length)
 
-        if clean_path == "/stream":
+        if clean_path == "/recaptcha_proxy":
+            self.handle_recaptcha_proxy(is_post=True)
+        elif clean_path == "/stream":
             try:
                 body = json.loads(post_data.decode("utf-8"))
                 url = body.get("url")
