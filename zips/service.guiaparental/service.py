@@ -713,14 +713,14 @@ class ParentalPlayer(xbmc.Player):
                     media_type = 'show'
 
             # Si es episodio, resolver el IMDb ID específico del episodio
-            show_imdb_id = imdb_id
             if media_type == 'show' and season_num and episode_num:
                 ep_id = self._get_episode_imdb_id(imdb_id, season_num, episode_num)
                 if ep_id:
                     log(f"ID específico del episodio S{season_num:02d}E{episode_num:02d}: {ep_id}")
                     imdb_id = ep_id
                 else:
-                    log(f"No se encontró ID de episodio, usando ID de serie: {imdb_id}", level=xbmc.LOGWARNING)
+                    log(f"No se encontró ID específico para el episodio S{season_num:02d}E{episode_num:02d}. Cancelando para no mostrar guía general.", level=xbmc.LOGWARNING)
+                    return
 
             # 3. Descargar la guía parental de IMDb
             try:
@@ -735,17 +735,6 @@ class ParentalPlayer(xbmc.Player):
                     stinger_info, meta = None, {}
                 else:
                     movie_title, guide, stinger_info, meta = None, None, None, {}
-
-                # Si es un episodio y no tiene guía propia, heredar la guía general de la serie
-                if media_type == 'show' and (not guide or main.is_empty_guide(guide)) and show_imdb_id and show_imdb_id != imdb_id:
-                    log(f"El episodio no tiene guía propia, obteniendo guía de la serie: {show_imdb_id}")
-                    s_res = main.get_parental_guide(show_imdb_id, progress_dialog=None, silent=True, media_type='show')
-                    if s_res and len(s_res) >= 2 and s_res[1]:
-                        guide = s_res[1]
-                        if not movie_title:
-                            movie_title = s_res[0]
-                        if len(s_res) == 4 and s_res[3]:
-                            meta = s_res[3]
             except Exception as e:
                 log(f"Error al descargar la guía parental: {e}", level=xbmc.LOGERROR)
                 return
