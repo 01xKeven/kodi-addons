@@ -405,7 +405,11 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         return f"http://{host}"
 
     def log_message(self, format, *args):
-        pass
+        try:
+            import xbmc
+            xbmc.log(f"[MultiBridge HTTP] {format % args}", xbmc.LOGINFO)
+        except Exception:
+            pass
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -416,24 +420,31 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_recaptcha_proxy(self, is_post=False, post_data=None):
         parsed_req = urllib.parse.urlsplit(self.path)
-        is_gstatic = "/recaptcha_proxy/gstatic/" in parsed_req.path
-        is_api2 = "/recaptcha_proxy/api2/" in parsed_req.path
-        is_enterprise = "/recaptcha_proxy/enterprise/" in parsed_req.path
-        is_apijs = parsed_req.path.endswith("/api.js") or "/recaptcha_proxy/api.js" in parsed_req.path
-        is_enterprisejs = parsed_req.path.endswith("/enterprise.js") or "/recaptcha_proxy/enterprise.js" in parsed_req.path
+        path = parsed_req.path
+
+        is_gstatic = "/gstatic/" in path or "/releases/" in path
+        is_api2 = "/api2/" in path
+        is_enterprise = "/enterprise/" in path and not path.endswith("/enterprise.js")
+        is_apijs = path.endswith("/api.js") or "/api.js" in path
+        is_enterprisejs = path.endswith("/enterprise.js")
 
         if is_gstatic:
-            sub = parsed_req.path.split("/recaptcha_proxy/gstatic/", 1)[1]
+            if "/gstatic/" in path:
+                sub = path.split("/gstatic/", 1)[1]
+            elif "/releases/" in path:
+                sub = "releases/" + path.split("/releases/", 1)[1]
+            else:
+                sub = path.lstrip("/")
             target_url = f"https://www.gstatic.com/recaptcha/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
         elif is_api2:
-            sub = parsed_req.path.split("/recaptcha_proxy/api2/", 1)[1]
+            sub = path.split("/api2/", 1)[1]
             target_url = f"https://www.google.com/recaptcha/api2/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
         elif is_enterprise:
-            sub = parsed_req.path.split("/recaptcha_proxy/enterprise/", 1)[1]
+            sub = path.split("/enterprise/", 1)[1]
             target_url = f"https://www.google.com/recaptcha/enterprise/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
@@ -577,7 +588,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                     js_str = js_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
-                elif is_gstatic:
+                elif is_gstatic or is_api2:
                     js_str = js_str.replace("https://www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
                     js_str = js_str.replace("//www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
                     js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
@@ -585,12 +596,16 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("window.origin", f'"{target_origin}"')
+                    pattern_pm = r'm\.postMessage\(([^,]+),\s*w\[\d+\]\([^)]+\)\s*,\s*(\[[^\]]+\])\)'
+                    js_str = re.sub(pattern_pm, r'm.postMessage(\1,"*",\2)', js_str)
                 else:
                     js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("window.origin", f'"{target_origin}"')
+                    pattern_pm = r'm\.postMessage\(([^,]+),\s*w\[\d+\]\([^)]+\)\s*,\s*(\[[^\]]+\])\)'
+                    js_str = re.sub(pattern_pm, r'm.postMessage(\1,"*",\2)', js_str)
 
                 resp_bytes = js_str.encode("utf-8")
                 if not is_post and (is_gstatic or is_apijs or is_enterprisejs):
@@ -713,6 +728,32 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     }
                     return origPostMessage.call(this, msg, targetOrigin, transfer);
                 };
+            } catch(e) {}
+
+            try {
+                var origCWDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
+                if (origCWDesc && origCWDesc.get) {
+                    var origCWGet = origCWDesc.get;
+                    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                        get: function() {
+                            var cw = origCWGet.call(this);
+                            if (cw && !cw.__postMessageHooked) {
+                                try {
+                                    cw.__postMessageHooked = true;
+                                    var origPM = cw.postMessage;
+                                    cw.postMessage = function(msg, targetOrigin, transfer) {
+                                        if (typeof targetOrigin === 'string' && targetOrigin !== '*') {
+                                            targetOrigin = '*';
+                                        }
+                                        return origPM.call(this, msg, targetOrigin, transfer);
+                                    };
+                                } catch(e) {}
+                            }
+                            return cw;
+                        },
+                        configurable: true
+                    });
+                }
             } catch(e) {}
 
             try {
@@ -1190,7 +1231,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(str(e).encode("utf-8"))
-        elif clean_path.startswith("/recaptcha_proxy"):
+        elif clean_path.startswith("/recaptcha") or clean_path.startswith("/gstatic") or clean_path.startswith("/api2") or clean_path.endswith("/api.js") or clean_path.endswith("/enterprise.js"):
             self.handle_recaptcha_proxy(is_post=False)
         elif clean_path == "/status":
             self.send_response(200)
@@ -1207,7 +1248,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_length)
 
-        if clean_path.startswith("/recaptcha_proxy"):
+        if clean_path.startswith("/recaptcha") or clean_path.startswith("/gstatic") or clean_path.startswith("/api2"):
             self.handle_recaptcha_proxy(is_post=True, post_data=post_data)
         elif clean_path == "/stream":
             try:
