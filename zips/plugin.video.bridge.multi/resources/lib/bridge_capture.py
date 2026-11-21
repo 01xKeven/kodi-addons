@@ -395,6 +395,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     cookie_jar = None
     user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     port = None
+    recaptcha_cache = {}
 
     @property
     def local_base(self):
@@ -406,16 +407,31 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
     def handle_recaptcha_proxy(self, is_post=False):
         parsed_req = urllib.parse.urlsplit(self.path)
-        if "/recaptcha_proxy/api2/" in parsed_req.path:
+        is_gstatic = "/recaptcha_proxy/gstatic/" in parsed_req.path
+        is_api2 = "/recaptcha_proxy/api2/" in parsed_req.path
+        is_enterprise = "/recaptcha_proxy/enterprise/" in parsed_req.path
+        is_apijs = parsed_req.path.endswith("/api.js") or "/recaptcha_proxy/api.js" in parsed_req.path
+        is_enterprisejs = parsed_req.path.endswith("/enterprise.js") or "/recaptcha_proxy/enterprise.js" in parsed_req.path
+
+        if is_gstatic:
+            sub = parsed_req.path.split("/recaptcha_proxy/gstatic/", 1)[1]
+            target_url = f"https://www.gstatic.com/recaptcha/{sub}"
+            if parsed_req.query:
+                target_url += f"?{parsed_req.query}"
+        elif is_api2:
             sub = parsed_req.path.split("/recaptcha_proxy/api2/", 1)[1]
             target_url = f"https://www.google.com/recaptcha/api2/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
-        elif "/recaptcha_proxy/enterprise/" in parsed_req.path:
+        elif is_enterprise:
             sub = parsed_req.path.split("/recaptcha_proxy/enterprise/", 1)[1]
             target_url = f"https://www.google.com/recaptcha/enterprise/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
+        elif is_apijs:
+            target_url = f"https://www.google.com/recaptcha/api.js?{parsed_req.query}" if parsed_req.query else "https://www.google.com/recaptcha/api.js"
+        elif is_enterprisejs:
+            target_url = f"https://www.google.com/recaptcha/enterprise.js?{parsed_req.query}" if parsed_req.query else "https://www.google.com/recaptcha/enterprise.js"
         else:
             qs = urllib.parse.parse_qs(parsed_req.query)
             target_url = qs.get("url", [""])[0]
@@ -423,6 +439,15 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         if not target_url:
             self.send_response(400)
             self.end_headers()
+            return
+
+        if not is_post and target_url in self.recaptcha_cache:
+            cached_ctype, cached_body = self.recaptcha_cache[target_url]
+            self.send_response(200)
+            self.send_header("Content-Type", cached_ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(cached_body)
             return
 
         parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target_url))
@@ -469,15 +494,36 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(html_str.encode("utf-8"))
             elif "javascript" in c_type:
                 js_str = content.decode("utf-8", errors="ignore")
-                js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';",
-                                        f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/api2/';")
-                js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/enterprise/';",
-                                        f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/enterprise/';")
-                js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
-                js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
-                js_str = js_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
-                js_str = js_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
-                self.wfile.write(js_str.encode("utf-8"))
+                if is_apijs or is_enterprisejs:
+                    js_str = re.sub(r'po\.integrity\s*=\s*["\'][^"\']*["\'];?', 'po.integrity="";', js_str)
+                    js_str = re.sub(r'po\.crossOrigin\s*=\s*["\'][^"\']*["\'];?', '', js_str)
+                    js_str = js_str.replace("https://www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
+                    js_str = js_str.replace("//www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
+                    js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';",
+                                            f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/api2/';")
+                    js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/enterprise/';",
+                                            f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/enterprise/';")
+                    js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
+                    js_str = js_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
+                elif is_gstatic:
+                    js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("window.origin", f'"{target_origin}"')
+                else:
+                    js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                    js_str = js_str.replace("window.origin", f'"{target_origin}"')
+
+                resp_bytes = js_str.encode("utf-8")
+                if not is_post and (is_gstatic or is_apijs or is_enterprisejs):
+                    self.recaptcha_cache[target_url] = (c_type, resp_bytes)
+                self.wfile.write(resp_bytes)
             else:
                 self.wfile.write(content)
         except Exception as e:
@@ -485,11 +531,22 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(e).encode("utf-8"))
 
+
     def transform_html(self, content_bytes, final_url, source_name):
         html_str = content_bytes.decode("utf-8", errors="ignore")
         final_origin = f"{urllib.parse.urlsplit(final_url).scheme}://{urllib.parse.urlsplit(final_url).netloc}"
+        final_domain = urllib.parse.urlsplit(final_url).netloc
         self.target_info["target_url"] = final_url
         self.target_info["final_origin"] = final_origin
+
+        # Update dynamic form action and hidden fields from current page
+        m_act = re.search(r'<form\b[^>]*action=["\']([^"\']*)["\']', html_str, re.I)
+        if m_act:
+            self.target_info["form_action"] = urllib.parse.urljoin(final_url, m_act.group(1))
+        for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]+value=["\']([^"\']*)["\']', html_str, re.I):
+            self.target_info.setdefault("hidden_fields", {})[m.group(1)] = m.group(2)
+        for m in re.finditer(r'<input[^>]+value=["\']([^"\']*)["\'][^>]+name=["\']([^"\']+)["\']', html_str, re.I):
+            self.target_info.setdefault("hidden_fields", {})[m.group(2)] = m.group(1)
 
         # 1. Stream detection
         stream_url = extract_stream_from_html(html_str)
@@ -525,9 +582,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         # 2. Static reCAPTCHA script rewriting
         def rewrite_recaptcha_script(match):
             full_url = match.group(0)
-            if full_url.startswith("//"):
-                full_url = "https:" + full_url
-            return f"{self.local_base}/recaptcha_proxy?url={urllib.parse.quote(full_url)}"
+            parsed = urllib.parse.urlsplit(full_url)
+            fname = os.path.basename(parsed.path) or "api.js"
+            query = f"?{parsed.query}" if parsed.query else ""
+            return f"{self.local_base}/recaptcha_proxy/{fname}{query}"
 
         html_str = re.sub(
             r'https?://(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
@@ -543,210 +601,267 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         )
 
         # 3. Unified injection script
-        injected_script = f"""
-        <base href="{final_origin}/">
+        injected_script = """
+        <base href="__FINAL_ORIGIN__/">
         <script>
-        (function() {{
-            var localBase = '{self.local_base}';
+        (function() {
+            var localBase = '__LOCAL_BASE__';
 
-            try {{
-                window.open = function() {{ return null; }};
-                window.showModalDialog = function() {{ return null; }};
-            }} catch(e) {{}}
+            try {
+                window.open = function() { return null; };
+                window.showModalDialog = function() { return null; };
+            } catch(e) {}
 
-            try {{
-                Object.defineProperty(window, 'top', {{
-                    get: function() {{ return window.self; }},
-                    set: function() {{}}
-                }});
-            }} catch(e) {{}}
+            try {
+                Object.defineProperty(window, 'top', {
+                    get: function() { return window.self; },
+                    set: function() {}
+                });
+            } catch(e) {}
 
-            function notifyParent(streamUrl) {{
+            try {
+                Object.defineProperty(window, 'origin', {
+                    get: function() { return '__FINAL_ORIGIN__'; },
+                    configurable: true
+                });
+            } catch(e) {}
+
+            try {
+                Object.defineProperty(document, 'domain', {
+                    get: function() { return '__FINAL_DOMAIN__'; },
+                    configurable: true
+                });
+            } catch(e) {}
+
+            function notifyParent(streamUrl) {
                 if (!streamUrl || typeof streamUrl !== 'string') return;
                 if (streamUrl.startsWith('data:') || streamUrl.startsWith('blob:')) return;
                 var low = streamUrl.toLowerCase();
                 if (low.endsWith('.vtt') || low.endsWith('.srt') || low.endsWith('.jpg') || low.endsWith('.png') || low.endsWith('.js') || low.endsWith('.css') || low.endsWith('.svg')) return;
                 if (low.includes('google') || low.includes('analytics') || low.includes('doubleclick') || low.includes('recaptcha') || low.includes('turnstile') || low.includes('hcaptcha')) return;
 
-                try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: streamUrl}}, '*'); }} catch(e) {{}}
-                try {{
-                    fetch(localBase + '/stream', {{
+                try { window.parent.postMessage({type: 'MB_STREAM_FOUND', url: streamUrl}, '*'); } catch(e) {}
+                try {
+                    fetch(localBase + '/stream', {
                         method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{url: streamUrl, status: 'ok', source: 'android_client_sniffer'}})
-                    }});
-                }} catch(e) {{}}
-            }}
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({url: streamUrl, status: 'ok', source: 'android_client_sniffer'})
+                    });
+                } catch(e) {}
+            }
 
-            try {{
+            try {
                 var origPlay = HTMLMediaElement.prototype.play;
-                HTMLMediaElement.prototype.play = function() {{
+                HTMLMediaElement.prototype.play = function() {
                     var s = this.currentSrc || this.src;
-                    if (s && (s.startsWith('http://') || s.startsWith('https://'))) {{
+                    if (s && (s.startsWith('http://') || s.startsWith('https://'))) {
                         notifyParent(s);
-                    }}
+                    }
                     return origPlay.apply(this, arguments);
-                }};
+                };
 
                 var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-                if (srcDesc && srcDesc.set) {{
+                if (srcDesc && srcDesc.set) {
                     var origSrcSet = srcDesc.set;
-                    Object.defineProperty(HTMLMediaElement.prototype, 'src', {{
-                        set: function(val) {{
-                            if (val && typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {{
+                    Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                        set: function(val) {
+                            if (val && typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {
                                 notifyParent(val);
-                            }}
+                            }
                             return origSrcSet.apply(this, arguments);
-                        }},
+                        },
                         get: srcDesc.get,
                         configurable: true
-                    }});
-                }}
-            }} catch(e) {{}}
+                    });
+                }
+            } catch(e) {}
 
-            try {{
+            try {
                 var origFetch = window.fetch;
-                if (origFetch) {{
-                    window.fetch = function(input, init) {{
-                        try {{
+                if (origFetch) {
+                    window.fetch = function(input, init) {
+                        try {
                             var u = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
-                            if (u && typeof u === 'string') {{
+                            if (u && typeof u === 'string') {
                                 var uLow = u.toLowerCase();
-                                if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
+                                if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {
                                     notifyParent(u);
-                                }}
-                            }}
-                        }} catch(e) {{}}
+                                }
+                            }
+                        } catch(e) {}
                         return origFetch.apply(this, arguments);
-                    }};
-                }}
+                    };
+                }
 
                 var origXhrOpen = XMLHttpRequest.prototype.open;
-                XMLHttpRequest.prototype.open = function(method, url) {{
-                    try {{
-                        if (url && typeof url === 'string') {{
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    try {
+                        if (url && typeof url === 'string') {
                             var uLow = url.toLowerCase();
-                            if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
+                            if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {
                                 notifyParent(url);
-                            }}
-                        }}
-                    }} catch(e) {{}}
+                            }
+                        }
+                    } catch(e) {}
                     return origXhrOpen.apply(this, arguments);
-                }};
-            }} catch(e) {{}}
+                };
+            } catch(e) {}
 
-            try {{
-                var syncTokens = function() {{
-                    try {{
+            try {
+                var tokenSent = false;
+                var syncTokens = function() {
+                    try {
                         var ta = document.querySelector('textarea[name="g-recaptcha-response"]');
                         var inpResp = document.querySelector('input[name="g-recaptcha-response"]');
                         var inpToken = document.querySelector('input[name="token"]');
                         var val = (ta && ta.value) ? ta.value : (inpResp ? inpResp.value : '');
-                        if (val && val.length > 20) {{
+                        if (val && val.length > 20) {
                             if (inpResp && inpResp.value !== val) inpResp.value = val;
                             if (inpToken && inpToken.value !== val) inpToken.value = val;
-                        }}
-                    }} catch(err) {{}}
-                }};
+                            var btn = document.getElementById('btn_download');
+                            if (btn && btn.disabled) btn.disabled = false;
+                            if (!tokenSent) {
+                                tokenSent = true;
+                                fetch(localBase + '/token', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({token: val, url: '__FINAL_URL__'})
+                                }).catch(function() {});
+                            }
+                        }
+                    } catch(err) {}
+                };
                 setInterval(syncTokens, 300);
                 document.addEventListener('submit', syncTokens, true);
-            }} catch(e) {{}}
+            } catch(e) {}
 
-            try {{
-                document.addEventListener('submit', function(e) {{
-                    if (e.target && e.target.tagName === 'FORM') {{
+            try {
+                setTimeout(function() {
+                    try {
+                        var rcwp = document.getElementById('rcwp');
+                        if (rcwp && rcwp.children.length === 0 && typeof window.rcwpCallback === 'function' && window.grecaptcha && window.grecaptcha.render) {
+                            window.rcwpCallback();
+                        }
+                    } catch(e) {}
+                }, 800);
+            } catch(e) {}
+
+            try {
+                document.addEventListener('submit', function(e) {
+                    if (e.target && e.target.tagName === 'FORM') {
                         var rawAct = e.target.getAttribute('action');
                         var act = '';
-                        if (!rawAct || rawAct === '#' || rawAct === '') {{
-                            act = '{final_url}';
-                        }} else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {{
-                            if (rawAct.indexOf(localBase) !== -1) {{
+                        if (!rawAct || rawAct === '#' || rawAct === '') {
+                            act = '__FINAL_URL__';
+                        } else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {
+                            if (rawAct.indexOf(localBase) !== -1) {
                                 var m = rawAct.match(/[?&]url=([^&]+)/);
-                                act = m ? decodeURIComponent(m[1]) : '{final_url}';
-                            }} else {{
+                                act = m ? decodeURIComponent(m[1]) : '__FINAL_URL__';
+                            } else {
                                 act = rawAct;
-                            }}
-                        }} else if (rawAct.startsWith('/')) {{
-                            act = '{final_origin}' + rawAct;
-                        }} else {{
-                            act = '{final_origin}/' + rawAct;
-                        }}
+                            }
+                        } else if (rawAct.startsWith('/')) {
+                            act = '__FINAL_ORIGIN__' + rawAct;
+                        } else {
+                            act = '__FINAL_ORIGIN__/' + rawAct;
+                        }
                         e.target.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
-                    }}
-                }}, true);
-            }} catch(e) {{}}
+                    }
+                }, true);
+            } catch(e) {}
 
-            try {{
-                document.addEventListener('click', function(e) {{
+            try {
+                document.addEventListener('click', function(e) {
                     var a = e.target.closest ? e.target.closest('a') : null;
-                    if (a && a.href) {{
+                    if (a && a.href) {
                         var href = a.href;
-                        if ((href.startsWith('http://') || href.startsWith('https://')) && href.indexOf('{final_origin}') === 0) {{
-                            e.preventDefault();
-                            location.href = localBase + '/proxy?url=' + encodeURIComponent(href);
-                        }}
-                    }}
-                }}, true);
-            }} catch(e) {{}}
+                        if ((href.startsWith('http://') || href.startsWith('https://')) && href.indexOf('__FINAL_ORIGIN__') === 0) {
+                            var rel = href.substring('__FINAL_ORIGIN__'.length);
+                            if (rel && rel !== '#' && !rel.startsWith('#') && !rel.startsWith('javascript:')) {
+                                e.preventDefault();
+                                location.href = localBase + '/proxy?url=' + encodeURIComponent(href);
+                            }
+                        }
+                    }
+                }, true);
+            } catch(e) {}
 
-            try {{
+            try {
                 var origScriptSrc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
-                if (origScriptSrc && origScriptSrc.set) {{
+                if (origScriptSrc && origScriptSrc.set) {
                     var origScriptSrcSet = origScriptSrc.set;
-                    Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
-                        set: function(val) {{
-                            if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                if (val.indexOf('/api.js') !== -1 || val.indexOf('/enterprise.js') !== -1) {{
-                                    val = localBase + '/recaptcha_proxy?url=' + encodeURIComponent(val);
-                                }} else if (val.indexOf('/api2/') !== -1) {{
-                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
-                                }} else if (val.indexOf('/enterprise/') !== -1) {{
-                                    val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
-                                }}
-                            }}
+                    Object.defineProperty(HTMLScriptElement.prototype, 'src', {
+                        set: function(val) {
+                            var sVal = String(val || '');
+                            if (sVal.indexOf('google.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                                if (sVal.indexOf('/api.js') !== -1) {
+                                    var q = sVal.indexOf('?') !== -1 ? sVal.substring(sVal.indexOf('?')) : '';
+                                    val = localBase + '/recaptcha_proxy/api.js' + q;
+                                } else if (sVal.indexOf('/enterprise.js') !== -1) {
+                                    var q = sVal.indexOf('?') !== -1 ? sVal.substring(sVal.indexOf('?')) : '';
+                                    val = localBase + '/recaptcha_proxy/enterprise.js' + q;
+                                } else if (sVal.indexOf('/api2/') !== -1) {
+                                    val = localBase + '/recaptcha_proxy/api2/' + sVal.split('google.com/recaptcha/api2/')[1];
+                                } else if (sVal.indexOf('/enterprise/') !== -1) {
+                                    val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
+                                }
+                            }
                             return origScriptSrcSet.call(this, val);
-                        }},
+                        },
                         get: origScriptSrc.get,
                         configurable: true
-                    }});
-                }}
+                    });
+                }
 
                 var origIframeSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
-                if (origIframeSrc && origIframeSrc.set) {{
+                if (origIframeSrc && origIframeSrc.set) {
                     var origIframeSrcSet = origIframeSrc.set;
-                    Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
-                        set: function(val) {{
-                            if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                if (val.indexOf('/api2/') !== -1) {{
-                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
-                                }} else if (val.indexOf('/enterprise/') !== -1) {{
-                                    val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
-                                }}
-                            }}
+                    Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
+                        set: function(val) {
+                            var sVal = String(val || '');
+                            if (sVal.indexOf('google.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                                if (sVal.indexOf('/api2/') !== -1) {
+                                    val = localBase + '/recaptcha_proxy/api2/' + sVal.split('google.com/recaptcha/api2/')[1];
+                                } else if (sVal.indexOf('/enterprise/') !== -1) {
+                                    val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
+                                }
+                            }
                             return origIframeSrcSet.call(this, val);
-                        }},
+                        },
                         get: origIframeSrc.get,
                         configurable: true
-                    }});
-                }}
+                    });
+                }
 
                 var origSetAttr = Element.prototype.setAttribute;
-                Element.prototype.setAttribute = function(name, val) {{
-                    if (name && name.toLowerCase() === 'src' && val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                        if (val.indexOf('/api.js') !== -1 || val.indexOf('/enterprise.js') !== -1) {{
-                            val = localBase + '/recaptcha_proxy?url=' + encodeURIComponent(val);
-                        }} else if (val.indexOf('/api2/') !== -1) {{
-                            val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
-                        }} else if (val.indexOf('/enterprise/') !== -1) {{
-                            val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
-                        }}
-                    }}
+                Element.prototype.setAttribute = function(name, val) {
+                    if (name && name.toLowerCase() === 'src') {
+                        var sVal = String(val || '');
+                        if (sVal.indexOf('google.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                            if (sVal.indexOf('/api.js') !== -1) {
+                                var q = sVal.indexOf('?') !== -1 ? sVal.substring(sVal.indexOf('?')) : '';
+                                val = localBase + '/recaptcha_proxy/api.js' + q;
+                            } else if (sVal.indexOf('/enterprise.js') !== -1) {
+                                var q = sVal.indexOf('?') !== -1 ? sVal.substring(sVal.indexOf('?')) : '';
+                                val = localBase + '/recaptcha_proxy/enterprise.js' + q;
+                            } else if (sVal.indexOf('/api2/') !== -1) {
+                                val = localBase + '/recaptcha_proxy/api2/' + sVal.split('google.com/recaptcha/api2/')[1];
+                            } else if (sVal.indexOf('/enterprise/') !== -1) {
+                                val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
+                            }
+                        }
+                    }
                     return origSetAttr.call(this, name, val);
-                }};
-            }} catch(e) {{}}
-        }})();
+                };
+            } catch(e) {}
+        })();
         </script>
         """
+        injected_script = injected_script.replace("__FINAL_ORIGIN__", final_origin)
+        injected_script = injected_script.replace("__LOCAL_BASE__", self.local_base)
+        injected_script = injected_script.replace("__FINAL_DOMAIN__", final_domain)
+        injected_script = injected_script.replace("__FINAL_URL__", final_url)
+
 
         if "<head>" in html_str:
             html_str = html_str.replace("<head>", "<head>" + injected_script, 1)
@@ -754,6 +869,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             html_str = injected_script + html_str
 
         return html_str.encode("utf-8")
+
 
     def do_GET(self):
         clean_path = self.path.split("?")[0]
@@ -924,7 +1040,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         <a id="btn-kodi" class="btn-kodi" href="javascript:returnToKodi()">Volver a Kodi</a>
     </div>
     <div id="frame-wrap">
-        <iframe id="main-frame" src="{proxy_src}" allow="autoplay; fullscreen; encrypted-media"></iframe>
+        <iframe id="main-frame" src="{proxy_src}" allow="autoplay; fullscreen; encrypted-media; notifications"></iframe>
     </div>
 </body>
 </html>"""
@@ -933,7 +1049,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
-        elif clean_path in ["/proxy", "/proxy_submit"]:
+        elif clean_path == "/proxy":
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             target = qs.get("url", [""])[0] or self.target_info.get("target_url", "")
             if "/proxy" in target and ("127.0.0.1" in target or "localhost" in target):
