@@ -100,10 +100,12 @@ STRING_MAPPING = {
     'runtime': 30060,
     'genres': 30061,
     'imdb_id': 30062,
+    'use_series_guide': 30079,
 }
 
 FALLBACK_STRINGS = {
     'es': {
+        'use_series_guide': "Mostrar guía de la serie en episodios",
         'SEXUAL_CONTENT': "Desnudos",
         'VIOLENCE': "Violencia",
         'PROFANITY': "Groserias",
@@ -200,6 +202,7 @@ FALLBACK_STRINGS = {
         'runtime': "Runtime",
         'genres': "Genres",
         'imdb_id': "IMDb ID",
+        'use_series_guide': "Show series guide in episodes",
     }
 }
 
@@ -322,6 +325,31 @@ def get_mdblist_parental_guide(imdb_id):
             return None
 
         d = r.json()
+
+        # Si no se encuentra (ej. es ID de episodio) y está activo use_series_guide, consultar la serie padre
+        if d.get('response') is False and tmdb_key and get_bool_setting('use_series_guide', True):
+            try:
+                r_find = requests.get(
+                    f'https://api.themoviedb.org/3/find/{imdb_id}',
+                    params={'api_key': tmdb_key, 'external_source': 'imdb_id'},
+                    timeout=5
+                )
+                if r_find.status_code == 200:
+                    ep_res = r_find.json().get('tv_episode_results', [])
+                    if ep_res and ep_res[0].get('show_id'):
+                        show_id = ep_res[0]['show_id']
+                        r_ext = requests.get(
+                            f'https://api.themoviedb.org/3/tv/{show_id}/external_ids',
+                            params={'api_key': tmdb_key},
+                            timeout=5
+                        )
+                        if r_ext.status_code == 200:
+                            parent_imdb = r_ext.json().get('imdb_id')
+                            if parent_imdb and parent_imdb != imdb_id:
+                                log(f"ID {imdb_id} es un episodio; consultando serie padre {parent_imdb} en MDBList (guía global activada)")
+                                return get_mdblist_parental_guide(parent_imdb)
+            except Exception as e:
+                log(f"Error resolviendo serie padre en TMDb para MDBList: {e}", level=xbmc.LOGWARNING)
 
         if not d or d.get('response') is False or not d.get('title'):
             return None

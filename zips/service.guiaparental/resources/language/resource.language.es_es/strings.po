@@ -308,3 +308,11 @@ msgctxt "#30078"
 msgid "Bar with the video progress."
 msgstr "Barra con el avance del vídeo."
 
+msgctxt "#30079"
+msgid "Show series guide in episodes"
+msgstr "Mostrar guía de la serie en episodios"
+
+msgctxt "#30080"
+msgid "In TV series, the parental guide is global for the entire series, not per individual episode."
+msgstr "En series de TV, la guía parental es global para toda la serie, no por episodios individuales."
+

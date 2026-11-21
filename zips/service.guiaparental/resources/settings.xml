@@ -100,6 +100,11 @@
                     <default>false</default>
                     <control type="toggle"/>
                 </setting>
+                <setting id="use_series_guide" type="boolean" label="30079" help="30080">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
             </group>
         </category>
         <category id="api" label="30034">

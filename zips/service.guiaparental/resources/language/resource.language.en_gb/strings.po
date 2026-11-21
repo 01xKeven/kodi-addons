@@ -308,3 +308,11 @@ msgctxt "#30078"
 msgid "Bar with the video progress."
 msgstr "Bar with the video progress."
 
+msgctxt "#30079"
+msgid "Show series guide in episodes"
+msgstr "Show series guide in episodes"
+
+msgctxt "#30080"
+msgid "In TV series, the parental guide is global for the entire series, not per individual episode."
+msgstr "In TV series, the parental guide is global for the entire series, not per individual episode."
+
