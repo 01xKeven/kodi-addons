@@ -1176,10 +1176,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
         function returnToKodi() {{
             try {{
-                window.close();
+                window.location.href = "kodi://launch";
             }} catch(e) {{}}
             try {{
-                window.location.href = "kodi://";
+                window.close();
             }} catch(e) {{}}
         }}
 
@@ -1196,7 +1196,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             var btn = document.getElementById('btn-kodi');
             if (btn) {{
                 btn.style.display = 'inline-block';
-                btn.href = 'kodi://';
+                btn.href = 'kodi://launch';
             }}
 
             var ov = document.getElementById('success-overlay');
@@ -1208,12 +1208,12 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ url: url, status: 'ok', source: 'android_client_event' }})
                 }}).then(function() {{
-                    setTimeout(returnToKodi, 400);
+                    setTimeout(returnToKodi, 300);
                 }}).catch(function() {{
-                    setTimeout(returnToKodi, 400);
+                    setTimeout(returnToKodi, 300);
                 }});
             }} else {{
-                setTimeout(returnToKodi, 400);
+                setTimeout(returnToKodi, 300);
             }}
         }}
 
@@ -1257,10 +1257,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.131</span>
+        <span class="brand">Multi Bridge v1.0.132</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
-        <a id="btn-kodi" class="btn-kodi" href="kodi://" onclick="returnToKodi()">Volver a Kodi</a>
+        <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
     </div>
     <div id="frame-wrap">
         <iframe id="main-frame" src="{proxy_src}" allow="autoplay; fullscreen; encrypted-media; notifications"></iframe>
@@ -1270,7 +1270,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             <p style="color:#8b949e;margin-bottom:28px;font-size:15px;max-width:440px;line-height:1.5;">
                 El video ya se esta reproduciendo en Kodi.<br>Pulsa el boton para volver o usa el boton Volver de tu mando.
             </p>
-            <a id="btn-overlay-kodi" href="kodi://" onclick="returnToKodi()" style="background:#238636;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:16px;font-weight:700;box-shadow:0 4px 16px rgba(35,134,54,0.4);display:inline-block;cursor:pointer;">VOLVER A KODI</a>
+            <a id="btn-overlay-kodi" href="kodi://launch" onclick="returnToKodi()" style="background:#238636;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:16px;font-weight:700;box-shadow:0 4px 16px rgba(35,134,54,0.4);display:inline-block;cursor:pointer;">VOLVER A KODI</a>
         </div>
     </div>
 </body>
