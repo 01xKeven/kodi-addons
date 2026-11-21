@@ -312,6 +312,43 @@ def is_android_platform():
         return True
     return False
 
+def get_kodi_package():
+    try:
+        import re
+        p = ""
+        try:
+            import xbmcvfs
+            p = xbmcvfs.translatePath("special://home")
+        except Exception:
+            try:
+                import xbmc
+                p = xbmc.translatePath("special://home")
+            except Exception:
+                pass
+        if p:
+            m = re.search(r'Android/data/([^/]+)', p)
+            if m:
+                return m.group(1)
+        try:
+            import xbmc
+            p2 = xbmc.translatePath("special://xbmc")
+            m2 = re.search(r'Android/data/([^/]+)', p2)
+            if m2:
+                return m2.group(1)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return "org.xbmc.kodi"
+
+def bring_kodi_to_front():
+    try:
+        import xbmc
+        pkg = get_kodi_package()
+        xbmc.executebuiltin(f'StartAndroidActivity({pkg})')
+    except Exception:
+        pass
+
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1138,7 +1175,12 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         }}
 
         function returnToKodi() {{
-            window.location.href = "intent:#Intent;package=org.xbmc.kodi;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;end;";
+            try {{
+                window.close();
+            }} catch(e) {{}}
+            try {{
+                window.history.back();
+            }} catch(e) {{}}
         }}
 
         function onStreamCaptured(url, fromStatus) {{
@@ -1160,12 +1202,12 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ url: url, status: 'ok', source: 'android_client_event' }})
                 }}).then(function() {{
-                    setTimeout(returnToKodi, 800);
+                    setTimeout(returnToKodi, 500);
                 }}).catch(function() {{
-                    setTimeout(returnToKodi, 800);
+                    setTimeout(returnToKodi, 500);
                 }});
             }} else {{
-                setTimeout(returnToKodi, 800);
+                setTimeout(returnToKodi, 500);
             }}
         }}
 
@@ -1209,7 +1251,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.129</span>
+        <span class="brand">Multi Bridge v1.0.130</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="javascript:returnToKodi()">Volver a Kodi</a>
@@ -1307,6 +1349,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         },
                         "source": body.get("source", "android_smart_proxy")
                     }
+                    bring_kodi_to_front()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -1387,6 +1430,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         },
                         "source": "android_captcha_token"
                     }
+                    bring_kodi_to_front()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Access-Control-Allow-Origin", "*")
@@ -1505,6 +1549,7 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
     try:
         while True:
             if captured_data.get("result"):
+                bring_kodi_to_front()
                 break
             
             if time.time() - start_time > timeout:
