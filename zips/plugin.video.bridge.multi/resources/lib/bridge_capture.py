@@ -1179,7 +1179,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 window.close();
             }} catch(e) {{}}
             try {{
-                window.history.back();
+                window.location.href = "kodi://";
             }} catch(e) {{}}
         }}
 
@@ -1194,7 +1194,13 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 st.innerHTML = 'STREAM OBTENIDO CON EXITO - Reproduciendo en Kodi...';
             }}
             var btn = document.getElementById('btn-kodi');
-            if (btn) btn.style.display = 'inline-block';
+            if (btn) {{
+                btn.style.display = 'inline-block';
+                btn.href = 'kodi://';
+            }}
+
+            var ov = document.getElementById('success-overlay');
+            if (ov) ov.style.display = 'flex';
 
             if (!fromStatus) {{
                 fetch('/stream', {{
@@ -1202,12 +1208,12 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ url: url, status: 'ok', source: 'android_client_event' }})
                 }}).then(function() {{
-                    setTimeout(returnToKodi, 500);
+                    setTimeout(returnToKodi, 400);
                 }}).catch(function() {{
-                    setTimeout(returnToKodi, 500);
+                    setTimeout(returnToKodi, 400);
                 }});
             }} else {{
-                setTimeout(returnToKodi, 500);
+                setTimeout(returnToKodi, 400);
             }}
         }}
 
@@ -1251,13 +1257,21 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.130</span>
+        <span class="brand">Multi Bridge v1.0.131</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
-        <a id="btn-kodi" class="btn-kodi" href="javascript:returnToKodi()">Volver a Kodi</a>
+        <a id="btn-kodi" class="btn-kodi" href="kodi://" onclick="returnToKodi()">Volver a Kodi</a>
     </div>
     <div id="frame-wrap">
         <iframe id="main-frame" src="{proxy_src}" allow="autoplay; fullscreen; encrypted-media; notifications"></iframe>
+        <div id="success-overlay" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;background:#0d1117;z-index:999999;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box;">
+            <div style="width:64px;height:64px;border-radius:50%;background:#238636;color:#ffffff;display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:700;margin-bottom:20px;">&#10003;</div>
+            <h2 style="color:#ffffff;margin-bottom:12px;font-size:22px;font-weight:600;">Stream capturado con exito</h2>
+            <p style="color:#8b949e;margin-bottom:28px;font-size:15px;max-width:440px;line-height:1.5;">
+                El video ya se esta reproduciendo en Kodi.<br>Pulsa el boton para volver o usa el boton Volver de tu mando.
+            </p>
+            <a id="btn-overlay-kodi" href="kodi://" onclick="returnToKodi()" style="background:#238636;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:16px;font-weight:700;box-shadow:0 4px 16px rgba(35,134,54,0.4);display:inline-block;cursor:pointer;">VOLVER A KODI</a>
+        </div>
     </div>
 </body>
 </html>"""
