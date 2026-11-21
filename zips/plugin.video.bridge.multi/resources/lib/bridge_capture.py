@@ -398,6 +398,16 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     recaptcha_cache = {}
     recaptcha_cookie_jar = http.cookiejar.CookieJar()
     recaptcha_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(recaptcha_cookie_jar))
+    recent_logs = []
+
+    @classmethod
+    def record_log(cls, msg):
+        import time
+        t_str = time.strftime("%H:%M:%S")
+        entry = f"[{t_str}] {msg}"
+        cls.recent_logs.append(entry)
+        if len(cls.recent_logs) > 30:
+            cls.recent_logs.pop(0)
 
     @property
     def local_base(self):
@@ -481,9 +491,11 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         new_query = urllib.parse.urlencode(q_dict, doseq=True)
         real_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
+        req_ua = self.headers.get("User-Agent") or self.user_agent
+
         if parsed.path.endswith("/anchor"):
             headers = {
-                "User-Agent": self.user_agent,
+                "User-Agent": req_ua,
                 "Referer": target_origin + "/",
                 "Origin": target_origin
             }
@@ -492,16 +504,21 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             v_val = q_dict.get("v", [""])[0]
             prefix = "api2" if is_api2 else "enterprise"
             headers = {
-                "User-Agent": self.user_agent,
+                "User-Agent": req_ua,
                 "Referer": f"https://www.google.com/recaptcha/{prefix}/anchor?ar=1&k={k_val}&co={target_co}&hl=es&v={v_val}&size=normal",
                 "Origin": "https://www.google.com"
             }
         else:
             headers = {
-                "User-Agent": self.user_agent,
+                "User-Agent": req_ua,
                 "Referer": target_origin + "/",
                 "Origin": target_origin
             }
+
+        client_hints = ["Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Accept-Language"]
+        for ch in client_hints:
+            if ch in self.headers:
+                headers[ch] = self.headers[ch]
 
         if "Cookie" in self.headers:
             headers["Cookie"] = self.headers["Cookie"]
@@ -520,13 +537,35 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             resp = self.recaptcha_opener.open(req, timeout=14)
             content = resp.read()
             c_type = resp.headers.get("Content-Type", "text/html")
+            status_code = resp.status if hasattr(resp, "status") else 200
 
-            self.send_response(resp.status if hasattr(resp, "status") else 200)
+            self.send_response(status_code)
             self.send_header("Content-Type", c_type)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization, Origin, Accept")
+
+            for h_name, h_val in resp.headers.items():
+                if h_name.lower() == "set-cookie":
+                    clean_c = re.sub(r';\s*Domain=[^;]+', '', h_val, flags=re.I)
+                    clean_c = re.sub(r';\s*Secure', '', clean_c, flags=re.I)
+                    self.send_header("Set-Cookie", clean_c)
+
             self.end_headers()
+
+            if is_post and "userverify" in path:
+                resp_preview = content[:80].decode("utf-8", "ignore").replace("\n", " ")
+                if "uvresp" in resp_preview:
+                    if ",1]" in resp_preview or "[1]" in resp_preview:
+                        AndroidCaptchaHTTPHandler.record_log("POST userverify -> 200 (desafio requerido)")
+                    else:
+                        AndroidCaptchaHTTPHandler.record_log("POST userverify -> 200 (resuelto)")
+                else:
+                    AndroidCaptchaHTTPHandler.record_log(f"POST userverify -> {status_code}")
+            elif "anchor" in path:
+                AndroidCaptchaHTTPHandler.record_log(f"GET anchor -> {status_code}")
+            elif "bframe" in path:
+                AndroidCaptchaHTTPHandler.record_log(f"GET bframe -> {status_code}")
 
             if "text/html" in c_type:
                 html_str = content.decode("utf-8", errors="ignore")
@@ -547,22 +586,6 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             }}
             return origPostMessage.call(this, msg, targetOrigin, transfer);
         }};
-    }} catch(e) {{}}
-    try {{
-        var origMsgDesc = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'origin');
-        if (origMsgDesc && origMsgDesc.get) {{
-            var origMsgOriginGet = origMsgDesc.get;
-            Object.defineProperty(MessageEvent.prototype, 'origin', {{
-                get: function() {{
-                    var o = origMsgOriginGet.call(this);
-                    if (o && (o.indexOf('127.0.0.1') !== -1 || o.indexOf('localhost') !== -1)) {{
-                        return '{target_origin}';
-                    }}
-                    return o;
-                }},
-                configurable: true
-            }});
-        }}
     }} catch(e) {{}}
 }})();
 </script>"""
@@ -595,7 +618,6 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
-                    js_str = js_str.replace("window.origin", f'"{target_origin}"')
                     pattern_pm = r'm\.postMessage\(([^,]+),\s*w\[\d+\]\([^)]+\)\s*,\s*(\[[^\]]+\])\)'
                     js_str = re.sub(pattern_pm, r'm.postMessage(\1,"*",\2)', js_str)
                 else:
@@ -603,7 +625,6 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
-                    js_str = js_str.replace("window.origin", f'"{target_origin}"')
                     pattern_pm = r'm\.postMessage\(([^,]+),\s*w\[\d+\]\([^)]+\)\s*,\s*(\[[^\]]+\])\)'
                     js_str = re.sub(pattern_pm, r'm.postMessage(\1,"*",\2)', js_str)
 
@@ -614,6 +635,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.wfile.write(content)
         except Exception as e:
+            AndroidCaptchaHTTPHandler.record_log(f"ERR {path.split('/')[-1]}: {str(e)[:40]}")
             self.send_response(500)
             self.end_headers()
             self.wfile.write(str(e).encode("utf-8"))
@@ -700,20 +722,6 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             } catch(e) {}
 
             try {
-                Object.defineProperty(window, 'top', {
-                    get: function() { return window.self; },
-                    set: function() {}
-                });
-            } catch(e) {}
-
-            try {
-                Object.defineProperty(window, 'origin', {
-                    get: function() { return '__FINAL_ORIGIN__'; },
-                    configurable: true
-                });
-            } catch(e) {}
-
-            try {
                 Object.defineProperty(document, 'domain', {
                     get: function() { return '__FINAL_DOMAIN__'; },
                     configurable: true
@@ -750,23 +758,6 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 } catch(e) {}
                             }
                             return cw;
-                        },
-                        configurable: true
-                    });
-                }
-            } catch(e) {}
-
-            try {
-                var origMsgDesc = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'origin');
-                if (origMsgDesc && origMsgDesc.get) {
-                    var origMsgOriginGet = origMsgDesc.get;
-                    Object.defineProperty(MessageEvent.prototype, 'origin', {
-                        get: function() {
-                            var o = origMsgOriginGet.call(this);
-                            if (o && (o.indexOf('127.0.0.1') !== -1 || o.indexOf('localhost') !== -1)) {
-                                return '__FINAL_ORIGIN__';
-                            }
-                            return o;
                         },
                         configurable: true
                     });
@@ -1058,7 +1049,20 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 30%;
+            max-width: 25%;
+        }}
+        .debug-badge {{
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #f0883e;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 35%;
         }}
         .status-msg {{
             color: #8b949e;
@@ -1104,6 +1108,15 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     </style>
     <script>
         var streamHandled = false;
+
+        window.onerror = function(msg, url, line) {{
+            var dbg = document.getElementById('debug-badge');
+            if (dbg) dbg.innerText = 'JS Err: ' + msg;
+        }};
+        window.addEventListener('unhandledrejection', function(e) {{
+            var dbg = document.getElementById('debug-badge');
+            if (dbg) dbg.innerText = 'Rejection: ' + (e.reason ? (e.reason.message || e.reason) : 'unknown');
+        }});
 
         function playChime() {{
             try {{
@@ -1177,11 +1190,27 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 }})
                 .catch(function() {{}});
         }}, 800);
+
+        var logTimer = setInterval(function() {{
+            fetch('/logs')
+                .then(function(r) {{ return r.json(); }})
+                .then(function(logs) {{
+                    if (logs && logs.length > 0) {{
+                        var last = logs[logs.length - 1];
+                        var dbg = document.getElementById('debug-badge');
+                        if (dbg && !dbg.innerText.startsWith('JS Err')) {{
+                            dbg.innerText = last;
+                        }}
+                    }}
+                }})
+                .catch(function() {{}});
+        }}, 600);
     </script>
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge: {title}</span>
+        <span class="brand">Multi Bridge v1.0.129</span>
+        <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="javascript:returnToKodi()">Volver a Kodi</a>
     </div>
@@ -1206,9 +1235,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
+            req_ua = self.headers.get("User-Agent") or self.user_agent
             req = urllib.request.Request(target, headers={
-                "User-Agent": self.user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent": req_ua,
+                "Accept": self.headers.get("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
                 "Referer": target
             })
             try:
@@ -1233,6 +1263,12 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(str(e).encode("utf-8"))
         elif clean_path.startswith("/recaptcha") or clean_path.startswith("/gstatic") or clean_path.startswith("/api2") or clean_path.endswith("/api.js") or clean_path.endswith("/enterprise.js"):
             self.handle_recaptcha_proxy(is_post=False)
+        elif clean_path == "/logs":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(self.recent_logs).encode("utf-8"))
         elif clean_path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1293,8 +1329,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 inner_qs = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
                 target = inner_qs.get("url", [""])[0] or self.target_info.get("target_url", target)
 
+            req_ua = self.headers.get("User-Agent") or self.user_agent
             req = urllib.request.Request(target, data=post_data, headers={
-                "User-Agent": self.user_agent,
+                "User-Agent": req_ua,
                 "Content-Type": self.headers.get("Content-Type", "application/x-www-form-urlencoded"),
                 "Referer": self.target_info.get("target_url", target)
             })
@@ -1322,13 +1359,15 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             try:
                 body = json.loads(post_data.decode("utf-8"))
                 token = body.get("token", "")
+                AndroidCaptchaHTTPHandler.record_log(f"POST /token -> Token captcha recibido ({token[:15]}...)")
                 form_action = self.target_info.get("form_action", "") or self.target_info.get("target_url", "")
                 hidden_fields = self.target_info.get("hidden_fields", {}).copy()
                 hidden_fields["g-recaptcha-response"] = token
                 hidden_fields["token"] = token
                 encoded = urllib.parse.urlencode(hidden_fields).encode("utf-8")
+                req_ua = self.headers.get("User-Agent") or self.user_agent
                 req = urllib.request.Request(form_action, data=encoded, headers={
-                    "User-Agent": self.user_agent,
+                    "User-Agent": req_ua,
                     "Referer": self.target_info.get("target_url", ""),
                     "Content-Type": "application/x-www-form-urlencoded"
                 })
@@ -1336,12 +1375,13 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 resp_content = resp.read().decode("utf-8", errors="ignore")
                 stream_url = extract_stream_from_html(resp_content)
                 if stream_url:
+                    AndroidCaptchaHTTPHandler.record_log(f"STREAM DETECTADO: {stream_url[:35]}...")
                     cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
                     self.captured_data["result"] = {
                         "status": "ok",
                         "url": stream_url,
                         "headers": {
-                            "User-Agent": self.user_agent,
+                            "User-Agent": req_ua,
                             "Referer": self.target_info.get("target_url", ""),
                             "Cookie": cookie_str
                         },
