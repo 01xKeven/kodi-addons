@@ -411,6 +411,11 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             target_url = f"https://www.google.com/recaptcha/api2/{sub}"
             if parsed_req.query:
                 target_url += f"?{parsed_req.query}"
+        elif "/recaptcha_proxy/enterprise/" in parsed_req.path:
+            sub = parsed_req.path.split("/recaptcha_proxy/enterprise/", 1)[1]
+            target_url = f"https://www.google.com/recaptcha/enterprise/{sub}"
+            if parsed_req.query:
+                target_url += f"?{parsed_req.query}"
         else:
             qs = urllib.parse.parse_qs(parsed_req.query)
             target_url = qs.get("url", [""])[0]
@@ -422,7 +427,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
         parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target_url))
         target_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
-        target_co = base64.b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
+        target_co = base64.urlsafe_b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
 
         parsed = urllib.parse.urlsplit(target_url)
         q_dict = urllib.parse.parse_qs(parsed.query)
@@ -459,13 +464,19 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 html_str = content.decode("utf-8", errors="ignore")
                 html_str = html_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                 html_str = html_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                html_str = html_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
+                html_str = html_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                 self.wfile.write(html_str.encode("utf-8"))
             elif "javascript" in c_type:
                 js_str = content.decode("utf-8", errors="ignore")
                 js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';",
                                         f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/api2/';")
+                js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/enterprise/';",
+                                        f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/enterprise/';")
                 js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                 js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                js_str = js_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
+                js_str = js_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                 self.wfile.write(js_str.encode("utf-8"))
             else:
                 self.wfile.write(content)
@@ -473,6 +484,276 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(500)
             self.end_headers()
             self.wfile.write(str(e).encode("utf-8"))
+
+    def transform_html(self, content_bytes, final_url, source_name):
+        html_str = content_bytes.decode("utf-8", errors="ignore")
+        final_origin = f"{urllib.parse.urlsplit(final_url).scheme}://{urllib.parse.urlsplit(final_url).netloc}"
+        self.target_info["target_url"] = final_url
+        self.target_info["final_origin"] = final_origin
+
+        # 1. Stream detection
+        stream_url = extract_stream_from_html(html_str)
+        if not stream_url:
+            m_if = re.search(r'<iframe\b[^>]*src=["\']([^"\']+)["\']', html_str, re.I)
+            if m_if:
+                sub_url = urllib.parse.urljoin(final_url, m_if.group(1))
+                try:
+                    sub_req = urllib.request.Request(sub_url, headers={"User-Agent": self.user_agent, "Referer": final_url})
+                    sub_resp = self.opener.open(sub_req, timeout=12) if self.opener else urllib.request.urlopen(sub_req, timeout=12)
+                    sub_content = sub_resp.read().decode("utf-8", errors="ignore")
+                    stream_url = extract_stream_from_html(sub_content)
+                except Exception:
+                    pass
+
+        if stream_url:
+            if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
+                clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
+                q = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
+                stream_url = f"{clean_base}/manifest.mpd{q}"
+            cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
+            self.captured_data["result"] = {
+                "status": "ok",
+                "url": stream_url,
+                "headers": {
+                    "User-Agent": self.user_agent,
+                    "Referer": final_url,
+                    "Cookie": cookie_str
+                },
+                "source": source_name
+            }
+
+        # 2. Static reCAPTCHA script rewriting
+        def rewrite_recaptcha_script(match):
+            full_url = match.group(0)
+            if full_url.startswith("//"):
+                full_url = "https:" + full_url
+            return f"{self.local_base}/recaptcha_proxy?url={urllib.parse.quote(full_url)}"
+
+        html_str = re.sub(
+            r'https?://(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
+            rewrite_recaptcha_script,
+            html_str,
+            flags=re.I
+        )
+        html_str = re.sub(
+            r'//(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
+            rewrite_recaptcha_script,
+            html_str,
+            flags=re.I
+        )
+
+        # 3. Unified injection script
+        injected_script = f"""
+        <base href="{final_origin}/">
+        <script>
+        (function() {{
+            var localBase = '{self.local_base}';
+
+            try {{
+                window.open = function() {{ return null; }};
+                window.showModalDialog = function() {{ return null; }};
+            }} catch(e) {{}}
+
+            try {{
+                Object.defineProperty(window, 'top', {{
+                    get: function() {{ return window.self; }},
+                    set: function() {{}}
+                }});
+            }} catch(e) {{}}
+
+            function notifyParent(streamUrl) {{
+                if (!streamUrl || typeof streamUrl !== 'string') return;
+                if (streamUrl.startsWith('data:') || streamUrl.startsWith('blob:')) return;
+                var low = streamUrl.toLowerCase();
+                if (low.endsWith('.vtt') || low.endsWith('.srt') || low.endsWith('.jpg') || low.endsWith('.png') || low.endsWith('.js') || low.endsWith('.css') || low.endsWith('.svg')) return;
+                if (low.includes('google') || low.includes('analytics') || low.includes('doubleclick') || low.includes('recaptcha') || low.includes('turnstile') || low.includes('hcaptcha')) return;
+
+                try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: streamUrl}}, '*'); }} catch(e) {{}}
+                try {{
+                    fetch(localBase + '/stream', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{url: streamUrl, status: 'ok', source: 'android_client_sniffer'}})
+                    }});
+                }} catch(e) {{}}
+            }}
+
+            try {{
+                var origPlay = HTMLMediaElement.prototype.play;
+                HTMLMediaElement.prototype.play = function() {{
+                    var s = this.currentSrc || this.src;
+                    if (s && (s.startsWith('http://') || s.startsWith('https://'))) {{
+                        notifyParent(s);
+                    }}
+                    return origPlay.apply(this, arguments);
+                }};
+
+                var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+                if (srcDesc && srcDesc.set) {{
+                    var origSrcSet = srcDesc.set;
+                    Object.defineProperty(HTMLMediaElement.prototype, 'src', {{
+                        set: function(val) {{
+                            if (val && typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {{
+                                notifyParent(val);
+                            }}
+                            return origSrcSet.apply(this, arguments);
+                        }},
+                        get: srcDesc.get,
+                        configurable: true
+                    }});
+                }}
+            }} catch(e) {{}}
+
+            try {{
+                var origFetch = window.fetch;
+                if (origFetch) {{
+                    window.fetch = function(input, init) {{
+                        try {{
+                            var u = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+                            if (u && typeof u === 'string') {{
+                                var uLow = u.toLowerCase();
+                                if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
+                                    notifyParent(u);
+                                }}
+                            }}
+                        }} catch(e) {{}}
+                        return origFetch.apply(this, arguments);
+                    }};
+                }}
+
+                var origXhrOpen = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {{
+                    try {{
+                        if (url && typeof url === 'string') {{
+                            var uLow = url.toLowerCase();
+                            if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
+                                notifyParent(url);
+                            }}
+                        }}
+                    }} catch(e) {{}}
+                    return origXhrOpen.apply(this, arguments);
+                }};
+            }} catch(e) {{}}
+
+            try {{
+                var syncTokens = function() {{
+                    try {{
+                        var ta = document.querySelector('textarea[name="g-recaptcha-response"]');
+                        var inpResp = document.querySelector('input[name="g-recaptcha-response"]');
+                        var inpToken = document.querySelector('input[name="token"]');
+                        var val = (ta && ta.value) ? ta.value : (inpResp ? inpResp.value : '');
+                        if (val && val.length > 20) {{
+                            if (inpResp && inpResp.value !== val) inpResp.value = val;
+                            if (inpToken && inpToken.value !== val) inpToken.value = val;
+                        }}
+                    }} catch(err) {{}}
+                }};
+                setInterval(syncTokens, 300);
+                document.addEventListener('submit', syncTokens, true);
+            }} catch(e) {{}}
+
+            try {{
+                document.addEventListener('submit', function(e) {{
+                    if (e.target && e.target.tagName === 'FORM') {{
+                        var rawAct = e.target.getAttribute('action');
+                        var act = '';
+                        if (!rawAct || rawAct === '#' || rawAct === '') {{
+                            act = '{final_url}';
+                        }} else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {{
+                            if (rawAct.indexOf(localBase) !== -1) {{
+                                var m = rawAct.match(/[?&]url=([^&]+)/);
+                                act = m ? decodeURIComponent(m[1]) : '{final_url}';
+                            }} else {{
+                                act = rawAct;
+                            }}
+                        }} else if (rawAct.startsWith('/')) {{
+                            act = '{final_origin}' + rawAct;
+                        }} else {{
+                            act = '{final_origin}/' + rawAct;
+                        }}
+                        e.target.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
+                    }}
+                }}, true);
+            }} catch(e) {{}}
+
+            try {{
+                document.addEventListener('click', function(e) {{
+                    var a = e.target.closest ? e.target.closest('a') : null;
+                    if (a && a.href) {{
+                        var href = a.href;
+                        if ((href.startsWith('http://') || href.startsWith('https://')) && href.indexOf('{final_origin}') === 0) {{
+                            e.preventDefault();
+                            location.href = localBase + '/proxy?url=' + encodeURIComponent(href);
+                        }}
+                    }}
+                }}, true);
+            }} catch(e) {{}}
+
+            try {{
+                var origScriptSrc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+                if (origScriptSrc && origScriptSrc.set) {{
+                    var origScriptSrcSet = origScriptSrc.set;
+                    Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
+                        set: function(val) {{
+                            if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
+                                if (val.indexOf('/api.js') !== -1 || val.indexOf('/enterprise.js') !== -1) {{
+                                    val = localBase + '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                                }} else if (val.indexOf('/api2/') !== -1) {{
+                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
+                                }} else if (val.indexOf('/enterprise/') !== -1) {{
+                                    val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
+                                }}
+                            }}
+                            return origScriptSrcSet.call(this, val);
+                        }},
+                        get: origScriptSrc.get,
+                        configurable: true
+                    }});
+                }}
+
+                var origIframeSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+                if (origIframeSrc && origIframeSrc.set) {{
+                    var origIframeSrcSet = origIframeSrc.set;
+                    Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
+                        set: function(val) {{
+                            if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
+                                if (val.indexOf('/api2/') !== -1) {{
+                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
+                                }} else if (val.indexOf('/enterprise/') !== -1) {{
+                                    val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
+                                }}
+                            }}
+                            return origIframeSrcSet.call(this, val);
+                        }},
+                        get: origIframeSrc.get,
+                        configurable: true
+                    }});
+                }}
+
+                var origSetAttr = Element.prototype.setAttribute;
+                Element.prototype.setAttribute = function(name, val) {{
+                    if (name && name.toLowerCase() === 'src' && val && typeof val === 'string' && val.indexOf('google.com/recaptcha/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
+                        if (val.indexOf('/api.js') !== -1 || val.indexOf('/enterprise.js') !== -1) {{
+                            val = localBase + '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                        }} else if (val.indexOf('/api2/') !== -1) {{
+                            val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
+                        }} else if (val.indexOf('/enterprise/') !== -1) {{
+                            val = localBase + '/recaptcha_proxy/enterprise/' + val.split('google.com/recaptcha/enterprise/')[1];
+                        }}
+                    }}
+                    return origSetAttr.call(this, name, val);
+                }};
+            }} catch(e) {{}}
+        }})();
+        </script>
+        """
+
+        if "<head>" in html_str:
+            html_str = html_str.replace("<head>", "<head>" + injected_script, 1)
+        else:
+            html_str = injected_script + html_str
+
+        return html_str.encode("utf-8")
 
     def do_GET(self):
         clean_path = self.path.split("?")[0]
@@ -652,7 +933,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
-        elif clean_path == "/proxy":
+        elif clean_path in ["/proxy", "/proxy_submit"]:
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             target = qs.get("url", [""])[0] or self.target_info.get("target_url", "")
             if "/proxy" in target and ("127.0.0.1" in target or "localhost" in target):
@@ -681,223 +962,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
 
                 if "text/html" in content_type:
-                    html_str = content.decode("utf-8", errors="ignore")
-
-                    def rewrite_recaptcha_script(match):
-                        full_url = match.group(0)
-                        if full_url.startswith("//"):
-                            full_url = "https:" + full_url
-                        return f"{self.local_base}/recaptcha_proxy?url={urllib.parse.quote(full_url)}"
-
-                    html_str = re.sub(
-                        r'https?://(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
-                        rewrite_recaptcha_script,
-                        html_str,
-                        flags=re.I
-                    )
-                    html_str = re.sub(
-                        r'//(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
-                        rewrite_recaptcha_script,
-                        html_str,
-                        flags=re.I
-                    )
-
-                    direct_url = extract_stream_from_html(html_str)
-                    if direct_url:
-                        if "/dash/" in direct_url.lower() and not direct_url.lower().endswith(".mpd"):
-                            clean_base = direct_url.split("?")[0].rsplit("/", 1)[0]
-                            q = ("?" + direct_url.split("?", 1)[1]) if "?" in direct_url else ""
-                            direct_url = f"{clean_base}/manifest.mpd{q}"
-                        cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
-                        self.captured_data["result"] = {
-                            "status": "ok",
-                            "url": direct_url,
-                            "headers": {
-                                "User-Agent": self.user_agent,
-                                "Referer": final_url,
-                                "Cookie": cookie_str
-                            },
-                            "source": "android_proxy_direct"
-                        }
-
-                    injected_script = f"""
-                    <base href="{final_origin}/">
-                    <script>
-                    (function() {{
-                        var localBase = '{self.local_base}';
-
-                        try {{
-                            window.open = function() {{ return null; }};
-                            window.showModalDialog = function() {{ return null; }};
-                        }} catch(e) {{}}
-
-                        try {{
-                            Object.defineProperty(window, 'top', {{
-                                get: function() {{ return window.self; }},
-                                set: function() {{}}
-                            }});
-                        }} catch(e) {{}}
-
-                        function notifyParent(streamUrl) {{
-                            if (!streamUrl || typeof streamUrl !== 'string') return;
-                            if (streamUrl.startsWith('data:') || streamUrl.startsWith('blob:')) return;
-                            var low = streamUrl.toLowerCase();
-                            if (low.endsWith('.vtt') || low.endsWith('.srt') || low.endsWith('.jpg') || low.endsWith('.png') || low.endsWith('.js') || low.endsWith('.css') || low.endsWith('.svg')) return;
-                            if (low.includes('google') || low.includes('analytics') || low.includes('doubleclick') || low.includes('recaptcha') || low.includes('turnstile') || low.includes('hcaptcha')) return;
-
-                            try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: streamUrl}}, '*'); }} catch(e) {{}}
-                            try {{
-                                fetch(localBase + '/stream', {{
-                                    method: 'POST',
-                                    headers: {{'Content-Type': 'application/json'}},
-                                    body: JSON.stringify({{url: streamUrl, status: 'ok', source: 'android_client_sniffer'}})
-                                }});
-                            }} catch(e) {{}}
-                        }}
-
-                        try {{
-                            var origPlay = HTMLMediaElement.prototype.play;
-                            HTMLMediaElement.prototype.play = function() {{
-                                var s = this.currentSrc || this.src;
-                                if (s && (s.startsWith('http://') || s.startsWith('https://'))) {{
-                                    notifyParent(s);
-                                }}
-                                return origPlay.apply(this, arguments);
-                            }};
-
-                            var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-                            if (srcDesc && srcDesc.set) {{
-                                var origSrcSet = srcDesc.set;
-                                Object.defineProperty(HTMLMediaElement.prototype, 'src', {{
-                                    set: function(val) {{
-                                        if (val && typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {{
-                                            notifyParent(val);
-                                        }}
-                                        return origSrcSet.apply(this, arguments);
-                                    }},
-                                    get: srcDesc.get,
-                                    configurable: true
-                                }});
-                            }}
-                        }} catch(e) {{}}
-
-                        try {{
-                            var origFetch = window.fetch;
-                            if (origFetch) {{
-                                window.fetch = function(input, init) {{
-                                    try {{
-                                        var u = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
-                                        if (u && typeof u === 'string') {{
-                                            var uLow = u.toLowerCase();
-                                            if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
-                                                notifyParent(u);
-                                            }}
-                                        }}
-                                    }} catch(e) {{}}
-                                    return origFetch.apply(this, arguments);
-                                }};
-                            }}
-
-                            var origXhrOpen = XMLHttpRequest.prototype.open;
-                            XMLHttpRequest.prototype.open = function(method, url) {{
-                                try {{
-                                    if (url && typeof url === 'string') {{
-                                        var uLow = url.toLowerCase();
-                                        if (uLow.includes('.m3u8') || uLow.includes('.mpd') || uLow.includes('.mp4') || uLow.includes('/dash/') || uLow.includes('/hls/')) {{
-                                            notifyParent(url);
-                                        }}
-                                    }}
-                                }} catch(e) {{}}
-                                return origXhrOpen.apply(this, arguments);
-                            }};
-                        }} catch(e) {{}}
-
-                        try {{
-                            var syncTokens = function() {{
-                                try {{
-                                    var ta = document.querySelector('textarea[name="g-recaptcha-response"]');
-                                    var inpResp = document.querySelector('input[name="g-recaptcha-response"]');
-                                    var inpToken = document.querySelector('input[name="token"]');
-                                    var val = (ta && ta.value) ? ta.value : (inpResp ? inpResp.value : '');
-                                    if (val && val.length > 20) {{
-                                        if (inpResp && inpResp.value !== val) inpResp.value = val;
-                                        if (inpToken && inpToken.value !== val) inpToken.value = val;
-                                    }}
-                                }} catch(err) {{}}
-                            }};
-                            setInterval(syncTokens, 300);
-                            document.addEventListener('submit', syncTokens, true);
-                        }} catch(e) {{}}
-
-                        try {{
-                            document.addEventListener('submit', function(e) {{
-                                if (e.target && e.target.tagName === 'FORM') {{
-                                    var rawAct = e.target.getAttribute('action');
-                                    var act = '';
-                                    if (!rawAct || rawAct === '#' || rawAct === '') {{
-                                        act = '{final_url}';
-                                    }} else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {{
-                                        if (rawAct.indexOf(localBase) !== -1) {{
-                                            var m = rawAct.match(/[?&]url=([^&]+)/);
-                                            act = m ? decodeURIComponent(m[1]) : '{final_url}';
-                                        }} else {{
-                                            act = rawAct;
-                                        }}
-                                    }} else if (rawAct.startsWith('/')) {{
-                                        act = '{final_origin}' + rawAct;
-                                    }} else {{
-                                        act = '{final_origin}/' + rawAct;
-                                    }}
-                                    e.target.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
-                                }}
-                            }}, true);
-                        }} catch(e) {{}}
-
-                        try {{
-                            document.addEventListener('click', function(e) {{
-                                var a = e.target.closest ? e.target.closest('a') : null;
-                                if (a && a.href) {{
-                                    var href = a.href;
-                                    if ((href.startsWith('http://') || href.startsWith('https://')) && href.indexOf('{final_origin}') === 0) {{
-                                        e.preventDefault();
-                                        location.href = localBase + '/proxy?url=' + encodeURIComponent(href);
-                                    }}
-                                }}
-                            }}, true);
-                        }} catch(e) {{}}
-                        try {{
-                            var origIframeSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
-                            if (origIframeSrc && origIframeSrc.set) {{
-                                var origIframeSrcSet = origIframeSrc.set;
-                                Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
-                                    set: function(val) {{
-                                        if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                            val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
-                                        }}
-                                        return origIframeSrcSet.call(this, val);
-                                    }},
-                                    get: origIframeSrc.get,
-                                    configurable: true
-                                }});
-                            }}
-
-                            var origSetAttr = HTMLIFrameElement.prototype.setAttribute;
-                            HTMLIFrameElement.prototype.setAttribute = function(name, val) {{
-                                if (name && name.toLowerCase() === 'src' && val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
-                                }}
-                                return origSetAttr.call(this, name, val);
-                            }};
-                        }} catch(e) {{}}
-                    }})();
-                    </script>
-                    """
-                    if "<head>" in html_str:
-                        html_str = html_str.replace("<head>", "<head>" + injected_script, 1)
-                    else:
-                        html_str = injected_script + html_str
-
-                    self.wfile.write(html_str.encode("utf-8"))
+                    self.wfile.write(self.transform_html(content, final_url, "android_proxy_direct"))
                 else:
                     self.wfile.write(content)
             except Exception as e:
@@ -984,76 +1049,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
 
                 if "text/html" in content_type:
-                    html_str = content.decode("utf-8", errors="ignore")
-                    stream_url = extract_stream_from_html(html_str)
-
-                    if not stream_url:
-                        m_if = re.search(r'<iframe\b[^>]*src=["\']([^"\']+)["\']', html_str, re.I)
-                        if m_if:
-                            sub_url = urllib.parse.urljoin(final_url, m_if.group(1))
-                            try:
-                                sub_req = urllib.request.Request(sub_url, headers={"User-Agent": self.user_agent, "Referer": final_url})
-                                sub_resp = self.opener.open(sub_req, timeout=12) if self.opener else urllib.request.urlopen(sub_req, timeout=12)
-                                sub_content = sub_resp.read().decode("utf-8", errors="ignore")
-                                stream_url = extract_stream_from_html(sub_content)
-                            except Exception:
-                                pass
-
-                    if stream_url:
-                        if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
-                            clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
-                            q = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
-                            stream_url = f"{clean_base}/manifest.mpd{q}"
-                        cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
-                        self.captured_data["result"] = {
-                            "status": "ok",
-                            "url": stream_url,
-                            "headers": {
-                                "User-Agent": self.user_agent,
-                                "Referer": final_url,
-                                "Cookie": cookie_str
-                            },
-                            "source": "android_proxy_submit"
-                        }
-
-                    injected = f"""
-                    <base href="{final_origin}/">
-                    <script>
-                    (function() {{
-                        var localBase = '{self.local_base}';
-                        function notify(s) {{
-                            if (!s) return;
-                            try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: s}}, '*'); }} catch(e) {{}}
-                            try {{ fetch(localBase + '/stream', {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{url: s, status: 'ok', source: 'android_submit_response'}})}}); }} catch(e) {{}}
-                        }}
-                        try {{
-                            var origPlay = HTMLMediaElement.prototype.play;
-                            HTMLMediaElement.prototype.play = function() {{
-                                var s = this.currentSrc || this.src;
-                                if (s) notify(s);
-                                return origPlay.apply(this, arguments);
-                            }};
-                            var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-                            if (srcDesc && srcDesc.set) {{
-                                var origSrcSet = srcDesc.set;
-                                Object.defineProperty(HTMLMediaElement.prototype, 'src', {{
-                                    set: function(val) {{
-                                        if (val) notify(val);
-                                        return origSrcSet.apply(this, arguments);
-                                    }},
-                                    get: srcDesc.get,
-                                    configurable: true
-                                }});
-                            }}
-                        }} catch(e) {{}}
-                    }})();
-                    </script>
-                    """
-                    if "<head>" in html_str:
-                        html_str = html_str.replace("<head>", "<head>" + injected, 1)
-                    else:
-                        html_str = injected + html_str
-                    self.wfile.write(html_str.encode("utf-8"))
+                    self.wfile.write(self.transform_html(content, final_url, "android_proxy_submit"))
                 else:
                     self.wfile.write(content)
             except Exception as e:
