@@ -396,6 +396,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     port = None
     recaptcha_cache = {}
+    recaptcha_cookie_jar = http.cookiejar.CookieJar()
+    recaptcha_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(recaptcha_cookie_jar))
 
     @property
     def local_base(self):
@@ -405,7 +407,14 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    def handle_recaptcha_proxy(self, is_post=False):
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization, Origin, Accept")
+        self.end_headers()
+
+    def handle_recaptcha_proxy(self, is_post=False, post_data=None):
         parsed_req = urllib.parse.urlsplit(self.path)
         is_gstatic = "/recaptcha_proxy/gstatic/" in parsed_req.path
         is_api2 = "/recaptcha_proxy/api2/" in parsed_req.path
@@ -461,28 +470,51 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         new_query = urllib.parse.urlencode(q_dict, doseq=True)
         real_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
-        headers = {
-            "User-Agent": self.user_agent,
-            "Referer": target_origin + "/",
-            "Origin": target_origin
-        }
+        if parsed.path.endswith("/anchor"):
+            headers = {
+                "User-Agent": self.user_agent,
+                "Referer": target_origin + "/",
+                "Origin": target_origin
+            }
+        elif is_api2 or is_enterprise:
+            k_val = q_dict.get("k", [""])[0]
+            v_val = q_dict.get("v", [""])[0]
+            prefix = "api2" if is_api2 else "enterprise"
+            headers = {
+                "User-Agent": self.user_agent,
+                "Referer": f"https://www.google.com/recaptcha/{prefix}/anchor?ar=1&k={k_val}&co={target_co}&hl=es&v={v_val}&size=normal",
+                "Origin": "https://www.google.com"
+            }
+        else:
+            headers = {
+                "User-Agent": self.user_agent,
+                "Referer": target_origin + "/",
+                "Origin": target_origin
+            }
 
-        post_data = None
+        if "Cookie" in self.headers:
+            headers["Cookie"] = self.headers["Cookie"]
+
         if is_post:
-            length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(length)
+            if post_data is None:
+                length = int(self.headers.get("Content-Length", 0))
+                post_data = self.rfile.read(length)
             if "Content-Type" in self.headers:
                 headers["Content-Type"] = self.headers["Content-Type"]
+            else:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         req = urllib.request.Request(real_url, data=post_data, headers=headers)
         try:
-            resp = urllib.request.urlopen(req, timeout=14)
+            resp = self.recaptcha_opener.open(req, timeout=14)
             content = resp.read()
             c_type = resp.headers.get("Content-Type", "text/html")
 
             self.send_response(resp.status if hasattr(resp, "status") else 200)
             self.send_header("Content-Type", c_type)
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization, Origin, Accept")
             self.end_headers()
 
             if "text/html" in c_type:
@@ -491,6 +523,44 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 html_str = html_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                 html_str = html_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                 html_str = html_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
+                html_str = html_str.replace("https://www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
+                html_str = html_str.replace("//www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
+
+                iframe_shim = f"""<script>
+(function() {{
+    try {{
+        var origPostMessage = Window.prototype.postMessage;
+        Window.prototype.postMessage = function(msg, targetOrigin, transfer) {{
+            if (typeof targetOrigin === 'string' && targetOrigin !== '*') {{
+                targetOrigin = '*';
+            }}
+            return origPostMessage.call(this, msg, targetOrigin, transfer);
+        }};
+    }} catch(e) {{}}
+    try {{
+        var origMsgDesc = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'origin');
+        if (origMsgDesc && origMsgDesc.get) {{
+            var origMsgOriginGet = origMsgDesc.get;
+            Object.defineProperty(MessageEvent.prototype, 'origin', {{
+                get: function() {{
+                    var o = origMsgOriginGet.call(this);
+                    if (o && (o.indexOf('127.0.0.1') !== -1 || o.indexOf('localhost') !== -1)) {{
+                        return '{target_origin}';
+                    }}
+                    return o;
+                }},
+                configurable: true
+            }});
+        }}
+    }} catch(e) {{}}
+}})();
+</script>"""
+                if "<head>" in html_str.lower():
+                    idx_head = html_str.lower().find("<head>") + 6
+                    html_str = html_str[:idx_head] + iframe_shim + html_str[idx_head:]
+                else:
+                    html_str = iframe_shim + html_str
+
                 self.wfile.write(html_str.encode("utf-8"))
             elif "javascript" in c_type:
                 js_str = content.decode("utf-8", errors="ignore")
@@ -508,6 +578,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = js_str.replace("https://www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                     js_str = js_str.replace("//www.google.com/recaptcha/enterprise/", f"{self.local_base}/recaptcha_proxy/enterprise/")
                 elif is_gstatic:
+                    js_str = js_str.replace("https://www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
+                    js_str = js_str.replace("//www.gstatic.com/recaptcha/", f"{self.local_base}/recaptcha_proxy/gstatic/")
                     js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                     js_str = js_str.replace("https://www.recaptcha.net/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
@@ -631,6 +703,33 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     get: function() { return '__FINAL_DOMAIN__'; },
                     configurable: true
                 });
+            } catch(e) {}
+
+            try {
+                var origPostMessage = Window.prototype.postMessage;
+                Window.prototype.postMessage = function(msg, targetOrigin, transfer) {
+                    if (typeof targetOrigin === 'string' && targetOrigin !== '*') {
+                        targetOrigin = '*';
+                    }
+                    return origPostMessage.call(this, msg, targetOrigin, transfer);
+                };
+            } catch(e) {}
+
+            try {
+                var origMsgDesc = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'origin');
+                if (origMsgDesc && origMsgDesc.get) {
+                    var origMsgOriginGet = origMsgDesc.get;
+                    Object.defineProperty(MessageEvent.prototype, 'origin', {
+                        get: function() {
+                            var o = origMsgOriginGet.call(this);
+                            if (o && (o.indexOf('127.0.0.1') !== -1 || o.indexOf('localhost') !== -1)) {
+                                return '__FINAL_ORIGIN__';
+                            }
+                            return o;
+                        },
+                        configurable: true
+                    });
+                }
             } catch(e) {}
 
             function notifyParent(streamUrl) {
@@ -805,6 +904,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 } else if (sVal.indexOf('/enterprise/') !== -1) {
                                     val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
                                 }
+                            } else if (sVal.indexOf('gstatic.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                                val = localBase + '/recaptcha_proxy/gstatic/' + sVal.split('gstatic.com/recaptcha/')[1];
                             }
                             return origScriptSrcSet.call(this, val);
                         },
@@ -825,6 +926,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 } else if (sVal.indexOf('/enterprise/') !== -1) {
                                     val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
                                 }
+                            } else if (sVal.indexOf('gstatic.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                                val = localBase + '/recaptcha_proxy/gstatic/' + sVal.split('gstatic.com/recaptcha/')[1];
                             }
                             return origIframeSrcSet.call(this, val);
                         },
@@ -849,6 +952,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                             } else if (sVal.indexOf('/enterprise/') !== -1) {
                                 val = localBase + '/recaptcha_proxy/enterprise/' + sVal.split('google.com/recaptcha/enterprise/')[1];
                             }
+                        } else if (sVal.indexOf('gstatic.com/recaptcha/') !== -1 && sVal.indexOf('/recaptcha_proxy') === -1) {
+                            val = localBase + '/recaptcha_proxy/gstatic/' + sVal.split('gstatic.com/recaptcha/')[1];
                         }
                     }
                     return origSetAttr.call(this, name, val);
@@ -1103,7 +1208,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length)
 
         if clean_path.startswith("/recaptcha_proxy"):
-            self.handle_recaptcha_proxy(is_post=True)
+            self.handle_recaptcha_proxy(is_post=True, post_data=post_data)
         elif clean_path == "/stream":
             try:
                 body = json.loads(post_data.decode("utf-8"))
