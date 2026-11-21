@@ -10,6 +10,7 @@ No external Python dependencies required.
 
 import sys
 import os
+import re
 import json
 import glob
 import subprocess
@@ -21,6 +22,9 @@ import base64
 import struct
 import urllib.request
 import urllib.parse
+import http.server
+import http.cookiejar
+import socketserver
 import threading
 
 CHROME_CANDIDATES = [
@@ -295,7 +299,511 @@ def is_stream_url(url):
             return True
     return False
 
+def is_android_platform():
+    try:
+        import xbmc
+        if xbmc.getCondVisibility('System.Platform.Android'):
+            return True
+    except Exception:
+        pass
+    if 'android' in sys.platform.lower():
+        return True
+    if 'ANDROID_STORAGE' in os.environ or 'ANDROID_ROOT' in os.environ:
+        return True
+    return False
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def detect_packed(source):
+    if not source or not isinstance(source, str):
+        return False
+    return "eval(function(p,a,c,k,e,d)" in source or "eval(function(p,a,c,k,e,r)" in source
+
+def unpack_simple(source):
+    try:
+        match = re.search(r"}\s*\('(.*)',\s*(\d+),\s*(\d+),\s*'(.*)'\.split\('\|'\)", source, re.DOTALL)
+        if not match:
+            match = re.search(r"}\s*\('(.*)',\s*(\d+),\s*(\d+),\s*'(.*)'\s*\)", source, re.DOTALL)
+        if not match:
+            return source
+        payload, radix, count, symtab = match.groups()
+        radix = int(radix)
+        count = int(count)
+        syms = symtab.split('|') if '|' in symtab else symtab.split(',')
+        
+        def unbase(val_str, r):
+            digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            val = 0
+            for c in val_str:
+                val = val * r + digits.index(c)
+            return val
+
+        def replace_word(m):
+            w = m.group(0)
+            try:
+                idx = unbase(w, radix)
+                if idx < len(syms) and syms[idx]:
+                    return syms[idx]
+            except Exception:
+                pass
+            return w
+
+        return re.sub(r'\b[0-9a-zA-Z]+\b', replace_word, payload)
+    except Exception:
+        return source
+
+def extract_stream_from_html(html):
+    if not html or not isinstance(html, str):
+        return None
+    # 1. Direct file matches
+    m = re.search(r'file\s*:\s*["\'](https?://[^"\']+\.(?:m3u8|mpd|mp4)[^"\']*)["\']', html, re.I)
+    if m and is_stream_url(m.group(1)):
+        return m.group(1)
+    m = re.search(r'sources\s*:\s*\[\s*\{\s*["\']?file["\']?\s*:\s*["\'](https?://[^"\']+)["\']', html, re.I)
+    if m and is_stream_url(m.group(1)):
+        return m.group(1)
+    m = re.search(r'<source\s+[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
+    if m and is_stream_url(m.group(1)):
+        return m.group(1)
+    # 2. Packed JS
+    if detect_packed(html):
+        unpacked = unpack_simple(html)
+        m = re.search(r'file\s*:\s*["\'](https?://[^"\']+)["\']', unpacked, re.I)
+        if m and is_stream_url(m.group(1)):
+            return m.group(1)
+        m = re.search(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd)[^\s"\'<>]*)', unpacked, re.I)
+        if m and is_stream_url(m.group(1)):
+            return m.group(1)
+    # 3. Generic stream URL fallback
+    m = re.search(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd)[^\s"\'<>]*)', html, re.I)
+    if m and is_stream_url(m.group(1)):
+        return m.group(1)
+    return None
+
+class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
+    target_info = {}
+    captured_data = {}
+    opener = None
+    cookie_jar = None
+    user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        clean_path = self.path.split("?")[0]
+        if clean_path in ["/", "/captcha"]:
+            sitekey = self.target_info.get("sitekey", "")
+            title = self.target_info.get("title", "Multi Bridge")
+            target_url = self.target_info.get("target_url", "")
+            
+            html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{title} - Verificacion</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card {{
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 16px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+            max-width: 520px;
+            width: 100%;
+            padding: 32px 28px;
+            text-align: center;
+        }}
+        h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #ffffff; }}
+        .subtitle {{ font-size: 15px; color: #8b949e; margin-bottom: 24px; }}
+        .captcha-container {{
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+            min-height: 78px;
+        }}
+        .status-box {{
+            margin-top: 18px;
+            padding: 14px;
+            border-radius: 10px;
+            background: #0d1117;
+            border: 1px solid #21262d;
+            font-size: 14px;
+            color: #8b949e;
+            transition: all 0.3s ease;
+        }}
+        .status-box.success {{
+            background: #0f3521;
+            border-color: #238636;
+            color: #3fb950;
+            font-weight: 600;
+        }}
+        .btn {{
+            display: inline-block;
+            margin-top: 16px;
+            padding: 12px 24px;
+            background: #238636;
+            color: #ffffff;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }}
+        .btn:hover {{ background: #2ea043; }}
+        .btn-link {{
+            background: transparent;
+            color: #8b949e;
+            text-decoration: underline;
+            font-size: 12px;
+            margin-top: 14px;
+        }}
+    </style>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <script>
+        function playChime() {{
+            try {{
+                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                var now = ctx.currentTime;
+                [523.25, 659.25, 783.99].forEach(function(freq, i) {{
+                    var osc = ctx.createOscillator();
+                    var gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + (i * 0.1));
+                    gain.gain.setValueAtTime(0.18, now + (i * 0.1));
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + (i * 0.1) + 0.35);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now + (i * 0.1));
+                    osc.stop(now + (i * 0.1) + 0.4);
+                }});
+            }} catch(e) {{}}
+        }}
+
+        function returnToKodi() {{
+            window.location.href = "intent:#Intent;package=org.xbmc.kodi;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;end;";
+        }}
+
+        function onCaptchaSuccess(token) {{
+            var statusEl = document.getElementById('status-box');
+            statusEl.className = 'status-box';
+            statusEl.innerHTML = 'Verificando con el servidor... Obteniendo enlace...';
+            
+            fetch('/token', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ token: token }})
+            }})
+            .then(function(res) {{ return res.json(); }})
+            .then(function(data) {{
+                if (data.status === 'ok') {{
+                    playChime();
+                    statusEl.className = 'status-box success';
+                    statusEl.innerHTML = 'STREAM OBTENIDO CON EXITO<br>Iniciando reproduccion en Kodi...';
+                    var btnKodi = document.getElementById('btn-kodi');
+                    if (btnKodi) btnKodi.style.display = 'inline-block';
+                    setTimeout(returnToKodi, 700);
+                }} else {{
+                    statusEl.innerHTML = 'Error: ' + (data.message || 'No se pudo obtener el stream');
+                }}
+            }})
+            .catch(function(err) {{
+                statusEl.innerHTML = 'Error de conexion con el puente de Kodi: ' + err;
+            }});
+        }}
+    </script>
+</head>
+<body>
+    <div class="card">
+        <h1>Multi Bridge</h1>
+        <div class="subtitle">Verificacion para {title}</div>
+        <div class="captcha-container">
+            <div class="g-recaptcha" data-sitekey="{sitekey}" data-callback="onCaptchaSuccess" data-theme="dark"></div>
+        </div>
+        <div id="status-box" class="status-box">
+            Resuelve el captcha para continuar la reproduccion.
+        </div>
+        <a id="btn-kodi" class="btn" style="display: none;" href="javascript:returnToKodi()">Volver a Kodi</a>
+        <div>
+            <a class="btn btn-link" href="{target_url}" target="_blank">Abrir enlace original</a>
+        </div>
+    </div>
+</body>
+</html>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+        elif clean_path == "/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(self.captured_data.get("result", {})).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        post_data = self.rfile.read(content_length)
+        clean_path = self.path.split("?")[0]
+        
+        if clean_path == "/token":
+            try:
+                body = json.loads(post_data.decode("utf-8"))
+                token = body.get("token", "")
+                
+                form_action = self.target_info.get("form_action", "") or self.target_info.get("target_url", "")
+                hidden_fields = self.target_info.get("hidden_fields", {}).copy()
+                hidden_fields["g-recaptcha-response"] = token
+                hidden_fields["token"] = token
+                
+                encoded = urllib.parse.urlencode(hidden_fields).encode("utf-8")
+                req_headers = {
+                    "User-Agent": self.user_agent,
+                    "Referer": self.target_info.get("target_url", ""),
+                    "Origin": urllib.parse.urlsplit(self.target_info.get("target_url", "")).scheme + "://" + urllib.parse.urlsplit(self.target_info.get("target_url", "")).netloc,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+                
+                req = urllib.request.Request(form_action, data=encoded, headers=req_headers)
+                resp = self.opener.open(req, timeout=18)
+                resp_content = resp.read().decode("utf-8", errors="ignore")
+                
+                stream_url = extract_stream_from_html(resp_content)
+                if not stream_url:
+                    m_if = re.search(r'<iframe\b[^>]*src=["\']([^"\']+)["\']', resp_content, re.I)
+                    if m_if:
+                        sub_url = urllib.parse.urljoin(form_action, m_if.group(1))
+                        sub_req = urllib.request.Request(sub_url, headers=req_headers)
+                        sub_resp = self.opener.open(sub_req, timeout=12)
+                        sub_content = sub_resp.read().decode("utf-8", errors="ignore")
+                        stream_url = extract_stream_from_html(sub_content)
+
+                if stream_url:
+                    if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
+                        clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
+                        query = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
+                        stream_url = f"{clean_base}/manifest.mpd{query}"
+                    
+                    cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
+                    self.captured_data["result"] = {
+                        "status": "ok",
+                        "url": stream_url,
+                        "headers": {
+                            "User-Agent": self.user_agent,
+                            "Referer": self.target_info.get("target_url", ""),
+                            "Cookie": cookie_str
+                        },
+                        "source": "android_captcha_bridge"
+                    }
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "ok", "url": stream_url}).encode("utf-8"))
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "error", "message": "No se encontro stream de video en la respuesta."}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
+        elif clean_path == "/stream":
+            try:
+                body = json.loads(post_data.decode("utf-8"))
+                if body.get("url"):
+                    self.captured_data["result"] = {
+                        "status": "ok",
+                        "url": body["url"],
+                        "headers": body.get("headers", {}),
+                        "source": body.get("source", "android_web_fetch")
+                    }
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            except Exception:
+                self.send_response(500)
+                self.end_headers()
+
+def capture_stream_android(target_url, timeout=180, progress_dialog=None, monitor=None):
+    user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    
+    req_headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+    }
+    
+    initial_html = ""
+    resolved_target_url = target_url
+    try:
+        req = urllib.request.Request(target_url, headers=req_headers)
+        resp = opener.open(req, timeout=12)
+        initial_html = resp.read().decode("utf-8", errors="ignore")
+        resolved_target_url = resp.geturl() or target_url
+    except Exception:
+        pass
+    
+    direct_stream = extract_stream_from_html(initial_html)
+    if direct_stream:
+        return {
+            "status": "ok",
+            "url": direct_stream,
+            "headers": {"User-Agent": user_agent, "Referer": target_url},
+            "source": "android_direct_scrape"
+        }
+    
+    m_key = re.search(r'data-sitekey=["\']([^"\']+)', initial_html, re.I) or re.search(r'["\']sitekey["\']\s*:\s*["\']([^"\']+)', initial_html, re.I)
+    sitekey = m_key.group(1) if m_key else ""
+    
+    m_action = re.search(r'<form\b[^>]*action=["\']([^"\']*)["\']', initial_html, re.I)
+    form_action = m_action.group(1) if m_action else resolved_target_url
+    form_action = urllib.parse.urljoin(resolved_target_url, form_action)
+    
+    hidden_fields = {}
+    for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]+value=["\']([^"\']*)["\']', initial_html, re.I):
+        hidden_fields[m.group(1)] = m.group(2)
+    for m in re.finditer(r'<input[^>]+value=["\']([^"\']*)["\'][^>]+name=["\']([^"\']+)["\']', initial_html, re.I):
+        hidden_fields.setdefault(m.group(2), m.group(1))
+
+    parsed_netloc = urllib.parse.urlsplit(resolved_target_url).netloc
+    host_title = parsed_netloc.replace("www.", "").capitalize()
+
+    captured_data = {"result": None}
+    
+    class LocalServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    AndroidCaptchaHTTPHandler.target_info = {
+        "sitekey": sitekey,
+        "title": host_title,
+        "target_url": resolved_target_url,
+        "form_action": form_action,
+        "hidden_fields": hidden_fields
+    }
+    AndroidCaptchaHTTPHandler.captured_data = captured_data
+    AndroidCaptchaHTTPHandler.opener = opener
+    AndroidCaptchaHTTPHandler.cookie_jar = cj
+    AndroidCaptchaHTTPHandler.user_agent = user_agent
+
+    try:
+        httpd = LocalServer(("127.0.0.1", 0), AndroidCaptchaHTTPHandler)
+    except Exception:
+        httpd = LocalServer(("0.0.0.0", 0), AndroidCaptchaHTTPHandler)
+    
+    port = httpd.server_address[1]
+    AndroidCaptchaHTTPHandler.port = port
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
+
+    local_url = f"http://127.0.0.1:{port}/captcha"
+    local_ip = get_local_ip()
+    network_url = f"http://{local_ip}:{port}/captcha"
+
+    try:
+        import xbmc
+        xbmc.executebuiltin(f'StartAndroidActivity(,android.intent.action.VIEW,,{local_url})')
+    except Exception:
+        try:
+            import webbrowser
+            webbrowser.open(local_url)
+        except Exception:
+            pass
+
+    try:
+        import xbmcgui
+        xbmcgui.Dialog().notification(
+            f"Multi Bridge - {host_title}",
+            "Resuelve el captcha en el navegador...",
+            "",
+            5000
+        )
+    except Exception:
+        pass
+
+    start_time = time.time()
+    try:
+        while True:
+            if captured_data.get("result"):
+                break
+            
+            if time.time() - start_time > timeout:
+                return {"status": "error", "message": "Tiempo de espera agotado sin resolver el captcha."}
+            
+            if progress_dialog:
+                try:
+                    if progress_dialog.iscanceled():
+                        return {"status": "error", "message": "Cancelado por el usuario."}
+                    elapsed = time.time() - start_time
+                    pct = min(99, int((elapsed / float(timeout)) * 100))
+                    rem = max(0, int(timeout - elapsed))
+                    mins = rem // 60
+                    secs = rem % 60
+                    rem_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+                    progress_dialog.update(
+                        pct,
+                        f"Resuelve el captcha en el navegador de la TV...\n(O desde tu movil: {network_url})\nTiempo restante: {rem_str}"
+                    )
+                except Exception:
+                    pass
+
+            if monitor:
+                try:
+                    if monitor.abortRequested():
+                        return {"status": "error", "message": "Kodi se esta cerrando."}
+                except Exception:
+                    pass
+
+            time.sleep(0.2)
+    finally:
+        try:
+            httpd.shutdown()
+            httpd.server_close()
+        except Exception:
+            pass
+
+    return captured_data.get("result") or {"status": "error", "message": "No se capturo el stream de video."}
+
 def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, load_adblock=True, progress_dialog=None, monitor=None):
+    if is_android_platform():
+        return capture_stream_android(
+            target_url=target_url,
+            timeout=timeout,
+            progress_dialog=progress_dialog,
+            monitor=monitor
+        )
     browser_path = find_browser(custom_browser)
     if not browser_path:
         return {"status": "error", "message": "No se encontró ningún navegador Chromium (Chrome o Edge) en el sistema."}

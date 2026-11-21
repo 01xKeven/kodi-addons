@@ -10843,10 +10843,6 @@ def _clean_dialog_text(text):
 
 
 def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
-    if xbmc.getCondVisibility('System.Platform.Android'):
-        xbmcgui.Dialog().notification('Multi Bridge', 'Servidores con captcha no disponibles en Android', '', 4000)
-        return None
-
     page_url = getattr(link, 'url', '') or ''
     if not page_url:
         return None
