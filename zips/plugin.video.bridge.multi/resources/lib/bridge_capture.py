@@ -396,22 +396,35 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     port = None
 
+    @property
+    def local_base(self):
+        host = self.headers.get("Host") or f"127.0.0.1:{self.port}"
+        return f"http://{host}"
+
     def log_message(self, format, *args):
         pass
 
     def handle_recaptcha_proxy(self, is_post=False):
-        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-        target = qs.get("url", [""])[0]
-        if not target:
+        parsed_req = urllib.parse.urlsplit(self.path)
+        if "/recaptcha_proxy/api2/" in parsed_req.path:
+            sub = parsed_req.path.split("/recaptcha_proxy/api2/", 1)[1]
+            target_url = f"https://www.google.com/recaptcha/api2/{sub}"
+            if parsed_req.query:
+                target_url += f"?{parsed_req.query}"
+        else:
+            qs = urllib.parse.parse_qs(parsed_req.query)
+            target_url = qs.get("url", [""])[0]
+
+        if not target_url:
             self.send_response(400)
             self.end_headers()
             return
 
-        parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target))
+        parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target_url))
         target_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
         target_co = base64.b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
 
-        parsed = urllib.parse.urlsplit(target)
+        parsed = urllib.parse.urlsplit(target_url)
         q_dict = urllib.parse.parse_qs(parsed.query)
         if "co" in q_dict or "anchor" in parsed.path or "bframe" in parsed.path:
             q_dict["co"] = [target_co]
@@ -444,12 +457,15 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
             if "text/html" in c_type:
                 html_str = content.decode("utf-8", errors="ignore")
-                html_str = html_str.replace("https://www.google.com/recaptcha/api2/", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api2/')}")
+                html_str = html_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                html_str = html_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                 self.wfile.write(html_str.encode("utf-8"))
             elif "javascript" in c_type:
                 js_str = content.decode("utf-8", errors="ignore")
                 js_str = js_str.replace("w['__recaptcha_api']='https://www.google.com/recaptcha/api2/';",
-                                        f"w['__recaptcha_api']='/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api2/')}';")
+                                        f"w['__recaptcha_api']='{self.local_base}/recaptcha_proxy/api2/';")
+                js_str = js_str.replace("https://www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
+                js_str = js_str.replace("//www.google.com/recaptcha/api2/", f"{self.local_base}/recaptcha_proxy/api2/")
                 self.wfile.write(js_str.encode("utf-8"))
             else:
                 self.wfile.write(content)
@@ -463,7 +479,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         if clean_path in ["/", "/captcha"]:
             target_url = self.target_info.get("target_url", "")
             title = self.target_info.get("title", "Multi Bridge")
-            proxy_src = f"/proxy?url={urllib.parse.quote(target_url)}" if target_url else ""
+            proxy_src = f"{self.local_base}/proxy?url={urllib.parse.quote(target_url)}" if target_url else ""
 
             html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -639,6 +655,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         elif clean_path == "/proxy":
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             target = qs.get("url", [""])[0] or self.target_info.get("target_url", "")
+            if "/proxy" in target and ("127.0.0.1" in target or "localhost" in target):
+                inner_qs = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
+                target = inner_qs.get("url", [""])[0] or self.target_info.get("target_url", target)
             if not target:
                 self.send_response(400)
                 self.end_headers()
@@ -663,9 +682,26 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
                 if "text/html" in content_type:
                     html_str = content.decode("utf-8", errors="ignore")
-                    html_str = html_str.replace("https://www.google.com/recaptcha/api.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api.js')}")
-                    html_str = html_str.replace("https://www.google.com/recaptcha/enterprise.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/enterprise.js')}")
-                    html_str = html_str.replace("//www.google.com/recaptcha/api.js", f"/recaptcha_proxy?url={urllib.parse.quote('https://www.google.com/recaptcha/api.js')}")
+
+                    def rewrite_recaptcha_script(match):
+                        full_url = match.group(0)
+                        if full_url.startswith("//"):
+                            full_url = "https:" + full_url
+                        return f"{self.local_base}/recaptcha_proxy?url={urllib.parse.quote(full_url)}"
+
+                    html_str = re.sub(
+                        r'https?://(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
+                        rewrite_recaptcha_script,
+                        html_str,
+                        flags=re.I
+                    )
+                    html_str = re.sub(
+                        r'//(?:www\.)?google\.com/recaptcha/(?:api|enterprise)\.js(?:\?[^"\'<>\s]*)?',
+                        rewrite_recaptcha_script,
+                        html_str,
+                        flags=re.I
+                    )
+
                     direct_url = extract_stream_from_html(html_str)
                     if direct_url:
                         if "/dash/" in direct_url.lower() and not direct_url.lower().endswith(".mpd"):
@@ -688,6 +724,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     <base href="{final_origin}/">
                     <script>
                     (function() {{
+                        var localBase = '{self.local_base}';
+
                         try {{
                             window.open = function() {{ return null; }};
                             window.showModalDialog = function() {{ return null; }};
@@ -709,7 +747,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 
                             try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: streamUrl}}, '*'); }} catch(e) {{}}
                             try {{
-                                fetch('/stream', {{
+                                fetch(localBase + '/stream', {{
                                     method: 'POST',
                                     headers: {{'Content-Type': 'application/json'}},
                                     body: JSON.stringify({{url: streamUrl, status: 'ok', source: 'android_client_sniffer'}})
@@ -775,17 +813,42 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         }} catch(e) {{}}
 
                         try {{
+                            var syncTokens = function() {{
+                                try {{
+                                    var ta = document.querySelector('textarea[name="g-recaptcha-response"]');
+                                    var inpResp = document.querySelector('input[name="g-recaptcha-response"]');
+                                    var inpToken = document.querySelector('input[name="token"]');
+                                    var val = (ta && ta.value) ? ta.value : (inpResp ? inpResp.value : '');
+                                    if (val && val.length > 20) {{
+                                        if (inpResp && inpResp.value !== val) inpResp.value = val;
+                                        if (inpToken && inpToken.value !== val) inpToken.value = val;
+                                    }}
+                                }} catch(err) {{}}
+                            }};
+                            setInterval(syncTokens, 300);
+                            document.addEventListener('submit', syncTokens, true);
+                        }} catch(e) {{}}
+
+                        try {{
                             document.addEventListener('submit', function(e) {{
                                 if (e.target && e.target.tagName === 'FORM') {{
-                                    var act = e.target.getAttribute('action') || location.href;
-                                    if (!act.startsWith('http://') && !act.startsWith('https://')) {{
-                                        try {{
-                                            act = new URL(act, '{final_origin}').href;
-                                        }} catch(err) {{
-                                            act = '{final_origin}/' + act.replace(/^\\//, '');
+                                    var rawAct = e.target.getAttribute('action');
+                                    var act = '';
+                                    if (!rawAct || rawAct === '#' || rawAct === '') {{
+                                        act = '{final_url}';
+                                    }} else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {{
+                                        if (rawAct.indexOf(localBase) !== -1) {{
+                                            var m = rawAct.match(/[?&]url=([^&]+)/);
+                                            act = m ? decodeURIComponent(m[1]) : '{final_url}';
+                                        }} else {{
+                                            act = rawAct;
                                         }}
+                                    }} else if (rawAct.startsWith('/')) {{
+                                        act = '{final_origin}' + rawAct;
+                                    }} else {{
+                                        act = '{final_origin}/' + rawAct;
                                     }}
-                                    e.target.action = '/proxy_submit?url=' + encodeURIComponent(act);
+                                    e.target.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
                                 }}
                             }}, true);
                         }} catch(e) {{}}
@@ -797,7 +860,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                     var href = a.href;
                                     if ((href.startsWith('http://') || href.startsWith('https://')) && href.indexOf('{final_origin}') === 0) {{
                                         e.preventDefault();
-                                        location.href = '/proxy?url=' + encodeURIComponent(href);
+                                        location.href = localBase + '/proxy?url=' + encodeURIComponent(href);
                                     }}
                                 }}
                             }}, true);
@@ -809,7 +872,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
                                     set: function(val) {{
                                         if (val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                            val = '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                                            val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
                                         }}
                                         return origIframeSrcSet.call(this, val);
                                     }},
@@ -821,7 +884,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                             var origSetAttr = HTMLIFrameElement.prototype.setAttribute;
                             HTMLIFrameElement.prototype.setAttribute = function(name, val) {{
                                 if (name && name.toLowerCase() === 'src' && val && typeof val === 'string' && val.indexOf('google.com/recaptcha/api2/') !== -1 && val.indexOf('/recaptcha_proxy') === -1) {{
-                                    val = '/recaptcha_proxy?url=' + encodeURIComponent(val);
+                                    val = localBase + '/recaptcha_proxy/api2/' + val.split('google.com/recaptcha/api2/')[1];
                                 }}
                                 return origSetAttr.call(this, name, val);
                             }};
@@ -841,7 +904,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(str(e).encode("utf-8"))
-        elif clean_path == "/recaptcha_proxy":
+        elif clean_path.startswith("/recaptcha_proxy"):
             self.handle_recaptcha_proxy(is_post=False)
         elif clean_path == "/status":
             self.send_response(200)
@@ -858,7 +921,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_length)
 
-        if clean_path == "/recaptcha_proxy":
+        if clean_path.startswith("/recaptcha_proxy"):
             self.handle_recaptcha_proxy(is_post=True)
         elif clean_path == "/stream":
             try:
@@ -889,13 +952,19 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 self.send_response(500)
                 self.end_headers()
-        elif clean_path == "/proxy_submit":
+        elif clean_path in ["/proxy_submit", "/proxy"]:
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             target = qs.get("url", [""])[0]
+            if not target:
+                target = self.target_info.get("form_action") or self.target_info.get("target_url")
             if not target:
                 self.send_response(400)
                 self.end_headers()
                 return
+
+            if "/proxy" in target and ("127.0.0.1" in target or "localhost" in target):
+                inner_qs = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
+                target = inner_qs.get("url", [""])[0] or self.target_info.get("target_url", target)
 
             req = urllib.request.Request(target, data=post_data, headers={
                 "User-Agent": self.user_agent,
@@ -951,10 +1020,11 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     <base href="{final_origin}/">
                     <script>
                     (function() {{
+                        var localBase = '{self.local_base}';
                         function notify(s) {{
                             if (!s) return;
                             try {{ window.parent.postMessage({{type: 'MB_STREAM_FOUND', url: s}}, '*'); }} catch(e) {{}}
-                            try {{ fetch('/stream', {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{url: s, status: 'ok', source: 'android_submit_response'}})}}); }} catch(e) {{}}
+                            try {{ fetch(localBase + '/stream', {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{url: s, status: 'ok', source: 'android_submit_response'}})}}); }} catch(e) {{}}
                         }}
                         try {{
                             var origPlay = HTMLMediaElement.prototype.play;
