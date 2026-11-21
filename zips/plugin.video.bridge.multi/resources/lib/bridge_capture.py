@@ -397,33 +397,68 @@ def unpack_simple(source):
     except Exception:
         return source
 
+def normalize_stream_url(url):
+    if not url or not isinstance(url, str):
+        return url
+    url = url.strip()
+    if "pkcdn.org/dash/" in url.lower():
+        m_dash = re.search(r'(https?://[^/]+)/dash/([^/?#]+)(?:/[^/?#]+)?', url, re.I)
+        if m_dash:
+            base_host = m_dash.group(1)
+            video_hash = m_dash.group(2)
+            q = ("?" + url.split("?", 1)[1]) if "?" in url else ""
+            return f"{base_host}/{video_hash}/v.mp4{q}"
+    elif "/dash/" in url.lower() and not url.lower().endswith(".mpd"):
+        clean_base = url.split("?")[0].rsplit("/", 1)[0]
+        q = ("?" + url.split("?", 1)[1]) if "?" in url else ""
+        return f"{clean_base}/manifest.mpd{q}"
+    return url
+
 def extract_stream_from_html(html):
     if not html or not isinstance(html, str):
         return None
+    candidates = []
     # 1. Direct file matches
-    m = re.search(r'file\s*:\s*["\'](https?://[^"\']+\.(?:m3u8|mpd|mp4)[^"\']*)["\']', html, re.I)
-    if m and is_stream_url(m.group(1)):
-        return m.group(1)
-    m = re.search(r'sources\s*:\s*\[\s*\{\s*["\']?file["\']?\s*:\s*["\'](https?://[^"\']+)["\']', html, re.I)
-    if m and is_stream_url(m.group(1)):
-        return m.group(1)
-    m = re.search(r'<source\s+[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
-    if m and is_stream_url(m.group(1)):
-        return m.group(1)
+    for m in re.finditer(r'file\s*:\s*["\'](https?://[^"\']+\.(?:m3u8|mpd|mp4)[^"\']*)["\']', html, re.I):
+        if is_stream_url(m.group(1)):
+            candidates.append(normalize_stream_url(m.group(1)))
+    for m in re.finditer(r'sources\s*:\s*\[\s*\{\s*["\']?file["\']?\s*:\s*["\'](https?://[^"\']+)["\']', html, re.I):
+        if is_stream_url(m.group(1)):
+            candidates.append(normalize_stream_url(m.group(1)))
+    for m in re.finditer(r'<source\s+[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I):
+        if is_stream_url(m.group(1)):
+            candidates.append(normalize_stream_url(m.group(1)))
     # 2. Packed JS
     if detect_packed(html):
         unpacked = unpack_simple(html)
-        m = re.search(r'file\s*:\s*["\'](https?://[^"\']+)["\']', unpacked, re.I)
-        if m and is_stream_url(m.group(1)):
-            return m.group(1)
-        m = re.search(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd)[^\s"\'<>]*)', unpacked, re.I)
-        if m and is_stream_url(m.group(1)):
-            return m.group(1)
+        if unpacked:
+            for m in re.finditer(r'file\s*:\s*["\'](https?://[^"\']+)["\']', unpacked, re.I):
+                if is_stream_url(m.group(1)):
+                    candidates.append(normalize_stream_url(m.group(1)))
+            for m in re.finditer(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd|mp4)[^\s"\'<>]*)', unpacked, re.I):
+                if is_stream_url(m.group(1)):
+                    candidates.append(normalize_stream_url(m.group(1)))
     # 3. Generic stream URL fallback
-    m = re.search(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd)[^\s"\'<>]*)', html, re.I)
-    if m and is_stream_url(m.group(1)):
-        return m.group(1)
-    return None
+    for m in re.finditer(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd|mp4)[^\s"\'<>]*)', html, re.I):
+        if is_stream_url(m.group(1)):
+            candidates.append(normalize_stream_url(m.group(1)))
+
+    if not candidates:
+        return None
+
+    # Sort candidates by playback priority: .mp4 (direct) > .m3u8 (HLS) > .mpd (DASH)
+    def stream_priority(u):
+        u_low = u.lower().split("?")[0]
+        if u_low.endswith(".mp4") or "/v.mp4" in u_low:
+            return 1
+        if u_low.endswith(".m3u8") or ".m3u8" in u_low:
+            return 2
+        if u_low.endswith(".mpd") or ".mpd" in u_low or "/dash/" in u_low:
+            return 3
+        return 4
+
+    candidates.sort(key=stream_priority)
+    return candidates[0]
 
 class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     target_info = {}
@@ -709,10 +744,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     pass
 
         if stream_url:
-            if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
-                clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
-                q = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
-                stream_url = f"{clean_base}/manifest.mpd{q}"
+            stream_url = normalize_stream_url(stream_url)
             cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
             self.captured_data["result"] = {
                 "status": "ok",
@@ -1257,7 +1289,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.132</span>
+        <span class="brand">Multi Bridge v1.0.133</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
@@ -1347,11 +1379,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 body = json.loads(post_data.decode("utf-8"))
                 url = body.get("url")
                 if url:
-                    if "/dash/" in url.lower() and not url.lower().endswith(".mpd"):
-                        clean_base = url.split("?")[0].rsplit("/", 1)[0]
-                        q = ("?" + url.split("?", 1)[1]) if "?" in url else ""
-                        url = f"{clean_base}/manifest.mpd{q}"
-
+                    url = normalize_stream_url(url)
                     cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
                     self.captured_data["result"] = {
                         "status": "ok",
@@ -1421,6 +1449,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 hidden_fields = self.target_info.get("hidden_fields", {}).copy()
                 hidden_fields["g-recaptcha-response"] = token
                 hidden_fields["token"] = token
+                if "imhuman" not in hidden_fields:
+                    hidden_fields["imhuman"] = "Continue to Video"
                 encoded = urllib.parse.urlencode(hidden_fields).encode("utf-8")
                 req_ua = self.headers.get("User-Agent") or self.user_agent
                 req = urllib.request.Request(form_action, data=encoded, headers={
@@ -1432,6 +1462,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 resp_content = resp.read().decode("utf-8", errors="ignore")
                 stream_url = extract_stream_from_html(resp_content)
                 if stream_url:
+                    stream_url = normalize_stream_url(stream_url)
                     AndroidCaptchaHTTPHandler.record_log(f"STREAM DETECTADO: {stream_url[:35]}...")
                     cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
                     self.captured_data["result"] = {
@@ -1559,11 +1590,25 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
     except Exception:
         pass
 
+    def delayed_shutdown(srv, delay=8.0):
+        def _runner():
+            time.sleep(delay)
+            try:
+                srv.shutdown()
+                srv.server_close()
+            except Exception:
+                pass
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+
     start_time = time.time()
+    result = None
     try:
         while True:
             if captured_data.get("result"):
                 bring_kodi_to_front()
+                result = captured_data["result"]
+                delayed_shutdown(httpd, delay=8.0)
                 break
             
             if time.time() - start_time > timeout:
@@ -1595,13 +1640,14 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
 
             time.sleep(0.2)
     finally:
-        try:
-            httpd.shutdown()
-            httpd.server_close()
-        except Exception:
-            pass
+        if not result and not captured_data.get("result"):
+            try:
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception:
+                pass
 
-    return captured_data.get("result") or {"status": "error", "message": "No se capturo el stream de video."}
+    return result or captured_data.get("result") or {"status": "error", "message": "No se capturo el stream de video."}
 
 def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, load_adblock=True, progress_dialog=None, monitor=None):
     if is_android_platform():

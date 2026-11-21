@@ -62,8 +62,16 @@ def get_video_url(page_url, url_referer=''):
     headers = data.get("headers", {})
     mime_type = data.get("mime_type", "")
 
-    # Normalizar fragmentos DASH a manifest maestro
-    if "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
+    # Normalizar fragmentos DASH o pkcdn a enlace directo reproducible
+    import re
+    if "pkcdn.org/dash/" in stream_url.lower():
+        m_dash = re.search(r'(https?://[^/]+)/dash/([^/?#]+)(?:/[^/?#]+)?', stream_url, re.I)
+        if m_dash:
+            base_host = m_dash.group(1)
+            video_hash = m_dash.group(2)
+            query = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
+            stream_url = f"{base_host}/{video_hash}/v.mp4{query}"
+    elif "/dash/" in stream_url.lower() and not stream_url.lower().endswith(".mpd"):
         clean_base = stream_url.split("?")[0].rsplit("/", 1)[0]
         query = ("?" + stream_url.split("?", 1)[1]) if "?" in stream_url else ""
         stream_url = f"{clean_base}/manifest.mpd{query}"
