@@ -48,6 +48,8 @@ def normalise_filesize(filesize):
 
 def get_files_in_folder(folder, regex):
     import re
+    if not xbmcvfs.exists(folder):
+        return []
     return [x for x in xbmcvfs.listdir(folder)[1] if re.match(regex, x)]
 
 

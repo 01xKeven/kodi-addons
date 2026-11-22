@@ -59,6 +59,7 @@ class ImagesMonitor(SafeThread, ListItemInfoGetter, ImageManipulations, Poller):
 
     def __init__(self, parent):
         SafeThread.__init__(self)
+        self.daemon = True
         self.reset_current_item()
         self._next_refresh = 0
         self._this_refresh = 0

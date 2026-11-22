@@ -11,18 +11,31 @@ class CronJobMonitor(SafeThread):
 
     def __init__(self, parent, update_hour=0):
         SafeThread.__init__(self)
+        self.daemon = True
         self.exit = False
         self.update_hour = update_hour
         self.update_monitor = parent.update_monitor
 
     def _on_startup(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_recache_kodidb()
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_trakt_authorization()
 
     def _on_poll(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_database_maintenance()
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_delete_old_databases()
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_library_update_check()
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self._do_delete_old_log_files()
 
     @cached_property
@@ -36,41 +49,65 @@ class CronJobMonitor(SafeThread):
         return DatabaseMaintenance()
 
     def _do_database_maintenance(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self.database_maintenance.vacuum()
 
     def _do_delete_old_databases(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self.database_maintenance.delete_legacy_folders()
 
     def _do_recache_kodidb(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         self.database_maintenance.recache_kodidb(notification=False)
 
     def _do_delete_old_log_files_in_folder(self, folder, regex, days=-7):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         from tmdbhelper.lib.files.futils import get_files_in_folder, get_write_path, delete_file
         from tmdbhelper.lib.addon.tmdate import get_todays_date
+        import xbmcvfs
+        path = get_write_path(folder, make_dir=False)
+        if not xbmcvfs.exists(path):
+            return
         date = get_todays_date(str_fmt="%Y-%m-%d", days=days)
-        for file in get_files_in_folder(get_write_path(folder, make_dir=False), regex=regex):
+        for file in get_files_in_folder(path, regex=regex):
+            if self.update_monitor.abortRequested() or self.exit:
+                break
             if file > date:
                 continue
             delete_file(folder, file)
 
     def _do_delete_old_log_files(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         for folder, regex in (
             ('log_tagger', r".*\.json$"),
             ('log_library', r".*\.json$"),
             ('timer_report', r".*\.txt$"),
         ):
+            if self.update_monitor.abortRequested() or self.exit:
+                break
             self._do_delete_old_log_files_in_folder(folder, regex)
 
     def _do_trakt_authorization(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         from jurialmunkey.window import get_property
         self.trakt_api.authorize()
         self.update_monitor.waitForAbort(1)
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         if not get_property('TraktIsAuth', is_type=float):
             return
         from tmdbhelper.lib.script.method.trakt import get_stats
         get_stats()
 
     def _do_library_update(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         from tmdbhelper.lib.addon.plugin import executebuiltin
         from tmdbhelper.lib.addon.tmdate import get_datetime_now, get_timedelta
         executebuiltin('RunScript(plugin.video.themoviedb.helper,library_autoupdate)')
@@ -78,6 +115,8 @@ class CronJobMonitor(SafeThread):
         self.library_update_next += get_timedelta(hours=24)  # Set next update for tomorrow
 
     def _do_library_update_check(self):
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         from jurialmunkey.parser import try_int
         from tmdbhelper.lib.addon.tmdate import convert_timestamp, get_datetime_now, get_timedelta, get_datetime_today, get_datetime_time, get_datetime_combine
         from tmdbhelper.lib.addon.plugin import get_setting, get_infolabel
@@ -99,5 +138,8 @@ class CronJobMonitor(SafeThread):
         self._on_startup()
 
         while not self.update_monitor.abortRequested() and not self.exit:
-            self.update_monitor.waitForAbort(self._poll_time)
+            if self.update_monitor.waitForAbort(self._poll_time):
+                break
+            if self.update_monitor.abortRequested() or self.exit:
+                break
             self._on_poll()

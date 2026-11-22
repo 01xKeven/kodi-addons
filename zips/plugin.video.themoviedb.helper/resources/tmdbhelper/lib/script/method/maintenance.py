@@ -57,12 +57,18 @@ class DatabaseMaintenance:
 
     @property
     def is_vacuum_allowed(self):
+        import xbmc
+        if xbmc.Monitor().abortRequested():
+            return False
         if self.is_blocked_by_playback:
             return False
         return self.is_next_vacuum
 
     @property
     def is_delete_allowed(self):
+        import xbmc
+        if xbmc.Monitor().abortRequested():
+            return False
         if self.is_blocked_by_playback:
             return False
         return self.is_next_delete
@@ -82,6 +88,9 @@ class DatabaseMaintenance:
         return get_todays_date()
 
     def vacuum(self, force=False):
+        import xbmc
+        if xbmc.Monitor().abortRequested():
+            return
         if not force and not self.is_vacuum_allowed:
             return
         self.set_next_vacuum()
@@ -94,6 +103,9 @@ class DatabaseMaintenance:
 
     def delete_legacy_folders(self, force=False):
         """ Once-off routine to delete old unused database versions to avoid wasting disk space """
+        import xbmc
+        if xbmc.Monitor().abortRequested():
+            return
         if not force and not self.is_delete_allowed:
             return
         self.set_next_delete()
