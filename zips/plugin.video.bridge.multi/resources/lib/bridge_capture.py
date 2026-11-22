@@ -341,7 +341,14 @@ def get_kodi_package():
         pass
     return "org.xbmc.kodi"
 
+_last_bring_to_front = 0.0
+
 def bring_kodi_to_front():
+    global _last_bring_to_front
+    now = time.time()
+    if now - _last_bring_to_front < 10.0:
+        return
+    _last_bring_to_front = now
     try:
         import xbmc
         pkg = get_kodi_package()
@@ -835,12 +842,33 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 }
             } catch(e) {}
 
+            var streamNotified = false;
             function notifyParent(streamUrl) {
+                if (streamNotified) return;
                 if (!streamUrl || typeof streamUrl !== 'string') return;
                 if (streamUrl.startsWith('data:') || streamUrl.startsWith('blob:')) return;
                 var low = streamUrl.toLowerCase();
                 if (low.endsWith('.vtt') || low.endsWith('.srt') || low.endsWith('.jpg') || low.endsWith('.png') || low.endsWith('.js') || low.endsWith('.css') || low.endsWith('.svg')) return;
                 if (low.includes('google') || low.includes('analytics') || low.includes('doubleclick') || low.includes('recaptcha') || low.includes('turnstile') || low.includes('hcaptcha')) return;
+
+                streamNotified = true;
+
+                try {
+                    var mediaEls = document.querySelectorAll('video, audio');
+                    for (var m = 0; m < mediaEls.length; m++) {
+                        try {
+                            mediaEls[m].pause();
+                            mediaEls[m].muted = true;
+                            mediaEls[m].src = '';
+                            mediaEls[m].removeAttribute('src');
+                            mediaEls[m].load();
+                        } catch(me) {}
+                    }
+                } catch(e) {}
+
+                if (window.__mbPlayInterval) {
+                    try { clearInterval(window.__mbPlayInterval); } catch(e) {}
+                }
 
                 try { window.parent.postMessage({type: 'MB_STREAM_FOUND', url: streamUrl}, '*'); } catch(e) {}
                 try {
@@ -850,6 +878,8 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         body: JSON.stringify({url: streamUrl, status: 'ok', source: 'android_client_sniffer'})
                     });
                 } catch(e) {}
+
+                try { window.stop(); } catch(e) {}
             }
 
             try {
@@ -1011,10 +1041,15 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             } catch(e) {}
 
             try {
-                setInterval(function() {
+                window.__mbPlayInterval = setInterval(function() {
+                    if (streamNotified) {
+                        try { clearInterval(window.__mbPlayInterval); } catch(e) {}
+                        return;
+                    }
                     try {
                         var vids = document.querySelectorAll('video');
                         for (var i = 0; i < vids.length; i++) {
+                            try { vids[i].muted = true; } catch(me) {}
                             if (vids[i].paused) {
                                 vids[i].play().catch(function() {});
                             }
@@ -1266,7 +1301,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             }} catch(e) {{}}
         }}
 
+        var returnedToKodi = false;
         function returnToKodi() {{
+            if (returnedToKodi) return;
+            returnedToKodi = true;
             try {{
                 window.location.href = "kodi://launch";
             }} catch(e) {{}}
@@ -1279,6 +1317,16 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             if (streamHandled) return;
             streamHandled = true;
             playChime();
+
+            try {{ if (pollTimer) clearInterval(pollTimer); }} catch(e) {{}}
+            try {{ if (logTimer) clearInterval(logTimer); }} catch(e) {{}}
+
+            try {{
+                var f = document.getElementById('main-frame');
+                if (f) {{
+                    f.src = 'about:blank';
+                }}
+            }} catch(e) {{}}
 
             var st = document.getElementById('status-msg');
             if (st) {{
@@ -1349,7 +1397,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.133</span>
+        <span class="brand">Multi Bridge v1.0.135</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
@@ -1440,18 +1488,19 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 url = body.get("url")
                 if url:
                     url = normalize_stream_url(url)
-                    cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
-                    self.captured_data["result"] = {
-                        "status": "ok",
-                        "url": url,
-                        "headers": {
-                            "User-Agent": self.user_agent,
-                            "Referer": self.target_info.get("target_url", ""),
-                            "Cookie": cookie_str
-                        },
-                        "source": body.get("source", "android_smart_proxy")
-                    }
-                    bring_kodi_to_front()
+                    if not self.captured_data.get("result"):
+                        cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
+                        self.captured_data["result"] = {
+                            "status": "ok",
+                            "url": url,
+                            "headers": {
+                                "User-Agent": self.user_agent,
+                                "Referer": self.target_info.get("target_url", ""),
+                                "Cookie": cookie_str
+                            },
+                            "source": body.get("source", "android_smart_proxy")
+                        }
+                        bring_kodi_to_front()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
