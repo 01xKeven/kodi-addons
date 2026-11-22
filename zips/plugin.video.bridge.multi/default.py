@@ -10627,6 +10627,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         t_start = time.time()
         video_started = False
         user_aborted = False
+        had_loading = False
+        idle_count = 0
 
         while time.time() - t_start < watchdog_timeout:
             if mon.abortRequested():
@@ -10643,21 +10645,32 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             # (evita el choque entre enlaces y permite a Okru y servidores CDN iniciar limpiamente).
             is_loading = False
             try:
-                is_loading = (
-                    player.isPlaying() or
-                    bool(player.getPlayingFile()) or
+                if player.isPlaying():
+                    is_loading = True
+                elif (
                     xbmc.getCondVisibility("Player.Buffering") or 
                     xbmc.getCondVisibility("Player.HasMedia") or
                     xbmc.getCondVisibility("Player.HasVideo") or
                     xbmc.getCondVisibility("Player.HasAudio")
-                )
+                ):
+                    is_loading = True
             except Exception:
-                pass
+                is_loading = False
 
             if is_loading:
+                had_loading = True
+                idle_count = 0
                 # Si está descargando datos o el reproductor está activo, extender el margen de gracia (hasta 40s máx)
                 if time.time() - t_start > (watchdog_timeout - 5):
                     watchdog_timeout = min(watchdog_timeout + 2.0, 40.0)
+            elif had_loading:
+                idle_count += 1
+                # Si ya había empezado a cargar y el reproductor de Kodi se cerró completamente
+                # (demuxer EOF, error 403, stream abortado), no esperar 20s en pantalla en negro:
+                # tras 1.5s de inactividad confirmada, descartar y pasar al siguiente enlace.
+                if idle_count >= 6 and (time.time() - t_start > 2.5):
+                    xbmc.log("Multi Bridge Fast Autoplay Watchdog: stream se detuvo prematuramente (EOF/fallo demuxer) -> probando siguiente enlace", xbmc.LOGINFO)
+                    break
 
             if mon.waitForAbort(0.25):
                 user_aborted = True
@@ -10666,7 +10679,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         if user_aborted:
             return True
 
-        if not video_started and (player.isPlaying() or bool(player.getPlayingFile())):
+        _is_playing_safe = False
+        try:
+            _is_playing_safe = player.isPlaying()
+        except Exception:
+            _is_playing_safe = False
+
+        if not video_started and _is_playing_safe:
             # Margen final de gracia: dar tiempo a que los hilos de audio/video decodifiquen el primer fotograma
             for _ in range(16):
                 if player.isPlayingVideo():
