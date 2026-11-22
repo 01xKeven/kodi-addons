@@ -275,6 +275,35 @@ def sync_cookies_from_main_browser(dest_profile):
             except Exception:
                 pass
 
+def fix_chrome_crash_state(dest_profile):
+    if not dest_profile:
+        return
+    pref_path = os.path.join(dest_profile, "Default", "Preferences")
+    if os.path.isfile(pref_path):
+        try:
+            with open(pref_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            prof = d.setdefault("profile", {})
+            prof["exit_type"] = "Normal"
+            prof["exited_cleanly"] = True
+            with open(pref_path, "w", encoding="utf-8") as f:
+                json.dump(d, f)
+        except Exception:
+            pass
+
+    state_path = os.path.join(dest_profile, "Local State")
+    if os.path.isfile(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                sd = json.load(f)
+            metrics = sd.setdefault("user_experience_metrics", {})
+            stability = metrics.setdefault("stability", {})
+            stability["exited_cleanly"] = True
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(sd, f)
+        except Exception:
+            pass
+
 def is_stream_url(url):
     if not url or not isinstance(url, str):
         return False
@@ -1397,7 +1426,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.136</span>
+        <span class="brand">Multi Bridge v1.0.138</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
@@ -1777,6 +1806,7 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
     user_data_dir = os.path.expandvars(r"%APPDATA%\Kodi\userdata\addon_data\plugin.video.bridge.multi\web_profile")
     os.makedirs(user_data_dir, exist_ok=True)
     sync_cookies_from_main_browser(user_data_dir)
+    fix_chrome_crash_state(user_data_dir)
 
     cdp_port = find_free_port()
 
@@ -1802,6 +1832,9 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
         "--disable-fre",
         "--disable-signin-promo",
         "--disable-default-apps",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
+        "--disable-infobars",
         f"--remote-debugging-port={cdp_port}",
         f"--window-size={width},{height}",
         f"--window-position={pos_x},{pos_y}",
@@ -2091,6 +2124,15 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
             time.sleep(0.015)
 
     finally:
+        if b_ws:
+            try:
+                b_ws.send_msg(json.dumps({"id": 99999, "method": "Browser.close"}))
+                for _ in range(8):
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.04)
+            except Exception:
+                pass
         if p_ws:
             try: p_ws.close()
             except Exception: pass
@@ -2098,9 +2140,11 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
             try: b_ws.close()
             except Exception: pass
         try:
-            proc.kill()
+            if proc.poll() is None:
+                proc.kill()
         except Exception:
             pass
+        fix_chrome_crash_state(user_data_dir)
 
     if captured_data and captured_data.get("status") == "ok":
         return captured_data
