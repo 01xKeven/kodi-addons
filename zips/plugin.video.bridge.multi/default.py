@@ -62,14 +62,28 @@ socket.socket = _TrackedSocket
 
 def abort_all_network_sockets():
     """Cierra forzosamente todos los sockets TCP abiertos en cualquier hilo.
-    Despierta inmediatamente (<3ms) hilos bloqueados en recv()/connect() de requests/urllib."""
+    Despierta inmediatamente (<1ms) hilos bloqueados en recv()/connect() de requests/urllib/urllib3."""
     try:
         with _OPEN_SOCKETS_LOCK:
             socks = list(_OPEN_SOCKETS)
             _OPEN_SOCKETS.clear()
         for s in socks:
             try:
-                s.shutdown(socket.SHUT_RDWR)
+                fd = -1
+                try:
+                    fd = s.fileno()
+                except Exception:
+                    pass
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                if fd >= 0 and sys.platform == 'win32':
+                    try:
+                        import ctypes
+                        ctypes.windll.ws2_32.closesocket(ctypes.c_uint(fd))
+                    except Exception:
+                        pass
             except Exception:
                 pass
             try:
@@ -90,13 +104,14 @@ def _ensure_shutdown_watchdog():
         _SHUTDOWN_WATCHDOG_STARTED = True
 
     def _watch():
-        global _SHUTDOWN_REQUESTED
+        global _SHUTDOWN_REQUESTED, _SHUTDOWN_WATCHDOG_STARTED
         try:
             mon = xbmc.Monitor()
-            while not mon.abortRequested():
+            while not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
                 if mon.waitForAbort(0.2):
                     break
-            _SHUTDOWN_REQUESTED = True
+            if mon.abortRequested():
+                _SHUTDOWN_REQUESTED = True
             _BG_TASK_ABORT_EVENT.set()
             try:
                 socket.setdefaulttimeout(0.05)
@@ -105,6 +120,9 @@ def _ensure_shutdown_watchdog():
             abort_all_network_sockets()
         except Exception:
             pass
+        finally:
+            with _SHUTDOWN_WATCHDOG_LOCK:
+                _SHUTDOWN_WATCHDOG_STARTED = False
 
     t = threading.Thread(target=_watch, name="MultiBridgeShutdownWatchdog", daemon=True)
     t.start()
@@ -1063,6 +1081,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
     _BG_TASK_ABORT_EVENT.clear()
+    _ensure_shutdown_watchdog()
     with _playback_monitor_lock:
         _playback_monitor_token += 1
         my_token = "%f_%d_%d" % (time.time(), _playback_monitor_token, random.randint(10000, 99999))
@@ -1513,6 +1532,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             if mon.waitForAbort(0.25): break
 
         _BG_TASK_ABORT_EVENT.set()
+        abort_all_network_sockets()
         if _get_global_monitor_token() != my_token:
             xbmc.log("Multi Bridge: monitor anterior finalizado limpiamente (control transferido al nuevo servidor)", xbmc.LOGINFO)
             return
@@ -4591,7 +4611,7 @@ class _PipelineLinkVerifier:
         try:
             socket.setdefaulttimeout(self.verify_timeout)
         except: pass
-        while not self.global_stop.is_set() and not xbmc.Monitor().abortRequested():
+        while not self.global_stop.is_set() and not xbmc.Monitor().abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
             with self.lock:
                 if self.verify_max_functional > 0 and len(self.verified_direct) >= self.verify_max_functional:
                     break
@@ -4658,7 +4678,7 @@ class _PipelineLinkVerifier:
         start_wait = time.time()
         _dialog_cooldown = 0.0
 
-        while time.time() - start_wait < max_wait:
+        while time.time() - start_wait < max_wait and not _BG_TASK_ABORT_EVENT.is_set():
             if xbmc.Monitor().abortRequested():
                 break
             if p_dialog and p_dialog.iscanceled():
@@ -4909,10 +4929,12 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                 break
     finally:
         stop_event.set()
+        if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+            abort_all_network_sockets()
         for _orig_idx, _t, _st in list(running):
             try:
                 if _t.is_alive():
-                    _t.join(timeout=0.1)
+                    _t.join(timeout=0.05)
             except Exception:
                 pass
         try:
@@ -7868,13 +7890,13 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=2
         done_pfs = set()
         if mon.waitForAbort(0.3):
             return
-        while time.time() - t0 < deadline and not mon.abortRequested():
+        while time.time() - t0 < deadline and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
             try:
-                if _LAST_SEARCH_TOKEN != token or mon.abortRequested():
+                if _LAST_SEARCH_TOKEN != token or mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                     return
                 avail_batch = []
                 for pf_tuple in list(_LAST_SEARCH_THREADS):
-                    if mon.abortRequested(): return
+                    if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set(): return
                     try:
                         ch_name, th, ch_key = pf_tuple
                     except Exception:
@@ -7916,11 +7938,11 @@ def _late_collect_worker(engine, target_tmdb, season, episode, token, deadline=2
                                 alive = True
                                 break
                         except: pass
-                    if not alive or mon.abortRequested():
+                    if not alive or mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                         return
                 except: return
             except: pass
-            if mon.waitForAbort(0.8):
+            if mon.waitForAbort(0.5) or _BG_TASK_ABORT_EVENT.is_set():
                 return
     except: pass
 
@@ -13095,6 +13117,7 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
     for cand in unverified_list:
         if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
             xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
+            abort_all_network_sockets()
             return
 
         # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
@@ -13182,7 +13205,8 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
             ), xbmc.LOGINFO)
 
         # Micro-pausa pasiva para mantener la CPU en reposo
-        if mon.waitForAbort(0.2):
+        if mon.waitForAbort(0.2) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
+            abort_all_network_sockets()
             return
 
     # Fin de Fase 1: guardar estado definitivo limpio
@@ -13345,13 +13369,16 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
         wait_end = time.time() + 25.0
         while any(t.is_alive() for t in active_threads) and time.time() < wait_end:
             if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                abort_all_network_sockets()
                 return
-            time.sleep(0.2)
+            time.sleep(0.1)
     finally:
+        if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
+            abort_all_network_sockets()
         for _th in active_threads:
             try:
                 if _th.is_alive():
-                    _th.join(0.15)
+                    _th.join(0.05)
             except Exception: pass
         try:
             socket.setdefaulttimeout(orig_sock_p2 or 10.0)
