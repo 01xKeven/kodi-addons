@@ -7097,14 +7097,16 @@ class _RadialSearchProgressDialog(object):
         self._watcher_stop = False
         def _watch():
             win = xbmcgui.Window(10000)
-            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False):
+            mon = xbmc.Monitor()
+            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False) and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
                 try:
                     if win.getProperty("bridge.autoplay_toggle_click") == "true":
                         win.setProperty("bridge.autoplay_toggle_click", "")
                         _handle_autoplay_toggle_event(self._dlg)
                 except Exception:
                     pass
-                time.sleep(0.05)
+                if mon.waitForAbort(0.05) or _BG_TASK_ABORT_EVENT.is_set():
+                    break
         t = threading.Thread(target=_watch, daemon=True)
         t.name = "BridgeAutoplayToggleWatcher"
         t.start()
@@ -7345,14 +7347,16 @@ class _AutoplayProgressDialog(object):
         self._watcher_stop = False
         def _watch():
             win = xbmcgui.Window(10000)
-            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False):
+            mon = xbmc.Monitor()
+            while not getattr(self, '_watcher_stop', False) and not getattr(self, '_canceled', False) and not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
                 try:
                     if win.getProperty("bridge.autoplay_toggle_click") == "true":
                         win.setProperty("bridge.autoplay_toggle_click", "")
                         _handle_autoplay_toggle_event(self._dlg)
                 except Exception:
                     pass
-                time.sleep(0.05)
+                if mon.waitForAbort(0.05) or _BG_TASK_ABORT_EVENT.is_set():
+                    break
         t = threading.Thread(target=_watch, daemon=True)
         t.name = "BridgeAutoplayToggleWatcher"
         t.start()
@@ -7373,6 +7377,7 @@ class _AutoplayProgressDialog(object):
         return False
 
     def close(self):
+        self._watcher_stop = True
         if self._dlg:
             try:
                 self._dlg.close()
@@ -8662,9 +8667,9 @@ def _start_view_mode_monitor():
         mon = xbmc.Monitor()
         # Esperar a que la ventana de enlaces cargue en pantalla
         for _ in range(15):
-            if mon.abortRequested():
+            if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                 return
-            if mon.waitForAbort(0.2):
+            if mon.waitForAbort(0.2) or _BG_TASK_ABORT_EVENT.is_set():
                 return
             if xbmc.getCondVisibility("Window.IsVisible(10025)"):
                 break
@@ -8673,9 +8678,9 @@ def _start_view_mode_monitor():
 
         # Monitorear activamente mientras el usuario navegue en la ventana de enlaces (hasta 3 minutos)
         for _ in range(360):
-            if mon.abortRequested():
+            if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                 return
-            if mon.waitForAbort(0.5):
+            if mon.waitForAbort(0.5) or _BG_TASK_ABORT_EVENT.is_set():
                 return
             try:
                 if not xbmc.getCondVisibility("Window.IsVisible(10025)"):
