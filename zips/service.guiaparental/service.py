@@ -837,6 +837,11 @@ def main_loop():
     player.stop_event.set()
     player.close_overlay(fast=True)
     log("Servicio de Control Parental IMDb detenido.")
+    try:
+        del player
+        del monitor
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
