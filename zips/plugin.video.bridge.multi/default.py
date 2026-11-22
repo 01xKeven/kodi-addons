@@ -11513,50 +11513,13 @@ def prompt_first_run_device(addon=None, force=False):
     if addon is None:
         addon = _bridge_addon
     try:
-        w = xbmcgui.Window(10000)
-        if w.getProperty('MultiBridge_DevicePromptOpen') == 'true':
-            return
-        w.setProperty('MultiBridge_DevicePromptOpen', 'true')
-    except Exception:
-        pass
-
-    try:
         if not force and addon.getSetting('first_install_setup_done') == 'true':
             return
-
-        addon_path = ADDON_PATH if ADDON_PATH else xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
-        xml_file = 'device_select.xml'
-        skin_dir = os.path.join(addon_path, 'resources', 'skins', 'Default', '1080i')
-
-        selected = None
-        if os.path.exists(os.path.join(skin_dir, xml_file)):
-            try:
-                dlg = _DeviceSelectDialog(xml_file, addon_path, 'Default', '1080i')
-                dlg.doModal()
-                selected = dlg.selected
-                del dlg
-            except Exception as e:
-                xbmc.log(f"Multi Bridge: Error abriendo _DeviceSelectDialog: {e}", xbmc.LOGWARNING)
-
-        if not selected:
-            is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
-            selected = 'android' if is_android else 'pc'
-
-        if selected == 'pc':
-            addon.setSetting('hide_captcha_links', 'false')
-            xbmcgui.Dialog().notification('Multi Bridge', 'Configurado para PC: Captchas activos', xbmcgui.NOTIFICATION_INFO, 3500)
-            xbmc.log("Multi Bridge: Configuración inicial -> PC (Captchas activos)", xbmc.LOGINFO)
-        else:
-            addon.setSetting('hide_captcha_links', 'true')
-            xbmcgui.Dialog().notification('Multi Bridge', 'Configurado para Android: Captchas desactivados', xbmcgui.NOTIFICATION_INFO, 3500)
-            xbmc.log("Multi Bridge: Configuración inicial -> Android (Captchas desactivados)", xbmc.LOGINFO)
-
+        addon.setSetting('hide_captcha_links', 'false')
         addon.setSetting('first_install_setup_done', 'true')
-    finally:
-        try:
-            xbmcgui.Window(10000).clearProperty('MultiBridge_DevicePromptOpen')
-        except Exception:
-            pass
+        xbmc.log("Multi Bridge: Configuracion inicial automatica completada (Captchas activos en PC y Android)", xbmc.LOGINFO)
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: Error en configuracion inicial automatica: {e}", xbmc.LOGWARNING)
 
 
 def check_first_run_device():

@@ -300,24 +300,9 @@ def check_first_run_device_service(monitor=None):
         addon = xbmcaddon.Addon('plugin.video.bridge.multi')
         if addon.getSetting('first_install_setup_done') == 'true':
             return
-
-        for _ in range(30):
-            if monitor and monitor.abortRequested():
-                return
-            if xbmc.getCondVisibility('Window.IsVisible(home)') or xbmc.getCondVisibility('Window.IsVisible(10000)'):
-                break
-            if monitor:
-                if monitor.waitForAbort(1):
-                    return
-            else:
-                xbmc.sleep(1000)
-
-        if monitor and monitor.waitForAbort(2):
-            return
-
-        import default
-        if hasattr(default, 'prompt_first_run_device'):
-            default.prompt_first_run_device(addon)
+        addon.setSetting('hide_captcha_links', 'false')
+        addon.setSetting('first_install_setup_done', 'true')
+        xbmc.log("Multi Bridge Service: Configuracion inicial automatica completada (Captchas activos)", xbmc.LOGINFO)
     except Exception as e:
         xbmc.log("Multi Bridge Service: Error en check_first_run_device_service: " + str(e), xbmc.LOGWARNING)
 
