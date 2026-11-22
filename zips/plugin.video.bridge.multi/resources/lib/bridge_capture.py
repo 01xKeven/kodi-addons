@@ -371,6 +371,7 @@ def get_kodi_package():
     return "org.xbmc.kodi"
 
 _last_bring_to_front = 0.0
+_active_android_server = None
 
 def bring_kodi_to_front():
     global _last_bring_to_front
@@ -581,85 +582,99 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        is_cache_hit = False
+        resp_headers = {}
         if not is_post and target_url in self.recaptcha_cache:
-            cached_ctype, cached_body = self.recaptcha_cache[target_url]
-            self.send_response(200)
-            self.send_header("Content-Type", cached_ctype)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(cached_body)
-            return
-
-        parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target_url))
-        target_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
-        target_co = base64.urlsafe_b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
-
-        parsed = urllib.parse.urlsplit(target_url)
-        q_dict = urllib.parse.parse_qs(parsed.query)
-        if "co" in q_dict or "anchor" in parsed.path or "bframe" in parsed.path:
-            q_dict["co"] = [target_co]
-        new_query = urllib.parse.urlencode(q_dict, doseq=True)
-        real_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
-
-        req_ua = self.headers.get("User-Agent") or self.user_agent
-
-        if parsed.path.endswith("/anchor"):
-            headers = {
-                "User-Agent": req_ua,
-                "Referer": target_origin + "/",
-                "Origin": target_origin
-            }
-        elif is_api2 or is_enterprise:
-            k_val = q_dict.get("k", [""])[0]
-            v_val = q_dict.get("v", [""])[0]
-            prefix = "api2" if is_api2 else "enterprise"
-            headers = {
-                "User-Agent": req_ua,
-                "Referer": f"https://www.google.com/recaptcha/{prefix}/anchor?ar=1&k={k_val}&co={target_co}&hl=es&v={v_val}&size=normal",
-                "Origin": "https://www.google.com"
-            }
+            c_type, content = self.recaptcha_cache[target_url]
+            status_code = 200
+            is_cache_hit = True
         else:
-            headers = {
-                "User-Agent": req_ua,
-                "Referer": target_origin + "/",
-                "Origin": target_origin
-            }
+            parsed_origin = urllib.parse.urlsplit(self.target_info.get("target_url", target_url))
+            target_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+            target_co = base64.urlsafe_b64encode(f"{target_origin}:443".encode("utf-8")).decode("utf-8").rstrip("=")
 
-        client_hints = ["Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Accept-Language"]
-        for ch in client_hints:
-            if ch in self.headers:
-                headers[ch] = self.headers[ch]
+            parsed = urllib.parse.urlsplit(target_url)
+            q_dict = urllib.parse.parse_qs(parsed.query)
+            if "co" in q_dict or "anchor" in parsed.path or "bframe" in parsed.path:
+                q_dict["co"] = [target_co]
+            new_query = urllib.parse.urlencode(q_dict, doseq=True)
+            real_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
-        if "Cookie" in self.headers:
-            headers["Cookie"] = self.headers["Cookie"]
+            req_ua = self.headers.get("User-Agent") or self.user_agent
 
-        if is_post:
-            if post_data is None:
-                length = int(self.headers.get("Content-Length", 0))
-                post_data = self.rfile.read(length)
-            if "Content-Type" in self.headers:
-                headers["Content-Type"] = self.headers["Content-Type"]
+            if parsed.path.endswith("/anchor"):
+                headers = {
+                    "User-Agent": req_ua,
+                    "Referer": target_origin + "/",
+                    "Origin": target_origin
+                }
+            elif is_api2 or is_enterprise:
+                k_val = q_dict.get("k", [""])[0]
+                v_val = q_dict.get("v", [""])[0]
+                prefix = "api2" if is_api2 else "enterprise"
+                headers = {
+                    "User-Agent": req_ua,
+                    "Referer": f"https://www.google.com/recaptcha/{prefix}/anchor?ar=1&k={k_val}&co={target_co}&hl=es&v={v_val}&size=normal",
+                    "Origin": "https://www.google.com"
+                }
             else:
-                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                headers = {
+                    "User-Agent": req_ua,
+                    "Referer": target_origin + "/",
+                    "Origin": target_origin
+                }
 
-        req = urllib.request.Request(real_url, data=post_data, headers=headers)
+            client_hints = ["Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Accept-Language"]
+            for ch in client_hints:
+                if ch in self.headers:
+                    headers[ch] = self.headers[ch]
+
+            if "Cookie" in self.headers:
+                headers["Cookie"] = self.headers["Cookie"]
+
+            if is_post:
+                if post_data is None:
+                    length = int(self.headers.get("Content-Length", 0))
+                    post_data = self.rfile.read(length)
+                if "Content-Type" in self.headers:
+                    headers["Content-Type"] = self.headers["Content-Type"]
+                else:
+                    headers["Content-Type"] = "application/x-www-form-urlencoded"
+
+            req = urllib.request.Request(real_url, data=post_data, headers=headers)
+            try:
+                resp = self.recaptcha_opener.open(req, timeout=14)
+                content = resp.read()
+                c_type = resp.headers.get("Content-Type", "text/html")
+                status_code = resp.status if hasattr(resp, "status") else 200
+                resp_headers = resp.headers
+                if not is_post and (is_gstatic or is_apijs or is_enterprisejs):
+                    self.recaptcha_cache[target_url] = (c_type, content)
+            except Exception as e:
+                AndroidCaptchaHTTPHandler.record_log(f"ERR {path.split('/')[-1]}: {str(e)[:40]}")
+                self.send_response(500)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+                return
+
         try:
-            resp = self.recaptcha_opener.open(req, timeout=14)
-            content = resp.read()
-            c_type = resp.headers.get("Content-Type", "text/html")
-            status_code = resp.status if hasattr(resp, "status") else 200
-
             self.send_response(status_code)
             self.send_header("Content-Type", c_type)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, Authorization, Origin, Accept")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
 
-            for h_name, h_val in resp.headers.items():
-                if h_name.lower() == "set-cookie":
-                    clean_c = re.sub(r';\s*Domain=[^;]+', '', h_val, flags=re.I)
-                    clean_c = re.sub(r';\s*Secure', '', clean_c, flags=re.I)
-                    self.send_header("Set-Cookie", clean_c)
+            if not is_cache_hit:
+                for h_name, h_val in resp_headers.items():
+                    if h_name.lower() == "set-cookie":
+                        clean_c = re.sub(r';\s*Domain=[^;]+', '', h_val, flags=re.I)
+                        clean_c = re.sub(r';\s*Secure', '', clean_c, flags=re.I)
+                        self.send_header("Set-Cookie", clean_c)
 
             self.end_headers()
 
@@ -739,16 +754,19 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                     js_str = re.sub(pattern_pm, r'm.postMessage(\1,"*",\2)', js_str)
 
                 resp_bytes = js_str.encode("utf-8")
-                if not is_post and (is_gstatic or is_apijs or is_enterprisejs):
-                    self.recaptcha_cache[target_url] = (c_type, resp_bytes)
                 self.wfile.write(resp_bytes)
             else:
                 self.wfile.write(content)
         except Exception as e:
             AndroidCaptchaHTTPHandler.record_log(f"ERR {path.split('/')[-1]}: {str(e)[:40]}")
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode("utf-8"))
+            try:
+                self.send_response(500)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            except Exception:
+                pass
 
 
     def transform_html(self, content_bytes, final_url, source_name):
@@ -1426,7 +1444,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.138</span>
+        <span class="brand">Multi Bridge v1.0.139</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
@@ -1447,6 +1465,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
         elif clean_path == "/proxy":
@@ -1476,6 +1497,9 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(resp.status if hasattr(resp, "status") else 200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
                 self.end_headers()
 
                 if "text/html" in content_type:
@@ -1492,12 +1516,18 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(json.dumps(self.recent_logs).encode("utf-8"))
         elif clean_path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(json.dumps(self.captured_data.get("result", {})).encode("utf-8"))
         else:
@@ -1634,6 +1664,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
 
 def capture_stream_android(target_url, timeout=180, progress_dialog=None, monitor=None):
+    global _active_android_server
     user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
@@ -1679,6 +1710,21 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
     parsed_netloc = urllib.parse.urlsplit(resolved_target_url).netloc
     host_title = parsed_netloc.replace("www.", "").capitalize()
 
+    if _active_android_server:
+        try:
+            _active_android_server.shutdown()
+            _active_android_server.server_close()
+        except Exception:
+            pass
+        _active_android_server = None
+
+    AndroidCaptchaHTTPHandler.recaptcha_cache.clear()
+    AndroidCaptchaHTTPHandler.recent_logs.clear()
+    try:
+        AndroidCaptchaHTTPHandler.recaptcha_cookie_jar.clear()
+    except Exception:
+        pass
+
     captured_data = {"result": None}
     
     class LocalServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -1697,17 +1743,30 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
     AndroidCaptchaHTTPHandler.cookie_jar = cj
     AndroidCaptchaHTTPHandler.user_agent = user_agent
 
-    try:
-        httpd = LocalServer(("0.0.0.0", 0), AndroidCaptchaHTTPHandler)
-    except Exception:
-        httpd = LocalServer(("127.0.0.1", 0), AndroidCaptchaHTTPHandler)
+    httpd = None
+    for test_port in [39969, 39970, 39971]:
+        try:
+            httpd = LocalServer(("0.0.0.0", test_port), AndroidCaptchaHTTPHandler)
+            break
+        except Exception:
+            try:
+                httpd = LocalServer(("127.0.0.1", test_port), AndroidCaptchaHTTPHandler)
+                break
+            except Exception:
+                pass
+    if httpd is None:
+        try:
+            httpd = LocalServer(("0.0.0.0", 0), AndroidCaptchaHTTPHandler)
+        except Exception:
+            httpd = LocalServer(("127.0.0.1", 0), AndroidCaptchaHTTPHandler)
     
+    _active_android_server = httpd
     port = httpd.server_address[1]
     AndroidCaptchaHTTPHandler.port = port
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     server_thread.start()
 
-    local_url = f"http://127.0.0.1:{port}/captcha"
+    local_url = f"http://127.0.0.1:{port}/captcha?t={int(time.time())}"
     local_ip = get_local_ip()
     network_url = f"http://{local_ip}:{port}/captcha"
 
@@ -1740,6 +1799,9 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
                 srv.server_close()
             except Exception:
                 pass
+            global _active_android_server
+            if _active_android_server is srv:
+                _active_android_server = None
         t = threading.Thread(target=_runner, daemon=True)
         t.start()
 
@@ -1788,6 +1850,8 @@ def capture_stream_android(target_url, timeout=180, progress_dialog=None, monito
                 httpd.server_close()
             except Exception:
                 pass
+            if _active_android_server is httpd:
+                _active_android_server = None
 
     return result or captured_data.get("result") or {"status": "error", "message": "No se capturo el stream de video."}
 

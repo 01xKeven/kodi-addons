@@ -14819,6 +14819,24 @@ def _load_cached_links_for_dialog(offset=0):
         return [], None, {}, 'alfa'
 
 
+def _android_stop_playback_if_active():
+    if not bool(xbmc.getCondVisibility('System.Platform.Android')):
+        return
+    try:
+        p = xbmc.Player()
+        if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+            p.stop()
+            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+            except Exception: pass
+            for _ in range(60):
+                if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
+                    break
+                xbmc.sleep(50)
+            xbmc.sleep(250)
+    except Exception:
+        pass
+
+
 def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0, chosen_link=None):
     if chosen_link is not None:
         chosen = chosen_link
@@ -14856,18 +14874,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
     # En PC (Windows Direct3D), mantener en pausa sin destruir el pipeline para cambio instantaneo.
     is_android_dev = bool(xbmc.getCondVisibility('System.Platform.Android'))
     if is_android_dev:
-        try:
-            if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
-                p.stop()
-                try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-                except: pass
-                for _ in range(60):
-                    if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
-                        break
-                    xbmc.sleep(50)
-                xbmc.sleep(250)
-        except Exception:
-            pass
+        _android_stop_playback_if_active()
     else:
         try:
             if p.isPlayingVideo() and not xbmc.getCondVisibility("Player.Paused"):
@@ -14899,6 +14906,7 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
 
 
 def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
+    _android_stop_playback_if_active()
     if chosen_link is not None:
         chosen = chosen_link
     elif links and 0 <= chosen_idx < len(links):
@@ -15572,6 +15580,7 @@ def main():
         return
 
     if action == 'play_single_link':
+        _android_stop_playback_if_active()
         idx_str = get_param('index')
         eng = engine_param or 'alfa'
         try: idx = int(idx_str)
