@@ -9677,6 +9677,7 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
     Asegura que el ListItem y su URL contengan las cabeceras HTTP necesarias (User-Agent de navegador
     y Referer del servidor/página), evitando errores 403 Forbidden y 'Error opening file' de cualquier CDN
     (Doodstream, Streamtape, Voe, Mixdrop, Uqload, etc.).
+    Garantiza que la URL final tenga estrictamente UN SOLO pipe '|' y cabeceras sin duplicados ni pipes residuales.
     """
     if not listitem:
         return
@@ -9686,16 +9687,20 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
             return
 
         import urllib.parse
-        base_url = path
         headers = {}
         if '|' in path:
-            parts = path.split('|', 1)
-            base_url = parts[0]
-            if len(parts) > 1 and parts[1]:
-                for kv in parts[1].split('&'):
+            pipe_segments = path.split('|')
+            base_url = pipe_segments[0]
+            for seg in pipe_segments[1:]:
+                for kv in seg.split('&'):
                     if '=' in kv:
                         k, v = kv.split('=', 1)
-                        headers[urllib.parse.unquote_plus(k)] = urllib.parse.unquote_plus(v)
+                        clean_k = urllib.parse.unquote_plus(k.strip()).split('|')[0].strip()
+                        clean_v = urllib.parse.unquote_plus(v.strip()).split('|')[0].strip()
+                        if clean_k and clean_v:
+                            headers[clean_k] = clean_v
+        else:
+            base_url = path
 
         # User-Agent de navegador estándar universal
         if 'User-Agent' not in headers:
@@ -9706,7 +9711,7 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
             srv_lower = (server_name or '').lower()
             ref = ''
             if page_url and page_url.startswith(('http://', 'https://')):
-                ref = page_url
+                ref = page_url.split('|')[0].strip()
             elif 'dood' in srv_lower or 'cloudatacdn' in base_url or 'ds2play' in srv_lower:
                 ref = 'https://doodstream.com/'
             elif 'streamtape' in srv_lower or 'tapecontent' in base_url:
@@ -9733,7 +9738,7 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
             if ref:
                 headers['Referer'] = ref
 
-        # Reconstruir pipe con cabeceras completas
+        # Reconstruir pipe con cabeceras completas limpias
         pipe_parts = [f"{urllib.parse.quote_plus(k)}={urllib.parse.quote_plus(v)}" for k, v in headers.items()]
         safe_path = base_url + '|' + '&'.join(pipe_parts)
         listitem.setPath(safe_path)
@@ -9873,7 +9878,10 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
 
     auto_verify = (_bridge_addon.getSetting('auto_verify_links') == 'true')
     verified_links = []
-    if auto_verify:
+    if xbmc.Player().isPlayingVideo():
+        xbmc.log("Multi Bridge Fast Autoplay: vídeo en reproducción activa, omitiendo verificación pesada en segundo plano para proteger el ancho de banda del stream.", xbmc.LOGINFO)
+        verified_links = sorted_links
+    elif auto_verify:
         xbmc.log("Multi Bridge Fast Autoplay: verificando %d enlaces en segundo plano suavemente..." % len(sorted_links), xbmc.LOGINFO)
         with silenced_dialogs():
             try:
