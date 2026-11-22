@@ -11279,7 +11279,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
                 else:
                     try:
-                        if is_switch and xbmc.Player().isPlaying():
+                        if is_switch and (xbmc.Player().isPlaying() or xbmc.getCondVisibility("Player.HasMedia")):
                             try:
                                 if xbmc.getCondVisibility("Player.Paused"):
                                     try: xbmc.Player().pause()
@@ -11289,11 +11289,11 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                             xbmc.Player().stop()
                             try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
                             except: pass
-                            for _ in range(40):
-                                if not xbmc.Player().isPlaying():
+                            for _ in range(60):
+                                if not xbmc.Player().isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
                                     break
                                 xbmc.sleep(50)
-                            xbmc.sleep(150)
+                            xbmc.sleep(300)
                     except Exception:
                         pass
                     sync_tmdbhelper_playerstring(meta)
@@ -11351,7 +11351,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         if not mods: return False
         platformtools = mods['platformtools']
         try:
-            if is_switch and xbmc.Player().isPlaying():
+            if is_switch and (xbmc.Player().isPlaying() or xbmc.getCondVisibility("Player.HasMedia")):
                 try:
                     try:
                         if xbmc.getCondVisibility("Player.Paused"):
@@ -11362,11 +11362,11 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     xbmc.Player().stop()
                     try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
                     except: pass
-                    for _ in range(40):
-                        if not xbmc.Player().isPlaying():
+                    for _ in range(60):
+                        if not xbmc.Player().isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
                             break
                         xbmc.sleep(50)
-                    xbmc.sleep(150)
+                    xbmc.sleep(300)
                 except Exception:
                     pass
             sys.argv[1] = '-1' if is_switch else str(handle)
@@ -14887,12 +14887,30 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         except Exception:
             pass
 
-    # Mantener el reproductor pausado en el frame actual sin destruir el pipeline hasta que el nuevo stream este listo
-    try:
-        if p.isPlayingVideo() and not xbmc.getCondVisibility("Player.Paused"):
-            p.pause()
-    except Exception:
-        pass
+    # En Android, detener el reproductor previo limpiamente antes de resolver el nuevo enlace
+    # para liberar el decodificador de hardware (MediaCodec), el audio y la superficie antes de que
+    # se abra el navegador para captcha o se configure el nuevo stream.
+    # En PC (Windows Direct3D), mantener en pausa sin destruir el pipeline para cambio instantaneo.
+    is_android_dev = bool(xbmc.getCondVisibility('System.Platform.Android'))
+    if is_android_dev:
+        try:
+            if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+                p.stop()
+                try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+                except: pass
+                for _ in range(60):
+                    if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
+                        break
+                    xbmc.sleep(50)
+                xbmc.sleep(250)
+        except Exception:
+            pass
+    else:
+        try:
+            if p.isPlayingVideo() and not xbmc.getCondVisibility("Player.Paused"):
+                p.pause()
+        except Exception:
+            pass
 
     # Preservar metadatos completos para TMDb Helper, Trakt y Kodi OSD
     _enrich_link_metadata(chosen, meta, matched_item)

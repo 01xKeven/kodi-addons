@@ -346,7 +346,7 @@ _last_bring_to_front = 0.0
 def bring_kodi_to_front():
     global _last_bring_to_front
     now = time.time()
-    if now - _last_bring_to_front < 10.0:
+    if now - _last_bring_to_front < 3.0:
         return
     _last_bring_to_front = now
     try:
@@ -1397,7 +1397,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div id="top-bar">
-        <span class="brand">Multi Bridge v1.0.135</span>
+        <span class="brand">Multi Bridge v1.0.136</span>
         <span id="debug-badge" class="debug-badge">Iniciando...</span>
         <span id="status-msg" class="status-msg">Resuelve el captcha o pulsa reproducir para desbloquear el video</span>
         <a id="btn-kodi" class="btn-kodi" href="kodi://launch" onclick="returnToKodi()">Volver a Kodi</a>
