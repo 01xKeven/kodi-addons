@@ -21,9 +21,93 @@ builtins.unicode = str
 # Timeout global de sockets: ninguna operacion de red puede colgarse mas de 10s
 # en la capa del SO (antes 30s). httptools impone sus propios timeouts (15s
 # por defecto); este es el techo de seguridad para sockets crudos (TMDB, etc.).
-# Causa raiz del freeze de series: pelispanda.episodios() tardaba 100-150s en
-# un regex catastrofico reteniendo el GIL; ya corregido en el canal via JSON.
 socket.setdefaulttimeout(10)
+
+import weakref
+
+_BG_TASK_ABORT_EVENT = threading.Event()
+_SHUTDOWN_REQUESTED = False
+
+_OPEN_SOCKETS = weakref.WeakSet()
+_OPEN_SOCKETS_LOCK = threading.Lock()
+_ORIG_SOCKET_CLS = socket.socket
+
+class _TrackedSocket(_ORIG_SOCKET_CLS):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if _SHUTDOWN_REQUESTED:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise OSError("Kodi shutdown in progress")
+        try:
+            with _OPEN_SOCKETS_LOCK:
+                _OPEN_SOCKETS.add(self)
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            with _OPEN_SOCKETS_LOCK:
+                _OPEN_SOCKETS.discard(self)
+        except Exception:
+            pass
+        try:
+            super().close()
+        except Exception:
+            pass
+
+socket.socket = _TrackedSocket
+
+def abort_all_network_sockets():
+    """Cierra forzosamente todos los sockets TCP abiertos en cualquier hilo.
+    Despierta inmediatamente (<3ms) hilos bloqueados en recv()/connect() de requests/urllib."""
+    try:
+        with _OPEN_SOCKETS_LOCK:
+            socks = list(_OPEN_SOCKETS)
+            _OPEN_SOCKETS.clear()
+        for s in socks:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                s.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_SHUTDOWN_WATCHDOG_STARTED = False
+_SHUTDOWN_WATCHDOG_LOCK = threading.Lock()
+
+def _ensure_shutdown_watchdog():
+    global _SHUTDOWN_WATCHDOG_STARTED
+    with _SHUTDOWN_WATCHDOG_LOCK:
+        if _SHUTDOWN_WATCHDOG_STARTED:
+            return
+        _SHUTDOWN_WATCHDOG_STARTED = True
+
+    def _watch():
+        global _SHUTDOWN_REQUESTED
+        try:
+            mon = xbmc.Monitor()
+            while not mon.abortRequested():
+                if mon.waitForAbort(0.2):
+                    break
+            _SHUTDOWN_REQUESTED = True
+            _BG_TASK_ABORT_EVENT.set()
+            try:
+                socket.setdefaulttimeout(0.05)
+            except Exception:
+                pass
+            abort_all_network_sockets()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_watch, name="MultiBridgeShutdownWatchdog", daemon=True)
+    t.start()
 
 import urllib
 import urllib.parse as uparse
@@ -75,6 +159,7 @@ if not hasattr(xbmc, 'translatePath'):
 
 _bridge_addon = xbmcaddon.Addon('plugin.video.bridge.multi')
 ADDON_PATH = xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
+_ensure_shutdown_watchdog()
 
 def _get_addon_white_texture():
     """Retorna una textura blanca sólida garantizada para fondos y bordes."""
@@ -821,7 +906,8 @@ _floating_dialog_lock = threading.Lock()
 _playback_monitor_token = 0
 _playback_monitor_lock = threading.Lock()
 _current_playing_link_index = -1
-_BG_TASK_ABORT_EVENT = threading.Event()
+if '_BG_TASK_ABORT_EVENT' not in globals():
+    _BG_TASK_ABORT_EVENT = threading.Event()
 
 def _get_global_monitor_token():
     try:
@@ -3742,7 +3828,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
     """Verifica si la URL directa responde y entrega multimedia (evitando servidores caídos como 522/404),
     y detecta la resolución REAL de vídeo (1080p, 720p, 480p, 360p, 240p) leyendo los metadatos HLS o contenedores MP4/MKV.
     Retorna (is_playable: bool, detected_res: str|None)."""
-    if not stream_url:
+    if not stream_url or xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
         return False, None
     if stream_url.startswith(('magnet:', 'plugin:', 'file:')) or stream_url.endswith('.torrent'):
         return True, None
@@ -3753,9 +3839,10 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
     cu = clean_url.lower()
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
+    req_to = (min(2.5, float(timeout or 2.5)), min(2.5, float(timeout or 2.5)))
     if 'okcdn.ru' in cu or str(server_name or '').lower() in ('okru', 'ok.ru'):
         headers['Referer'] = 'https://ok.ru/'
-        timeout = max(float(timeout or 3.0), 6.0)
+        req_to = (min(3.5, float(timeout or 3.5)), min(3.5, float(timeout or 3.5)))
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
         for h in pipe_parts.split('&'):
@@ -3767,8 +3854,10 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
         import requests
         is_hls = ('.m3u8' in cu) or ('/hls/' in cu) or ('/hls2/' in cu) or ('/hls3/' in cu)
         if is_hls:
+            if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+                return False, None
             try:
-                r = requests.get(clean_url, headers=headers, timeout=timeout, verify=False)
+                r = requests.get(clean_url, headers=headers, timeout=req_to, verify=False)
             except Exception as e_m3u8:
                 xbmc.log("Multi Bridge: URL HLS inalcanzable (%s): %s" % (clean_url, e_m3u8), xbmc.LOGINFO)
                 return False, None
@@ -3800,9 +3889,11 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
             if sub_url:
                 # Si sub_url es otro playlist m3u8 (variante), obtener el primer segmento real
+                if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+                    return False, None
                 if '.m3u8' in sub_url.lower() or not any(ext in sub_url.lower() for ext in ('.ts', '.m4s', '.mp4')):
                     try:
-                        r_var = requests.get(sub_url, headers=headers, timeout=timeout, verify=False)
+                        r_var = requests.get(sub_url, headers=headers, timeout=req_to, verify=False)
                         if r_var.status_code >= 400:
                             xbmc.log("Multi Bridge: sub-playlist HLS falló con HTTP %d: %s" % (r_var.status_code, sub_url), xbmc.LOGINFO)
                             return False, None
@@ -3821,10 +3912,12 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                         return False, None
 
                 # Probar el segmento con HEAD o GET Range
+                if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+                    return False, None
                 try:
                     h2 = dict(headers)
                     h2['Range'] = 'bytes=0-65535'
-                    r_seg = requests.get(sub_url, headers=h2, timeout=max(4.5, timeout), verify=False, stream=True)
+                    r_seg = requests.get(sub_url, headers=h2, timeout=req_to, verify=False, stream=True)
                     if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
                         xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d: %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
                         return False, None
@@ -3859,10 +3952,12 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
             return True, detected_res
 
         # Caso 2: Streams HTTP directos (mp4, mkv, etc.)
+        if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
+            return False, None
         detected_res = None
         h_range = dict(headers)
         h_range['Range'] = 'bytes=0-65535'
-        r = requests.get(clean_url, headers=h_range, stream=True, timeout=timeout, allow_redirects=True, verify=False)
+        r = requests.get(clean_url, headers=h_range, stream=True, timeout=req_to, allow_redirects=True, verify=False)
 
         if r.status_code in (401, 403, 404, 410) or r.status_code >= 500:
             xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
@@ -8547,7 +8642,8 @@ def _start_view_mode_monitor():
         for _ in range(15):
             if mon.abortRequested():
                 return
-            xbmc.sleep(200)
+            if mon.waitForAbort(0.2):
+                return
             if xbmc.getCondVisibility("Window.IsVisible(10025)"):
                 break
 
@@ -8557,7 +8653,8 @@ def _start_view_mode_monitor():
         for _ in range(360):
             if mon.abortRequested():
                 return
-            xbmc.sleep(500)
+            if mon.waitForAbort(0.5):
+                return
             try:
                 if not xbmc.getCondVisibility("Window.IsVisible(10025)"):
                     break
@@ -9456,7 +9553,9 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 user_declined = True
                 break
 
-            xbmc.sleep(1000)   # verificar cada segundo (tiempo real)
+            if xbmc.Monitor().waitForAbort(1.0):
+                user_declined = True
+                break
 
             if not player.isPlaying():
                 elapsed = time.time() - mon_start

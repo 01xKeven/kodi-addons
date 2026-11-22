@@ -359,6 +359,18 @@ def run_service():
             except Exception:
                 pass
 
+    # Cierre limpio e inmediato al apagar Kodi
+    try:
+        if hasattr(default, 'abort_all_network_sockets'):
+            default.abort_all_network_sockets()
+    except Exception:
+        pass
+    try:
+        del player_service
+        del monitor
+    except Exception:
+        pass
+
 
 if __name__ == '__main__':
     run_service()
