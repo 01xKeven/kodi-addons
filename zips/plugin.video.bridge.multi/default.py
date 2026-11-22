@@ -337,6 +337,7 @@ if not os.path.exists(TMDB_PLAYERS_PATH):
 SEARCH_CACHE_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_search_cache.json')
 BOOKMARKS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_bookmarks.json')
 CONTINUE_WATCHING_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_continue_watching.json')
+COMPLETED_ITEMS_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_multi_completed.json')
 CLOUD_SYNC_FILE = os.path.join(BRIDGE_DATA_PATH, 'cloud_sync_info.json')
 CHANNELS_JSON_FILE = os.path.join(BRIDGE_DATA_PATH, 'channels.json')
 SEARCH_LOCK_FILE = os.path.join(BRIDGE_DATA_PATH, 'bridge_search.lock')
@@ -782,6 +783,8 @@ def _is_same_media_item(cached_meta, cur_meta):
 
 
 def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=None):
+    if is_item_completed(media_key):
+        return None
     # 1. Local bookmark database
     if media_key and os.path.exists(BOOKMARKS_FILE):
         try:
@@ -790,7 +793,7 @@ def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=
             if bm and isinstance(bm, dict):
                 r_time = float(bm.get('resume_time', 0))
                 t_time = float(bm.get('total_time', 0))
-                if r_time > 20 and (t_time == 0 or (r_time / t_time < 0.93)):
+                if r_time > 20 and (t_time == 0 or (r_time / t_time < 0.80)):
                     return bm
         except Exception: pass
 
@@ -822,7 +825,7 @@ def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=
                             if pct <= 1.0 and pct > 0: pct = pct * 100.0
                             tot_sec = float(runtime_mins) * 60.0
                             res_sec = (pct / 100.0) * tot_sec
-                            if res_sec > 20 and (res_sec / tot_sec < 0.93):
+                            if res_sec > 20 and (res_sec / tot_sec < 0.80):
                                 return {'resume_time': res_sec, 'total_time': tot_sec, 'title': title, 'source': 'trakt'}
                 except Exception: pass
         except Exception: pass
@@ -838,7 +841,8 @@ def save_bookmark(media_key, resume_time, total_time, title=""):
                 with open(BOOKMARKS_FILE, 'r', encoding='utf-8') as f: data = json.load(f)
             except: data = {}
         
-        if total_time > 0 and (resume_time / float(total_time) >= 0.92):
+        # Al llegar al 80% o estar completado, eliminar bookmark para no guardar en reanudar
+        if (total_time > 0 and (resume_time / float(total_time) >= 0.80)) or is_item_completed(media_key):
             if media_key in data: del data[media_key]
         elif resume_time > 30:
             data[media_key] = {
@@ -918,6 +922,87 @@ def clear_all_continue_watching():
         os.replace(_tmp, CONTINUE_WATCHING_FILE)
     except Exception as e:
         xbmc.log(f"Multi Bridge: clear_all_continue_watching error: {e}", xbmc.LOGWARNING)
+
+def load_completed_data():
+    if os.path.exists(COMPLETED_ITEMS_FILE):
+        try:
+            with open(COMPLETED_ITEMS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def mark_item_as_completed(media_key, meta=None, title="", total_time=0):
+    if not media_key: return
+    try:
+        data = load_completed_data()
+        m_dict = meta if isinstance(meta, dict) else {}
+        data[media_key] = {
+            'title': _strip_emojis_and_symbols(title or m_dict.get('title') or ''),
+            'showname': _strip_emojis_and_symbols(m_dict.get('showname') or ''),
+            'tmdb': m_dict.get('tmdb') or m_dict.get('tmdb_id') or '',
+            'imdb': m_dict.get('imdb') or m_dict.get('imdb_id') or '',
+            'season': m_dict.get('season'),
+            'episode': m_dict.get('episode'),
+            'completed_at': time.time(),
+            'total_time': float(total_time or 0)
+        }
+        _tmp = COMPLETED_ITEMS_FILE + '.tmp'
+        with open(_tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(_tmp, COMPLETED_ITEMS_FILE)
+
+        # 1. Eliminar inmediatamente del historial de Continuar viendo
+        remove_continue_watching_record(media_key)
+
+        # 2. Marcar como completado/visto en el VideoInfoTag del Player de Kodi y via JSON-RPC
+        try:
+            p = xbmc.Player()
+            if p.isPlayingVideo():
+                vt = p.getVideoInfoTag()
+                if vt:
+                    try: vt.setPlaycount(1)
+                    except: pass
+                playing_file = p.getPlayingFile()
+                if playing_file:
+                    params = {
+                        "file": playing_file,
+                        "media": "video",
+                        "playcount": 1,
+                        "resume": {"position": 0, "total": float(total_time or 0)}
+                    }
+                    xbmc.executeJSONRPC(json.dumps({
+                        "jsonrpc": "2.0",
+                        "method": "Files.SetFileDetails",
+                        "params": params,
+                        "id": "mb_watched"
+                    }))
+        except Exception:
+            pass
+        xbmc.log(f"Multi Bridge: contenido {media_key} alcanzado al 80% -> marcado como COMPLETO y eliminado de Continuar viendo.", xbmc.LOGINFO)
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: mark_item_as_completed error: {e}", xbmc.LOGWARNING)
+
+def is_item_completed(media_key):
+    if not media_key: return False
+    try:
+        data = load_completed_data()
+        return bool(media_key in data)
+    except Exception:
+        return False
+
+def remove_completed_record(media_key):
+    if not media_key: return
+    try:
+        data = load_completed_data()
+        if media_key in data:
+            del data[media_key]
+            _tmp = COMPLETED_ITEMS_FILE + '.tmp'
+            with open(_tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(_tmp, COMPLETED_ITEMS_FILE)
+    except Exception as e:
+        xbmc.log(f"Multi Bridge: remove_completed_record error: {e}", xbmc.LOGWARNING)
 
 _floating_dialog_active = False
 _floating_dialog_lock = threading.Lock()
@@ -1376,11 +1461,18 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 cur_time = p.getTime()
                 tot = p.getTotalTime()
                 if tot > 0: tot_time = tot
-                if abs(cur_time - last_saved_time) >= 5:
+
+                # Al llegar al 80% o más: Marcar como COMPLETO y NO guardar en Continuar viendo
+                is_completed = bool(tot_time > 0 and (cur_time / float(tot_time) >= 0.80))
+                if is_completed:
+                    mark_item_as_completed(media_key, meta=_m_dict, title=title_str, total_time=tot_time)
+                    save_bookmark(media_key, cur_time, tot_time, title=title_str)
+                    last_saved_time = cur_time
+                elif abs(cur_time - last_saved_time) >= 5:
                     save_bookmark(media_key, cur_time, tot_time, title=title_str)
                     last_saved_time = cur_time
 
-                    # Actualizar latido continuo en Continuar viendo
+                    # Actualizar latido continuo en Continuar viendo SOLO si no ha alcanzado el 80%
                     session_record['resume_time'] = float(cur_time)
                     session_record['total_time'] = float(tot_time)
                     session_record['last_heartbeat'] = time.time()
@@ -1561,16 +1653,21 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Distinción exacta: Parada normal voluntaria vs Interrupción anormal (corte de luz / crash)
         normal_exit = not mon.abortRequested()
-        video_finished = bool(tot_time > 0 and (last_saved_time / float(tot_time) >= 0.90))
+        video_finished = bool(tot_time > 0 and (last_saved_time / float(tot_time) >= 0.80))
 
-        if normal_exit or video_finished:
+        if video_finished:
+            xbmc.log("Multi Bridge: vídeo alcanzado al 80% o más. Marcando como COMPLETO y purgando Continuar viendo.", xbmc.LOGINFO)
+            mark_item_as_completed(media_key, meta=_m_dict, title=title_str, total_time=tot_time)
+            remove_continue_watching_record(media_key)
+            _clear_session_failed_links(media_key)
+        elif normal_exit:
             # El usuario pulsó Stop, volvió atrás o vio el final: parada limpia
-            xbmc.log("Multi Bridge: parada normal voluntaria o finalizado. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
+            xbmc.log("Multi Bridge: parada normal voluntaria. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
             remove_continue_watching_record(media_key)
             _clear_session_failed_links(media_key)
         else:
-            # Cierre forzado o interrupción inesperada de Kodi
-            xbmc.log("Multi Bridge: parada abrupta/interrupción inesperada detectada. Preservando en Continuar viendo.", xbmc.LOGINFO)
+            # Cierre forzado o interrupción inesperada de Kodi (< 80%)
+            xbmc.log("Multi Bridge: parada abrupta/interrupción inesperada detectada (<80%). Preservando en Continuar viendo.", xbmc.LOGINFO)
 
     _th = threading.Thread(target=_monitor_loop, daemon=True)
     _th.name = "BridgeMultiPlaybackMonitor"
@@ -11996,6 +12093,13 @@ def show_continue_watching():
     valid_items = []
     for mk, rec in (cw_data or {}).items():
         if isinstance(rec, dict) and rec.get('interrupted'):
+            resume_t = float(rec.get('resume_time') or 0)
+            total_t = float(rec.get('total_time') or 0)
+            # Descartar si alcanzó el 80% o está marcado como completado
+            if total_t > 0 and (resume_t / total_t >= 0.80):
+                continue
+            if is_item_completed(mk):
+                continue
             valid_items.append((mk, rec))
 
     # Ordenar cronológicamente descendente por el último latido (los más recientes primero)
@@ -12196,8 +12300,8 @@ def show_player_manager_home():
         )
 
     cw_data = load_continue_watching_data()
-    cw_count = len(cw_data) if isinstance(cw_data, dict) else 0
-    cw_badge = (' (%d)' % cw_count) if cw_count > 0 else ''
+    cw_valid_count = sum(1 for mk, rec in (cw_data or {}).items() if isinstance(rec, dict) and rec.get('interrupted') and not (float(rec.get('total_time') or 0) > 0 and (float(rec.get('resume_time') or 0) / float(rec.get('total_time') or 1) >= 0.80)) and not is_item_completed(mk))
+    cw_badge = (' (%d)' % cw_valid_count) if cw_valid_count > 0 else ''
     cw_plot = (
         'Películas y episodios cuya reproducción fue interrumpida abruptamente (corte de luz, congelamiento o cierre de Kodi).\n\n'
         '[COLOR gold]Al seleccionarlo, TMDb Helper buscará de nuevo en los canales y continuará desde el punto exacto guardado.[/COLOR]'
