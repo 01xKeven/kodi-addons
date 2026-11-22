@@ -443,7 +443,9 @@ def extract_stream_from_html(html):
         if is_stream_url(m.group(1)):
             candidates.append(normalize_stream_url(m.group(1)))
 
-    if not candidates:
+    # Filter candidates: skip pkcdn.org and /dash/ because their hashes are scrambled until decoded by browser JS
+    clean_candidates = [c for c in candidates if "pkcdn.org" not in c.lower() and "/dash/" not in c.lower()]
+    if not clean_candidates:
         return None
 
     # Sort candidates by playback priority: .mp4 (direct) > .m3u8 (HLS) > .mpd (DASH)
@@ -457,8 +459,8 @@ def extract_stream_from_html(html):
             return 3
         return 4
 
-    candidates.sort(key=stream_priority)
-    return candidates[0]
+    clean_candidates.sort(key=stream_priority)
+    return clean_candidates[0]
 
 class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
     target_info = {}
@@ -743,7 +745,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-        if stream_url:
+        if stream_url and not detect_packed(html_str):
             stream_url = normalize_stream_url(stream_url)
             cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
             self.captured_data["result"] = {
@@ -908,7 +910,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
             } catch(e) {}
 
             try {
-                var tokenSent = false;
+                var tokenSubmitted = false;
                 var syncTokens = function() {
                     try {
                         var ta = document.querySelector('textarea[name="g-recaptcha-response"]');
@@ -918,15 +920,27 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         if (val && val.length > 20) {
                             if (inpResp && inpResp.value !== val) inpResp.value = val;
                             if (inpToken && inpToken.value !== val) inpToken.value = val;
-                            var btn = document.getElementById('btn_download');
+                            var btn = document.getElementById('btn_download') || document.querySelector('input[type="submit"]') || document.querySelector('button[type="submit"]');
                             if (btn && btn.disabled) btn.disabled = false;
-                            if (!tokenSent) {
-                                tokenSent = true;
-                                fetch(localBase + '/token', {
-                                    method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({token: val, url: '__FINAL_URL__'})
-                                }).catch(function() {});
+                            if (!tokenSubmitted) {
+                                tokenSubmitted = true;
+                                var f = document.getElementById('d0Form') || document.querySelector('form[method="POST"]') || document.querySelector('form');
+                                if (f) {
+                                    setTimeout(function() {
+                                        try {
+                                            if (btn) btn.click();
+                                            else f.submit();
+                                        } catch(e) {
+                                            try { f.submit(); } catch(e2) {}
+                                        }
+                                    }, 250);
+                                } else {
+                                    fetch(localBase + '/token', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({token: val, url: '__FINAL_URL__'})
+                                    }).catch(function() {});
+                                }
                             }
                         }
                     } catch(err) {}
@@ -944,6 +958,32 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         }
                     } catch(e) {}
                 }, 800);
+            } catch(e) {}
+
+            try {
+                var origFormSubmit = HTMLFormElement.prototype.submit;
+                HTMLFormElement.prototype.submit = function() {
+                    try {
+                        var rawAct = this.getAttribute('action');
+                        var act = '';
+                        if (!rawAct || rawAct === '#' || rawAct === '') {
+                            act = '__FINAL_URL__';
+                        } else if (rawAct.startsWith('http://') || rawAct.startsWith('https://')) {
+                            if (rawAct.indexOf(localBase) !== -1) {
+                                var m = rawAct.match(/[?&]url=([^&]+)/);
+                                act = m ? decodeURIComponent(m[1]) : '__FINAL_URL__';
+                            } else {
+                                act = rawAct;
+                            }
+                        } else if (rawAct.startsWith('/')) {
+                            act = '__FINAL_ORIGIN__' + rawAct;
+                        } else {
+                            act = '__FINAL_ORIGIN__/' + rawAct;
+                        }
+                        this.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
+                    } catch(e) {}
+                    return origFormSubmit.apply(this, arguments);
+                };
             } catch(e) {}
 
             try {
@@ -968,6 +1008,26 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                         e.target.action = localBase + '/proxy_submit?url=' + encodeURIComponent(act);
                     }
                 }, true);
+            } catch(e) {}
+
+            try {
+                setInterval(function() {
+                    try {
+                        var vids = document.querySelectorAll('video');
+                        for (var i = 0; i < vids.length; i++) {
+                            if (vids[i].paused) {
+                                vids[i].play().catch(function() {});
+                            }
+                        }
+                        var playBtns = document.querySelectorAll('.player-play-button, .vjs-big-play-button, [data-player] button, .play-wrapper, [class*="play"], [id*="play"]');
+                        for (var j = 0; j < playBtns.length; j++) {
+                            var b = playBtns[j];
+                            if (b.offsetParent !== null && b.id !== 'btn_download' && b.type !== 'submit') {
+                                b.click();
+                            }
+                        }
+                    } catch(e) {}
+                }, 800);
             } catch(e) {}
 
             try {
@@ -1414,6 +1474,10 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 inner_qs = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
                 target = inner_qs.get("url", [""])[0] or self.target_info.get("target_url", target)
 
+            # Ensure imhuman submit field for Powvideo
+            if ("powvideo" in target.lower() or "powwideo" in target.lower()) and b"imhuman=" not in post_data:
+                post_data = (post_data + b"&imhuman=Continue+to+Video") if post_data else b"imhuman=Continue+to+Video"
+
             req_ua = self.headers.get("User-Agent") or self.user_agent
             req = urllib.request.Request(target, data=post_data, headers={
                 "User-Agent": req_ua,
@@ -1461,7 +1525,7 @@ class AndroidCaptchaHTTPHandler(http.server.BaseHTTPRequestHandler):
                 resp = self.opener.open(req, timeout=18)
                 resp_content = resp.read().decode("utf-8", errors="ignore")
                 stream_url = extract_stream_from_html(resp_content)
-                if stream_url:
+                if stream_url and not detect_packed(resp_content):
                     stream_url = normalize_stream_url(stream_url)
                     AndroidCaptchaHTTPHandler.record_log(f"STREAM DETECTADO: {stream_url[:35]}...")
                     cookie_str = "; ".join([f"{c.name}={c.value}" for c in self.cookie_jar]) if self.cookie_jar else ""
