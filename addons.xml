@@ -354,7 +354,7 @@
   </extension>
 </addon>
 <addon id="plugin.video.themoviedb.helper"
-version="6.18.7"
+version="6.18.8"
 name="TMDb Helper"
 provider-name="jurialmunkey">
 <requires>

@@ -150,8 +150,6 @@ class TraktStoredAccessToken:
             if self.has_valid_token:
                 winprop_traktisauth = self.expires_in_timestamp
                 self.update_traktisauth_property()
-                from tmdbhelper.lib.addon.thread import SafeThread
-                SafeThread(target=self.authorization_check).start()
             else:
                 winprop_traktisauth = self.authorization_check()
         return winprop_traktisauth or 0

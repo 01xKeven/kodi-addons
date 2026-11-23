@@ -158,6 +158,10 @@ class DatabaseCore:
         cursor = connection.cursor()
         this_database_version = cursor.execute("PRAGMA user_version").fetchone()[0]
 
+        # Fast path: if DB is already initialized and up-to-date, avoid repeating schema checks
+        if this_database_version and this_database_version >= self.database_version:
+            return connection
+
         # OLD DATABASE SCHEME: APPLY MODIFICATIONS
         if this_database_version and this_database_version < self.database_version:
             for version, changes in self.database_changes.items():
