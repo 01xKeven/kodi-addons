@@ -1201,6 +1201,9 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             if mon.abortRequested() or _get_global_monitor_token() != my_token:
                 xbmc.log("Multi Bridge: monitor descartado antes de iniciar (superado por nuevo enlace o cancelado)", xbmc.LOGINFO)
                 return
+            if _is_kodi_modal_dialog_open():
+                xbmc.log("Multi Bridge: monitor detectó error de reproducción de Kodi antes de iniciar", xbmc.LOGINFO)
+                return
             if p.isPlayingVideo():
                 # Comprobar que la clave de medios coincide con la sesión actual
                 cur_k = ''
@@ -4035,7 +4038,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                     h2 = dict(headers)
                     h2['Range'] = 'bytes=0-65535'
                     r_seg = requests.get(sub_url, headers=h2, timeout=req_to, verify=False, stream=True)
-                    if r_seg.status_code in (404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 500:
+                    if r_seg.status_code in (401, 403, 404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 400:
                         xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d: %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
                         return False, None
                     if not detected_res:
@@ -4047,8 +4050,11 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                             if h_s or w_s:
                                 detected_res = _classify_resolution(w_s, h_s)
                 except Exception as e_seg:
-                    # El manifiesto m3u8 es válido y respondió 200 OK. Si el segmento dio timeout o lentitud en la CDN,
-                    # NO descartamos el stream; Kodi reproducirá el flujo con su propio búfer.
+                    _err_s = str(e_seg).lower()
+                    if any(_b in _err_s for _b in ('401', '403', 'forbidden', 'unauthorized', 'ssl', 'certificate', 'connection reset', 'connection refused')):
+                        xbmc.log("Multi Bridge: segmento HLS bloqueado/caído (%s: %s) -> descartando enlace" % (sub_url, e_seg), xbmc.LOGINFO)
+                        return False, None
+                    # Si dio lentitud genérica pero el manifiesto respondió 200 OK, permitir que Kodi pruebe con su búfer
                     xbmc.log("Multi Bridge: segmento HLS lento o advertencia (%s: %s), pero playlist m3u8 es válida -> conservando enlace" % (sub_url, e_seg), xbmc.LOGINFO)
 
             # Si no se detecto resolucion por etiqueta RESOLUTION, buscar patrones en la URL
@@ -10320,9 +10326,26 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     if mon.abortRequested():
                         user_aborted = True
                         break
-                    if player.isPlayingVideo():
-                        video_started = True
+
+                    # Detección inmediata de fallo: Diálogo modal de error de Kodi ("Uno o más elementos fallaron")
+                    if _is_kodi_modal_dialog_open():
+                        try:
+                            xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                            xbmc.executebuiltin('Dialog.Close(10100,true)')
+                        except Exception: pass
+                        xbmc.log("Multi Bridge Fast Autoplay (Caché): diálogo modal de error en Kodi -> descartando enlace de inmediato", xbmc.LOGINFO)
                         break
+
+                    if player.isPlayingVideo():
+                        # Comprobar estabilidad real (evita falsos positivos si el demuxer corta tras 0.5s)
+                        xbmc.sleep(700)
+                        if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
+                            video_started = True
+                            break
+                        else:
+                            xbmc.log("Multi Bridge Fast Autoplay (Caché): el vídeo cayó inmediatamente tras iniciar (EOF / error demuxer)", xbmc.LOGINFO)
+                            break
+
                     is_loading = False
                     try:
                         is_loading = (xbmc.getCondVisibility("Player.Buffering") or 
@@ -10330,10 +10353,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                                       xbmc.getCondVisibility("Player.HasAudio"))
                     except Exception: pass
                     if is_loading and time.time() - t_start > (watchdog_timeout - 2):
-                        watchdog_timeout = min(watchdog_timeout + 1.0, 22.0)
+                        watchdog_timeout = min(watchdog_timeout + 1.0, 18.0)
                     xbmc.sleep(250)
 
-                if user_aborted or video_started or player.isPlayingVideo():
+                if user_aborted:
+                    return True
+
+                if video_started and player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
                     xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada!", xbmc.LOGINFO)
                     try:
                         xbmc.executebuiltin('Dialog.Close(busydialog,true)')
@@ -10342,11 +10368,12 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     return True
 
                 xbmc.log("Multi Bridge Fast Autoplay: enlace en caché no arrancó en Kodi, continuando con búsqueda en canales...", xbmc.LOGINFO)
+                abort_all_network_sockets()
                 try: player.stop()
                 except: pass
                 try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
                 except: pass
-                xbmc.sleep(400)
+                xbmc.sleep(300)
 
     ch_data = load_channels_data()
     engine_channels = ch_data.get('channels', {}).get(engine, {})
@@ -10753,8 +10780,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     while current_attempt <= max_watchdog_attempts:
         mon = xbmc.Monitor()
-        watchdog_timeout = float(_get_int_setting('autoplay_resolve_timeout', 25))
-        if watchdog_timeout < 20: watchdog_timeout = 20.0
+        watchdog_timeout = float(_get_int_setting('autoplay_resolve_timeout', 15))
+        if watchdog_timeout < 10: watchdog_timeout = 10.0
+        if watchdog_timeout > 18: watchdog_timeout = 18.0
 
         t_start = time.time()
         video_started = False
@@ -10767,10 +10795,25 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 user_aborted = True
                 break
 
-            # A) ¿El vídeo ya arrancó y está reproduciendo activamente?
-            if player.isPlayingVideo():
-                video_started = True
+            # Detección inmediata de fallo: Diálogo modal de error de Kodi ("Uno o más elementos fallaron")
+            if _is_kodi_modal_dialog_open():
+                try:
+                    xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                    xbmc.executebuiltin('Dialog.Close(10100,true)')
+                except Exception: pass
+                xbmc.log("Multi Bridge Fast Autoplay Watchdog: diálogo modal de error en Kodi detectado -> descartando enlace de inmediato", xbmc.LOGINFO)
                 break
+
+            # A) ¿El vídeo ya arrancó y se mantiene estable?
+            if player.isPlayingVideo():
+                # Comprobar estabilidad real (evita falsos positivos si el demuxer corta tras 0.5s)
+                xbmc.sleep(800)
+                if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
+                    video_started = True
+                    break
+                else:
+                    xbmc.log("Multi Bridge Fast Autoplay Watchdog: el vídeo cayó inmediatamente tras iniciar (EOF / error demuxer)", xbmc.LOGINFO)
+                    break
 
             # B) ¿Kodi está buffereando activamente o ya demuxó el stream?
             # Si el servidor ya conectó y está recibiendo datos, NO abortar prematuramente
@@ -10792,15 +10835,15 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             if is_loading:
                 had_loading = True
                 idle_count = 0
-                # Si está descargando datos o el reproductor está activo, extender el margen de gracia (hasta 40s máx)
+                # Si está descargando datos o el reproductor está activo, extender el margen de gracia (hasta 26s máx)
                 if time.time() - t_start > (watchdog_timeout - 5):
-                    watchdog_timeout = min(watchdog_timeout + 2.0, 40.0)
+                    watchdog_timeout = min(watchdog_timeout + 2.0, 26.0)
             elif had_loading:
                 idle_count += 1
                 # Si ya había empezado a cargar y el reproductor de Kodi se cerró completamente
-                # (demuxer EOF, error 403, stream abortado), no esperar 20s en pantalla en negro:
-                # tras 1.5s de inactividad confirmada, descartar y pasar al siguiente enlace.
-                if idle_count >= 6 and (time.time() - t_start > 2.5):
+                # (demuxer EOF, error 403, stream abortado), no esperar en pantalla en negro:
+                # tras 1.0s de inactividad confirmada, descartar y pasar al siguiente enlace.
+                if idle_count >= 4 and (time.time() - t_start > 1.5):
                     xbmc.log("Multi Bridge Fast Autoplay Watchdog: stream se detuvo prematuramente (EOF/fallo demuxer) -> probando siguiente enlace", xbmc.LOGINFO)
                     break
 
@@ -10820,14 +10863,14 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         if not video_started and _is_playing_safe:
             # Margen final de gracia: dar tiempo a que los hilos de audio/video decodifiquen el primer fotograma
             for _ in range(16):
-                if player.isPlayingVideo():
+                if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
                     video_started = True
                     break
                 if mon.waitForAbort(0.25):
                     user_aborted = True
                     break
 
-        if video_started or player.isPlayingVideo():
+        if (video_started or player.isPlayingVideo()) and not _is_kodi_modal_dialog_open():
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
             try:
                 xbmc.executebuiltin('Dialog.Close(busydialog,true)')
@@ -10840,12 +10883,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: enlace [%s] no inició (timeout/servidor caído). Intento %d de %d..." % (
             _get_link_server_name(active_link), current_attempt, max_watchdog_attempts), xbmc.LOGWARNING)
 
-        # 1. Limpieza rigurosa previa al siguiente intento (garantiza 0 colisiones en CVideoPlayer)
+        # 1. Limpieza rigurosa previa al siguiente intento (garantiza 0 colisiones en CVideoPlayer y mata sockets zombie)
+        abort_all_network_sockets()
         try: player.stop()
         except: pass
         try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
         except: pass
-        xbmc.sleep(400) # Pausa limpia para liberar sockets y demuxers
+        xbmc.sleep(300) # Pausa limpia para liberar sockets y demuxers
 
         current_attempt += 1
         if current_attempt > max_watchdog_attempts:

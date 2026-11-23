@@ -141,6 +141,40 @@ class BridgePlayerService(xbmc.Player):
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
         except Exception:
             pass
+        try:
+            import default
+            if hasattr(default, '_BG_TASK_ABORT_EVENT'):
+                default._BG_TASK_ABORT_EVENT.set()
+            if hasattr(default, 'abort_all_network_sockets'):
+                default.abort_all_network_sockets()
+        except Exception as _e_sock:
+            xbmc.log("Multi Bridge PlayerService: error abortando sockets en stop: " + str(_e_sock), xbmc.LOGWARNING)
+
+    def onPlayBackEnded(self):
+        try:
+            xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+        except Exception:
+            pass
+        try:
+            import default
+            if hasattr(default, 'abort_all_network_sockets'):
+                default.abort_all_network_sockets()
+        except Exception:
+            pass
+
+    def onPlayBackError(self):
+        try:
+            xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+        except Exception:
+            pass
+        try:
+            import default
+            if hasattr(default, '_BG_TASK_ABORT_EVENT'):
+                default._BG_TASK_ABORT_EVENT.set()
+            if hasattr(default, 'abort_all_network_sockets'):
+                default.abort_all_network_sockets()
+        except Exception:
+            pass
 
 
 def _inject_active_playback_metadata(player):
