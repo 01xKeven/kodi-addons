@@ -62,7 +62,7 @@ class CronJobMonitor(SafeThread):
         if self.update_monitor.abortRequested() or self.exit:
             return
         from tmdbhelper.lib.addon.plugin import get_setting
-        if not get_setting('enable_kodi_library', 'bool', default=True):
+        if not get_setting('enable_kodi_library', 'bool', default=False):
             return
         if not get_setting('recache_kodidb_on_startup', 'bool', default=False):
             return

@@ -253,7 +253,7 @@
             <group id="1" label="32074">
                 <setting id="enable_kodi_library" type="boolean" label="32550" help="32551">
                     <level>0</level>
-                    <default>true</default>
+                    <default>false</default>
                     <control type="toggle"/>
                 </setting>
                 <setting id="recache_kodidb_on_startup" type="boolean" label="32552" help="32553" parent="enable_kodi_library">

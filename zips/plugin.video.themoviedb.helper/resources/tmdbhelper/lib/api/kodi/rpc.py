@@ -15,7 +15,7 @@ def get_jsonrpc(method=None, params=None, query_id=1):
 
 def get_kodi_library(tmdb_type, tvshowid=None, cache_refresh=False):
     from tmdbhelper.lib.addon.plugin import get_setting
-    if not get_setting('enable_kodi_library', 'bool', default=True):
+    if not get_setting('enable_kodi_library', 'bool', default=False):
         return None
     if tmdb_type == 'movie':
         return KodiLibrary(dbtype='movie', cache_refresh=cache_refresh)
