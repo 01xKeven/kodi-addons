@@ -251,6 +251,21 @@
         </category>
         <category id="library" label="14022" help="">
             <group id="1" label="32074">
+                <setting id="enable_kodi_library" type="boolean" label="32550" help="32551">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
+                <setting id="recache_kodidb_on_startup" type="boolean" label="32552" help="32553" parent="enable_kodi_library">
+                    <level>0</level>
+                    <default>false</default>
+                    <dependencies>
+                        <dependency type="enable">
+                            <condition operator="is" setting="enable_kodi_library">True</condition>
+                        </dependency>
+                    </dependencies>
+                    <control type="toggle"/>
+                </setting>
                 <setting id="movies_library" type="path" label="342" help="">
                     <level>0</level>
                     <default>special://profile/addon_data/plugin.video.themoviedb.helper/movies/</default>

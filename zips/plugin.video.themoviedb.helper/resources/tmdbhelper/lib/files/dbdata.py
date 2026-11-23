@@ -181,12 +181,21 @@ class DatabaseCore:
             except Exception as error:
                 self.kodi_log(f'CACHE: Exception while initializing _database: {error}\n{self._sc_name} - {query}', 1)
 
-        # CREATE INDICIES
+        # ENSURE MISSING COLUMNS EXIST AND CREATE INDICIES
         for table, columns in self.database_tables.items():
+            try:
+                existing_columns = {col[1] for col in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
+            except Exception:
+                existing_columns = set()
             for column, v in columns.items():
+                if existing_columns and column not in existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE {table} ADD {column} {v.get('data', 'TEXT')}")
+                    except Exception:
+                        pass
                 if not v.get('indexed'):
                     continue
-                query = 'CREATE INDEX IF NOT EXISTS {table}_{column}_x ON {table}({column})'.format(table=table, column=column)
+                query = f'CREATE INDEX IF NOT EXISTS {table}_{column}_x ON {table}({column})'
                 try:
                     cursor.execute(query)
                 except Exception as error:

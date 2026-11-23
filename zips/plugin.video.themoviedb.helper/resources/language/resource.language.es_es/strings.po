@@ -2655,3 +2655,23 @@ msgstr "Reproductor predeterminado para películas"
 msgctxt "#32025"
 msgid "Default player for episodes"
 msgstr "Reproductor predeterminado para episodios"
+
+#: /resources/settings.xml
+msgctxt "#32550"
+msgid "Enable Kodi library integration"
+msgstr "Habilitar integración con la biblioteca de Kodi"
+
+#: /resources/settings.xml
+msgctxt "#32551"
+msgid "If disabled, TMDb Helper will not scan or query Kodi's local library, greatly improving speed."
+msgstr "Si se desactiva, TMDb Helper no escaneará ni consultará la biblioteca local de Kodi, mejorando notablemente la velocidad."
+
+#: /resources/settings.xml
+msgctxt "#32552"
+msgid "Pre-cache Kodi library on startup"
+msgstr "Precargar biblioteca de Kodi al iniciar"
+
+#: /resources/settings.xml
+msgctxt "#32553"
+msgid "Scan Kodi's library eagerly during Kodi startup. Keep disabled for faster Kodi boot."
+msgstr "Escanear la biblioteca de Kodi en el arranque. Mantener desactivado para un arranque más rápido."

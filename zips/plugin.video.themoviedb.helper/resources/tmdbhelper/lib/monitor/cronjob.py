@@ -61,6 +61,11 @@ class CronJobMonitor(SafeThread):
     def _do_recache_kodidb(self):
         if self.update_monitor.abortRequested() or self.exit:
             return
+        from tmdbhelper.lib.addon.plugin import get_setting
+        if not get_setting('enable_kodi_library', 'bool', default=True):
+            return
+        if not get_setting('recache_kodidb_on_startup', 'bool', default=False):
+            return
         self.database_maintenance.recache_kodidb(notification=False)
 
     def _do_delete_old_log_files_in_folder(self, folder, regex, days=-7):

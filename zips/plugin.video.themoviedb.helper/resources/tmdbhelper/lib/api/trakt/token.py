@@ -146,7 +146,14 @@ class TraktStoredAccessToken:
     @cached_property
     def winprop_traktisauth(self):
         winprop_traktisauth = get_property('TraktIsAuth', is_type=float)
-        winprop_traktisauth = winprop_traktisauth or self.authorization_check()  # If we dont have TraktIsAuth but were asking to check it then we're on first start so lets check that the stored token is valid
+        if not winprop_traktisauth:
+            if self.has_valid_token:
+                winprop_traktisauth = self.expires_in_timestamp
+                self.update_traktisauth_property()
+                from tmdbhelper.lib.addon.thread import SafeThread
+                SafeThread(target=self.authorization_check).start()
+            else:
+                winprop_traktisauth = self.authorization_check()
         return winprop_traktisauth or 0
 
     @property

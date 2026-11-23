@@ -2642,3 +2642,23 @@ msgstr ""
 msgctxt "#32025"
 msgid "Default player for episodes"
 msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32550"
+msgid "Enable Kodi library integration"
+msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32551"
+msgid "If disabled, TMDb Helper will not scan or query Kodi's local library, greatly improving speed."
+msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32552"
+msgid "Pre-cache Kodi library on startup"
+msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32553"
+msgid "Scan Kodi's library eagerly during Kodi startup. Keep disabled for faster Kodi boot."
+msgstr ""
