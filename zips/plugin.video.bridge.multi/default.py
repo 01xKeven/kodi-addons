@@ -107,14 +107,13 @@ def _ensure_shutdown_watchdog():
         global _SHUTDOWN_REQUESTED, _SHUTDOWN_WATCHDOG_STARTED
         try:
             mon = xbmc.Monitor()
-            while not mon.abortRequested() and not _BG_TASK_ABORT_EVENT.is_set():
-                if mon.waitForAbort(0.2):
+            while not mon.abortRequested():
+                if mon.waitForAbort(0.15):
                     break
-            if mon.abortRequested():
-                _SHUTDOWN_REQUESTED = True
+            _SHUTDOWN_REQUESTED = True
             _BG_TASK_ABORT_EVENT.set()
             try:
-                socket.setdefaulttimeout(0.05)
+                socket.setdefaulttimeout(0.02)
             except Exception:
                 pass
             abort_all_network_sockets()

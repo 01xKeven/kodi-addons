@@ -143,8 +143,6 @@ class BridgePlayerService(xbmc.Player):
             pass
         try:
             import default
-            if hasattr(default, '_BG_TASK_ABORT_EVENT'):
-                default._BG_TASK_ABORT_EVENT.set()
             if hasattr(default, 'abort_all_network_sockets'):
                 default.abort_all_network_sockets()
         except Exception as _e_sock:
@@ -169,8 +167,6 @@ class BridgePlayerService(xbmc.Player):
             pass
         try:
             import default
-            if hasattr(default, '_BG_TASK_ABORT_EVENT'):
-                default._BG_TASK_ABORT_EVENT.set()
             if hasattr(default, 'abort_all_network_sockets'):
                 default.abort_all_network_sockets()
         except Exception:
@@ -382,9 +378,9 @@ def run_service():
 
     _sync_timer = 0
     while not monitor.abortRequested():
-        if monitor.waitForAbort(1):
+        if monitor.waitForAbort(0.25):
             break
-        _sync_timer += 1
+        _sync_timer += 0.25
         if _sync_timer >= 60:
             _sync_timer = 0
             try:
