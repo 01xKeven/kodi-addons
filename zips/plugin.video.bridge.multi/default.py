@@ -1246,8 +1246,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Período de gracia para permitir que el ajuste de refresco de pantalla de Kodi
         # (Display resolution ADJUST / OnLostDisplay / OnResetDisplay) y la inicialización
-        # de decodificadores de audio/video se asienten antes de realizar llamadas C++ al Player
-        for _s in range(12):
+        # de decodificadores de audio/video se asienten antes de realizar llamadas C++ al Player.
+        # Detecta también freeze de códec Android MediaCodec: si getTime() se queda en 0.0s
+        # durante mucho tiempo pese a que isPlayingVideo()=True, el monitor se cierra para que
+        # el watchdog externo detecte el fallo y cambie de servidor.
+        _grace_codec_timeout = 8.0  # máx tiempo esperando que el reloj supere 0.5s
+        _grace_start = time.time()
+        for _s in range(80):
             if mon.abortRequested() or not p.isPlayingVideo() or _get_global_monitor_token() != my_token:
                 break
             try:
@@ -1255,6 +1260,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                     break
             except Exception:
                 pass
+            if (time.time() - _grace_start) > _grace_codec_timeout:
+                # El reloj no ha avanzado en 8 segundos con isPlayingVideo()=True: fallo de códec
+                xbmc.log("Multi Bridge: monitor de reproducción - getTime() estancado en 0s durante %.1fs -> posible freeze de códec, cancelando monitor [%s]" % (
+                    _grace_codec_timeout, title_str or media_key), xbmc.LOGWARNING)
+                return
             if mon.waitForAbort(0.1): return
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
@@ -9805,20 +9815,21 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
 
 def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
     """Solución GLOBAL para todos los servidores:
-    Asegura que el ListItem y su URL contengan las cabeceras HTTP necesarias (User-Agent de navegador
-    y Referer del servidor/página), evitando errores 403 Forbidden y 'Error opening file' de cualquier CDN
-    (Doodstream, Streamtape, Voe, Mixdrop, Uqload, etc.).
+    Asegura que el ListItem y su URL contengan las cabeceras HTTP necesarias (User-Agent de navegador,
+    Referer del servidor/página y verifypeer=false), evitando errores 403 Forbidden y 'Error opening file'
+    de cualquier CDN (Doodstream, Streamtape, Voe, Mixdrop, Uqload, etc.).
     Garantiza que la URL final tenga estrictamente UN SOLO pipe '|' y cabeceras sin duplicados ni pipes residuales.
+    Inyecta mimetype video/mp4 en ListItem para reproducción fluida en Android MediaCodec y ffmpeg.
     """
     if not listitem:
-        return
+        return ""
     try:
         path = listitem.getPath()
         if not path or not path.startswith(('http://', 'https://')):
-            return
+            return path or ""
 
         import urllib.parse
-        headers = {}
+        raw_headers = {}
         if '|' in path:
             pipe_segments = path.split('|')
             base_url = pipe_segments[0]
@@ -9829,23 +9840,30 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
                         clean_k = urllib.parse.unquote_plus(k.strip()).split('|')[0].strip()
                         clean_v = urllib.parse.unquote_plus(v.strip()).split('|')[0].strip()
                         if clean_k and clean_v:
-                            headers[clean_k] = clean_v
+                            raw_headers[clean_k] = clean_v
         else:
             base_url = path
 
-        # User-Agent de navegador estándar universal
-        if 'User-Agent' not in headers:
-            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        # Normalizar claves de cabeceras de forma insensible a mayúsculas
+        canonical_hdrs = {}
+        for k, v in raw_headers.items():
+            canonical_hdrs[k.strip().lower()] = (k.strip(), v.strip())
 
-        # Referer adecuado para el servidor o CDN
-        if 'Referer' not in headers:
-            srv_lower = (server_name or '').lower()
+        # 1. User-Agent de navegador universal estándar
+        if 'user-agent' not in canonical_hdrs:
+            canonical_hdrs['user-agent'] = ('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+
+        # 2. Referer adecuado para el servidor o CDN
+        srv_lower = (server_name or '').lower()
+        bu_lower = base_url.lower()
+
+        if 'referer' not in canonical_hdrs:
             ref = ''
             if page_url and page_url.startswith(('http://', 'https://')):
                 ref = page_url.split('|')[0].strip()
-            elif 'dood' in srv_lower or 'cloudatacdn' in base_url or 'ds2play' in srv_lower:
-                ref = 'https://doodstream.com/'
-            elif 'streamtape' in srv_lower or 'tapecontent' in base_url:
+            elif 'dood' in srv_lower or 'cloudatacdn' in bu_lower or 'ds2play' in srv_lower or 'playmogo' in bu_lower:
+                ref = 'https://playmogo.com/'
+            elif 'streamtape' in srv_lower or 'tapecontent' in bu_lower:
                 ref = 'https://streamtape.com/'
             elif 'voe' in srv_lower:
                 ref = 'https://voe.sx/'
@@ -9859,7 +9877,7 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
                 ref = 'https://filelions.to/'
             elif 'goodstream' in srv_lower:
                 ref = 'https://goodstream.uno/'
-            elif 'okru' in srv_lower or 'ok.ru' in srv_lower or 'okcdn.ru' in base_url or 'odnoklassniki' in base_url:
+            elif 'okru' in srv_lower or 'ok.ru' in srv_lower or 'okcdn.ru' in bu_lower or 'odnoklassniki' in bu_lower:
                 ref = 'https://ok.ru/'
             else:
                 parsed = urllib.parse.urlparse(base_url)
@@ -9867,16 +9885,30 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
                     ref = f"{parsed.scheme}://{parsed.netloc}/"
 
             if ref:
-                headers['Referer'] = ref
+                canonical_hdrs['referer'] = ('Referer', ref)
+
+        # 3. verifypeer=false para CDNs con certificados SSL específicos en Android
+        if 'verifypeer' not in canonical_hdrs:
+            canonical_hdrs['verifypeer'] = ('verifypeer', 'false')
+
+        # 4. Mimetype e información de contenedor para Android MediaCodec
+        is_hls_dash = ('.m3u8' in bu_lower) or ('.mpd' in bu_lower)
+        if not is_hls_dash:
+            try:
+                listitem.setMimeType('video/mp4')
+                listitem.setProperty('mimetype', 'video/mp4')
+            except Exception:
+                pass
 
         # Reconstruir pipe con cabeceras completas limpias
-        pipe_parts = [f"{urllib.parse.quote_plus(k)}={urllib.parse.quote_plus(v)}" for k, v in headers.items()]
+        final_hdrs = {orig_k: val for orig_k, val in canonical_hdrs.values()}
+        pipe_parts = [f"{urllib.parse.quote_plus(k)}={urllib.parse.quote_plus(v)}" for k, v in final_hdrs.items()]
         safe_path = base_url + '|' + '&'.join(pipe_parts)
         listitem.setPath(safe_path)
 
         # Si es stream HLS/DASH, inyectar también a inputstream.adaptive
-        if '.m3u8' in base_url.lower() or '.mpd' in base_url.lower():
-            raw_hdr_str = '&'.join([f"{k}={v}" for k, v in headers.items()])
+        if is_hls_dash:
+            raw_hdr_str = '&'.join([f"{k}={v}" for k, v in final_hdrs.items()])
             try:
                 listitem.setProperty('inputstream.adaptive.manifest_headers', raw_hdr_str)
                 listitem.setProperty('inputstream.adaptive.stream_headers', raw_hdr_str)
@@ -9885,7 +9917,133 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
         return safe_path
     except Exception as e:
         xbmc.log(f"Multi Bridge _ensure_playback_headers_on_item error: {e}", xbmc.LOGWARNING)
-        return listitem.getPath()
+        try:
+            return listitem.getPath()
+        except Exception:
+            return ""
+
+
+def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name=""):
+    """Espera a que Kodi inicie la reproducción y verifica PROGRESIÓN REAL de reloj/fotogramas.
+
+    Protege contra falsos positivos donde `player.isPlayingVideo()` devuelve True pero el
+    códec de vídeo está fallando (ej. CBitstreamConverter::Convert error en Android MediaCodec
+    c2.mtk.avc.decoder, reloj estancado en 0.0s sin fotogramas renderizados ni audio válido).
+
+    Retorna True solo si el vídeo arranca y el reloj de reproducción avanza efectivamente.
+    Retorna False si expira el tiempo, se abre diálogo de error de Kodi, el reproductor cae,
+    o el tiempo se queda estancado en 0.0s (codec freeze).
+    """
+    if player is None:
+        player = xbmc.Player()
+    if mon is None:
+        mon = xbmc.Monitor()
+
+    t_start = time.time()
+    effective_timeout = max(10.0, min(float(timeout or 14.0), 22.0))
+    had_loading = False
+    idle_count = 0
+
+    while time.time() - t_start < effective_timeout:
+        if mon.abortRequested():
+            return False
+
+        # Detección inmediata de diálogo modal de error de Kodi ("Uno o más elementos fallaron...")
+        if _is_kodi_modal_dialog_open():
+            try:
+                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                xbmc.executebuiltin('Dialog.Close(10100,true)')
+            except Exception:
+                pass
+            xbmc.log("Multi Bridge Watchdog: diálogo modal de error de Kodi detectado [%s] -> descartando" % server_name, xbmc.LOGINFO)
+            return False
+
+        # Comprobar si el vídeo ya abrió demuxer y levantó el hilo de reproducción
+        if player.isPlayingVideo():
+            # STREAM ABIERTO: Verificar avance real del reloj de reproducción
+            t_chk_start = time.time()
+            initial_t = -1.0
+            max_stall_time = 4.5  # Si pasa este tiempo sin que el reloj avance de 0s, es fallo de códec/freeze
+
+            while (time.time() - t_chk_start) < max_stall_time:
+                if mon.abortRequested():
+                    return False
+                if _is_kodi_modal_dialog_open():
+                    try:
+                        xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                        xbmc.executebuiltin('Dialog.Close(10100,true)')
+                    except Exception:
+                        pass
+                    return False
+                if not player.isPlayingVideo():
+                    xbmc.log("Multi Bridge Watchdog: el reproductor se cerró repentinamente tras iniciar [%s]" % server_name, xbmc.LOGINFO)
+                    return False
+
+                cur_t = -1.0
+                try:
+                    cur_t = float(player.getTime())
+                except Exception:
+                    cur_t = -1.0
+
+                if initial_t < 0 and cur_t >= 0.0:
+                    initial_t = cur_t
+
+                # Criterio de progreso real:
+                # Si se reanuda (seek_to_time > 2.0): requiere que el reloj alcance >= 0.5s y avance
+                if seek_to_time > 2.0:
+                    if cur_t >= 0.5 and (cur_t > (initial_t + 0.25) or cur_t >= (seek_to_time - 1.0)):
+                        return True
+                else:
+                    # Inicio desde 0s: el reloj debe haber avanzado más allá de 0.35s o haber progresado de forma medible
+                    if cur_t >= 0.35 or (initial_t >= 0.0 and (cur_t - initial_t) >= 0.25 and cur_t > 0.05):
+                        return True
+
+                # Si Kodi está buffereando activamente, reiniciar ventana de espera de progreso
+                try:
+                    if xbmc.getCondVisibility("Player.Buffering"):
+                        t_chk_start = time.time()
+                except Exception:
+                    pass
+
+                xbmc.sleep(150)
+
+            # Si el bucle de verificación de progreso expiró sin avance real:
+            xbmc.log("Multi Bridge Watchdog: fallo de decodificación o freeze de códec detectado (isPlayingVideo=True pero getTime()=%.2fs tras %.1fs) [%s]" % (
+                cur_t if 'cur_t' in locals() else -1.0, max_stall_time, server_name), xbmc.LOGWARNING)
+            return False
+
+        # Estado de carga / buffering
+        is_loading = False
+        try:
+            if player.isPlaying():
+                is_loading = True
+            elif (
+                xbmc.getCondVisibility("Player.Buffering") or
+                xbmc.getCondVisibility("Player.HasMedia") or
+                xbmc.getCondVisibility("Player.HasVideo") or
+                xbmc.getCondVisibility("Player.HasAudio")
+            ):
+                is_loading = True
+        except Exception:
+            is_loading = False
+
+        if is_loading:
+            had_loading = True
+            idle_count = 0
+            # Si Kodi está cargando activamente, dar margen extra (hasta 26s máx)
+            if time.time() - t_start > (effective_timeout - 4):
+                effective_timeout = min(effective_timeout + 2.0, 26.0)
+        elif had_loading:
+            idle_count += 1
+            if idle_count >= 5 and (time.time() - t_start > 2.0):
+                xbmc.log("Multi Bridge Watchdog: stream se detuvo prematuramente (EOF/fallo demuxer) [%s]" % server_name, xbmc.LOGINFO)
+                return False
+
+        if mon.waitForAbort(0.2):
+            return False
+
+    return False
+
 
 
 _BG_COLLECTOR_TOKEN = 0
@@ -10247,7 +10405,12 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=getattr(cand, 'url', '') or '')
                         fast_link = cand
                         fast_li = li
-                        fast_url = m_url
+                        # BUG FIX: usar la URL actualizada del listitem DESPUÉS de sanitizar cabeceras
+                        # (m_url es la URL antigua pre-sanitización sin User-Agent, que causaba fallo de CDN en Android)
+                        try:
+                            fast_url = li.getPath() or m_url
+                        except Exception:
+                            fast_url = m_url
                         q_show = _format_quality(cand)
                         lang_fmt = _format_language(cand)
                         try:
@@ -10342,47 +10505,20 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 player.play(fast_url, fast_li)
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
 
+                srv_name_fast = _get_link_server_name(fast_link)
                 mon = xbmc.Monitor()
                 watchdog_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
                 if watchdog_timeout < 10: watchdog_timeout = 10
                 if watchdog_timeout > 16: watchdog_timeout = 16
-                t_start = time.time()
-                video_started = False
-                user_aborted = False
 
-                while time.time() - t_start < watchdog_timeout:
-                    if mon.abortRequested():
-                        user_aborted = True
-                        break
-
-                    # Detección inmediata de fallo: Diálogo modal de error de Kodi ("Uno o más elementos fallaron")
-                    if _is_kodi_modal_dialog_open():
-                        try:
-                            xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                            xbmc.executebuiltin('Dialog.Close(10100,true)')
-                        except Exception: pass
-                        xbmc.log("Multi Bridge Fast Autoplay (Caché): diálogo modal de error en Kodi -> descartando enlace de inmediato", xbmc.LOGINFO)
-                        break
-
-                    if player.isPlayingVideo():
-                        # Comprobar estabilidad real (evita falsos positivos si el demuxer corta tras 0.5s)
-                        xbmc.sleep(700)
-                        if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
-                            video_started = True
-                            break
-                        else:
-                            xbmc.log("Multi Bridge Fast Autoplay (Caché): el vídeo cayó inmediatamente tras iniciar (EOF / error demuxer)", xbmc.LOGINFO)
-                            break
-
-                    is_loading = False
-                    try:
-                        is_loading = (xbmc.getCondVisibility("Player.Buffering") or 
-                                      xbmc.getCondVisibility("Player.HasVideo") or
-                                      xbmc.getCondVisibility("Player.HasAudio"))
-                    except Exception: pass
-                    if is_loading and time.time() - t_start > (watchdog_timeout - 2):
-                        watchdog_timeout = min(watchdog_timeout + 1.0, 18.0)
-                    xbmc.sleep(250)
+                # Usar watchdog con verificación de progreso real de reloj (protege contra freeze de MediaCodec en Android)
+                video_started = _wait_for_playback_progress(
+                    player=player, mon=mon,
+                    timeout=watchdog_timeout,
+                    seek_to_time=seek_to_time,
+                    server_name=srv_name_fast
+                )
+                user_aborted = mon.abortRequested()
 
                 if user_aborted:
                     return True
@@ -10813,93 +10949,22 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         if watchdog_timeout < 10: watchdog_timeout = 10.0
         if watchdog_timeout > 18: watchdog_timeout = 18.0
 
-        t_start = time.time()
-        video_started = False
-        user_aborted = False
-        had_loading = False
-        idle_count = 0
+        active_srv_name = _get_link_server_name(active_link)
 
-        while time.time() - t_start < watchdog_timeout:
-            if mon.abortRequested():
-                user_aborted = True
-                break
-
-            # Detección inmediata de fallo: Diálogo modal de error de Kodi ("Uno o más elementos fallaron")
-            if _is_kodi_modal_dialog_open():
-                try:
-                    xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                    xbmc.executebuiltin('Dialog.Close(10100,true)')
-                except Exception: pass
-                xbmc.log("Multi Bridge Fast Autoplay Watchdog: diálogo modal de error en Kodi detectado -> descartando enlace de inmediato", xbmc.LOGINFO)
-                break
-
-            # A) ¿El vídeo ya arrancó y se mantiene estable?
-            if player.isPlayingVideo():
-                # Comprobar estabilidad real (evita falsos positivos si el demuxer corta tras 0.5s)
-                xbmc.sleep(800)
-                if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
-                    video_started = True
-                    break
-                else:
-                    xbmc.log("Multi Bridge Fast Autoplay Watchdog: el vídeo cayó inmediatamente tras iniciar (EOF / error demuxer)", xbmc.LOGINFO)
-                    break
-
-            # B) ¿Kodi está buffereando activamente o ya demuxó el stream?
-            # Si el servidor ya conectó y está recibiendo datos, NO abortar prematuramente
-            # (evita el choque entre enlaces y permite a Okru y servidores CDN iniciar limpiamente).
-            is_loading = False
-            try:
-                if player.isPlaying():
-                    is_loading = True
-                elif (
-                    xbmc.getCondVisibility("Player.Buffering") or 
-                    xbmc.getCondVisibility("Player.HasMedia") or
-                    xbmc.getCondVisibility("Player.HasVideo") or
-                    xbmc.getCondVisibility("Player.HasAudio")
-                ):
-                    is_loading = True
-            except Exception:
-                is_loading = False
-
-            if is_loading:
-                had_loading = True
-                idle_count = 0
-                # Si está descargando datos o el reproductor está activo, extender el margen de gracia (hasta 26s máx)
-                if time.time() - t_start > (watchdog_timeout - 5):
-                    watchdog_timeout = min(watchdog_timeout + 2.0, 26.0)
-            elif had_loading:
-                idle_count += 1
-                # Si ya había empezado a cargar y el reproductor de Kodi se cerró completamente
-                # (demuxer EOF, error 403, stream abortado), no esperar en pantalla en negro:
-                # tras 1.0s de inactividad confirmada, descartar y pasar al siguiente enlace.
-                if idle_count >= 4 and (time.time() - t_start > 1.5):
-                    xbmc.log("Multi Bridge Fast Autoplay Watchdog: stream se detuvo prematuramente (EOF/fallo demuxer) -> probando siguiente enlace", xbmc.LOGINFO)
-                    break
-
-            if mon.waitForAbort(0.25):
-                user_aborted = True
-                break
+        # Usar watchdog con verificación de progreso real de reloj
+        # (protege contra freeze de MediaCodec en Android donde isPlayingVideo()=True pero getTime() no avanza)
+        video_started = _wait_for_playback_progress(
+            player=player, mon=mon,
+            timeout=watchdog_timeout,
+            seek_to_time=seek_to_time,
+            server_name=active_srv_name
+        )
+        user_aborted = mon.abortRequested()
 
         if user_aborted:
             return True
 
-        _is_playing_safe = False
-        try:
-            _is_playing_safe = player.isPlaying()
-        except Exception:
-            _is_playing_safe = False
-
-        if not video_started and _is_playing_safe:
-            # Margen final de gracia: dar tiempo a que los hilos de audio/video decodifiquen el primer fotograma
-            for _ in range(16):
-                if player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
-                    video_started = True
-                    break
-                if mon.waitForAbort(0.25):
-                    user_aborted = True
-                    break
-
-        if (video_started or player.isPlayingVideo()) and not _is_kodi_modal_dialog_open():
+        if video_started and not _is_kodi_modal_dialog_open():
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
             try:
                 xbmc.executebuiltin('Dialog.Close(busydialog,true)')
@@ -10967,7 +11032,11 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     _ensure_playback_headers_on_item(li, server_name=_get_link_server_name(cand), page_url=getattr(cand, 'url', '') or '')
                     next_resolved_link = cand
                     next_resolved_li = li
-                    next_resolved_url = m_url
+                    # BUG FIX: usar la URL actualizada del listitem DESPUÉS de sanitizar cabeceras
+                    try:
+                        next_resolved_url = li.getPath() or m_url
+                    except Exception:
+                        next_resolved_url = m_url
                     break
 
         if not next_resolved_link or not next_resolved_url:
@@ -13760,6 +13829,7 @@ def _play_preloaded_episode(preloaded):
             continue
 
         try:
+            media_url = _ensure_playback_headers_on_item(li, server_name=srv, page_url=getattr(lnk, 'url', '') or '') or li.getPath() or media_url
             sync_tmdbhelper_playerstring(meta)
             set_listitem_info(li, meta=meta)
             player.play(media_url, li)
@@ -13767,14 +13837,7 @@ def _play_preloaded_episode(preloaded):
             xbmc.log("Multi Bridge Instant Play: error en player.play: %s" % str(pe), xbmc.LOGWARNING)
             continue
 
-        started = False
-        for _ in range(50):
-            if xbmc.Monitor().abortRequested():
-                break
-            if player.isPlayingVideo():
-                started = True
-                break
-            xbmc.sleep(200)
+        started = _wait_for_playback_progress(player=player, mon=xbmc.Monitor(), timeout=12.0, seek_to_time=0.0, server_name=srv)
 
         if started:
             xbmc.log("Multi Bridge Instant Play: ¡Reproducción exitosa en enlace %d (%s)!" % (idx+1, srv), xbmc.LOGINFO)
@@ -15326,37 +15389,7 @@ def _verify_playback_started(is_torrent=False, timeout=None):
     mon = xbmc.Monitor()
     if timeout is None:
         timeout = 40.0 if is_torrent else 25.0
-    start_t = time.time()
-
-    xbmc.sleep(100)
-
-    while (time.time() - start_t) < timeout:
-        if mon.abortRequested():
-            return False
-
-        # 1. Video ya en reproduccion real activa: exito inmediato
-        if p.isPlayingVideo():
-            return True
-
-        # 2. Supervisar activamente si Kodi abre la ventana modal de error (DialogOK: 10100 / okdialog)
-        # Kodi muestra este dialogo modal nativo al fallar la reproduccion.
-        if _is_kodi_modal_dialog_open():
-            _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
-            xbmc.log("Multi Bridge: el usuario presiono Aceptar en la ventana de error de Kodi. Retornando fallo para reabrir ventana...", xbmc.LOGINFO)
-            return False
-
-        if mon.waitForAbort(0.15):
-            return False
-
-    # Al expirar el tiempo de espera maximo, verificar si el video esta reproduciendose
-    if p.isPlayingVideo():
-        return True
-
-    if _is_kodi_modal_dialog_open():
-        _wait_for_kodi_modal_dialog_to_dismiss(mon=mon, max_wait=60.0)
-        return False
-
-    return bool(p.isPlayingVideo())
+    return _wait_for_playback_progress(player=p, mon=mon, timeout=timeout, server_name="ManualSwitch")
 def show_floating_links_dialog(offset=0):
     global _search_in_progress, _links_view_active
     _search_in_progress = False
