@@ -1161,6 +1161,20 @@ def _release_search_lock_atomic():
     except Exception:
         pass
 
+_active_playback_monitor_thread = None
+
+def wait_for_playback_monitor():
+    """Mantiene vivo el hilo principal del invoker de Python mientras dure la reproducción.
+    Esto evita que Kodi entre en 'CPythonInvoker: waiting on thread ...' y finalice Python
+    por la fuerza tras 5 segundos (lo cual provoca crasheos con cambios de refresco de pantalla
+    o salidas intempestivas)."""
+    global _active_playback_monitor_thread
+    if _active_playback_monitor_thread and _active_playback_monitor_thread.is_alive():
+        mon = xbmc.Monitor()
+        while _active_playback_monitor_thread.is_alive() and not mon.abortRequested():
+            if mon.waitForAbort(0.25):
+                break
+
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
@@ -1229,6 +1243,19 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
         except Exception:
             pass
+
+        # Período de gracia para permitir que el ajuste de refresco de pantalla de Kodi
+        # (Display resolution ADJUST / OnLostDisplay / OnResetDisplay) y la inicialización
+        # de decodificadores de audio/video se asienten antes de realizar llamadas C++ al Player
+        for _s in range(12):
+            if mon.abortRequested() or not p.isPlayingVideo() or _get_global_monitor_token() != my_token:
+                break
+            try:
+                if p.getTime() >= 0.5:
+                    break
+            except Exception:
+                pass
+            if mon.waitForAbort(0.1): return
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
@@ -1671,8 +1698,10 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             # Cierre forzado o interrupción inesperada de Kodi (< 80%)
             xbmc.log("Multi Bridge: parada abrupta/interrupción inesperada detectada (<80%). Preservando en Continuar viendo.", xbmc.LOGINFO)
 
+    global _active_playback_monitor_thread
     _th = threading.Thread(target=_monitor_loop, daemon=True)
     _th.name = "BridgeMultiPlaybackMonitor"
+    _active_playback_monitor_thread = _th
     _th.start()
 
 alfa_icon = 'DefaultVideo.png'
@@ -10364,6 +10393,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         xbmc.executebuiltin('Dialog.Close(busydialog,true)')
                         xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                     except Exception: pass
+                    wait_for_playback_monitor()
                     return True
 
                 xbmc.log("Multi Bridge Fast Autoplay: enlace en caché no arrancó en Kodi, continuando con búsqueda en canales...", xbmc.LOGINFO)
@@ -10876,6 +10906,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
                 xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
             except Exception: pass
+            wait_for_playback_monitor()
             return True
 
         # C) Si llegó aquí, transcurrió el timeout y el vídeo NUNCA arrancó (servidor caído / freeze)
@@ -13750,6 +13781,7 @@ def _play_preloaded_episode(preloaded):
             sync_tmdbhelper_playerstring(meta)
             media_key = _get_media_key(meta, lnk)
             start_playback_monitor(media_key, title_str=meta.get('title', ''), current_link_index=idx, meta=meta)
+            wait_for_playback_monitor()
             return True
         else:
             xbmc.log("Multi Bridge Instant Play: Enlace %d (%s) no arrancó dentro de 10s. Deteniendo..." % (idx+1, srv), xbmc.LOGWARNING)
@@ -15948,6 +15980,7 @@ def main():
                 return
             if played:
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta, force_beginning=start_beginning)
+                wait_for_playback_monitor()
             else:
                 if handle > 0:
                     try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
