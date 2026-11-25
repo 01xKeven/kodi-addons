@@ -11948,6 +11948,55 @@ def sync_captcha_servers():
         xbmc.log(f"Multi Bridge: Error sincronizando servidores en Balandro: {e}", xbmc.LOGWARNING)
 
 
+def _prepare_clean_switch_transition():
+    """Prepara una transición limpia y sin congelo al cambiar de enlace en caliente.
+    - En Android o al salir de streams remotos HTTP/HTTPS: limpia la playlist primero y detiene
+      el reproductor sin demora extra para que VideoFullScreen y los subtítulos reinicien abajo.
+    - Si el stream saliente es un proxy local (127.0.0.1/localhost, ej. Mega/Torrest): mantiene
+      el reproductor sin stop() en PC para evitar bloqueos CCurlFile::Stat de 50s, cerrando OSD/SeekBar."""
+    p = xbmc.Player()
+    try:
+        xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+        xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+        xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+    except Exception:
+        pass
+    if bool(xbmc.getCondVisibility('System.Platform.Android')):
+        _android_stop_playback_if_active()
+        return
+    prev_pf = ''
+    try:
+        if p.isPlaying():
+            prev_pf = (p.getPlayingFile() or '').strip().lower()
+    except Exception:
+        prev_pf = ''
+    is_local_proxy = prev_pf.startswith(('http://127.0.0.1', 'http://localhost', 'https://127.0.0.1', 'https://localhost'))
+    if is_local_proxy:
+        try:
+            if xbmc.getCondVisibility("Player.Paused"):
+                p.pause()
+                for _ in range(5):
+                    if not xbmc.getCondVisibility("Player.Paused"):
+                        break
+                    xbmc.sleep(30)
+        except Exception:
+            pass
+        return
+    try:
+        xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+    except Exception:
+        pass
+    try:
+        if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+            p.stop()
+            for _ in range(40):
+                if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
+                    break
+                xbmc.sleep(30)
+    except Exception:
+        pass
+
+
 def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False, seek_to_time=0, start_beginning=False):
 
     if not link: return False
@@ -12155,24 +12204,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 if handle > 0 and not is_switch:
                     xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
                 else:
-                    # En PC/Desktop el reemplazo directo con Player.play() mientras está pausado evita salir
-                    # a MyVideoNav (window 10025) y evita sondeos CCurlFile::Stat colgados contra proxies locales.
-                    # Solo en Android (MediaCodec) se detiene antes para liberar el decodificador de hardware.
-                    if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
-                        _android_stop_playback_if_active()
-                    elif is_switch:
-                        try:
-                            xbmc.executebuiltin('Dialog.Close(videoosd,true)')
-                            xbmc.executebuiltin('Dialog.Close(seekbar,true)')
-                            xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
-                            if xbmc.getCondVisibility("Player.Paused"):
-                                xbmc.Player().pause()
-                                for _ in range(5):
-                                    if not xbmc.getCondVisibility("Player.Paused"):
-                                        break
-                                    xbmc.sleep(35)
-                        except Exception:
-                            pass
+                    if is_switch:
+                        _prepare_clean_switch_transition()
                     sync_tmdbhelper_playerstring(meta)
                     xbmc.Player().play(media_url, _resolved_li[0])
                 return True
@@ -12225,21 +12258,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         if not mods: return False
         platformtools = mods['platformtools']
         try:
-            if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
-                _android_stop_playback_if_active()
-            elif is_switch:
-                try:
-                    xbmc.executebuiltin('Dialog.Close(videoosd,true)')
-                    xbmc.executebuiltin('Dialog.Close(seekbar,true)')
-                    xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
-                    if xbmc.getCondVisibility("Player.Paused"):
-                        xbmc.Player().pause()
-                        for _ in range(5):
-                            if not xbmc.getCondVisibility("Player.Paused"):
-                                break
-                            xbmc.sleep(35)
-                except Exception:
-                    pass
+            if is_switch:
+                _prepare_clean_switch_transition()
             sys.argv[1] = '-1' if is_switch else str(handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
