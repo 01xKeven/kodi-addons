@@ -140,6 +140,9 @@ class CronJobMonitor(SafeThread):
             self._do_library_update()
 
     def run(self):
+        # Allow Kodi Home & initial widgets to boot with zero CPU/SQLite/network contention
+        if self.update_monitor.waitForAbort(4) or self.exit:
+            return
         self._on_startup()
 
         while not self.update_monitor.abortRequested() and not self.exit:

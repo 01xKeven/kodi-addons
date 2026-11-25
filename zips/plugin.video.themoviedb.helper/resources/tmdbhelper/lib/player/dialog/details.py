@@ -24,8 +24,31 @@ class PlayerDetails:
     @cached_property
     def details(self):
         details = self.get_details()
-        details.set_details(details=self.external_ids, reverse=True)
+        if details and not details.unique_ids.get('imdb'):
+            details.set_details(details=self.external_ids, reverse=True)
+        elif details:
+            local_trakt = self.local_trakt_uids
+            if local_trakt:
+                details.set_details(details={'unique_ids': local_trakt}, reverse=True)
         return details
+
+    @cached_property
+    def local_trakt_uids(self):
+        uids = {'tmdb': self.tmdb_id}
+        try:
+            if self.trakt_slug:
+                uids['slug'] = self.trakt_slug
+            trakt_id = self.find_queries_db.get_trakt_id(
+                id_type='tmdb',
+                id_value=self.tmdb_id,
+                item_type=self.trakt_type,
+                output_type='trakt'
+            )
+            if trakt_id:
+                uids['trakt'] = trakt_id
+        except Exception:
+            pass
+        return uids
 
     def get_details(self, language=None):
         from tmdbhelper.lib.items.listitem import ListItem

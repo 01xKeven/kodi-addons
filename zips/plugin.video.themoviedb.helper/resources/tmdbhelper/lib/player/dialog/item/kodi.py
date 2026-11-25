@@ -25,7 +25,7 @@ class PlayerItemLocalMovie(PlayerItemBasic):
 
     @cached_property
     def is_enabled(self):
-        return bool(get_setting('default_player_kodi', 'int'))
+        return bool(get_setting('enable_kodi_library', 'bool') and get_setting('default_player_kodi', 'int'))
 
     @cached_property
     def is_strm(self):

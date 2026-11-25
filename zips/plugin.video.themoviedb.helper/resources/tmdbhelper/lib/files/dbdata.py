@@ -15,6 +15,8 @@ class DatabaseCore:
     _fileutils = FileUtils()  # Import to use plugin addon_data folder not the module one
     _db_timeout = 60.0
     _db_read_timeout = 1.0
+    _home_window = None
+    _addon_version = None
     database_version = 1
     database_changes = {}
 
@@ -24,15 +26,19 @@ class DatabaseCore:
         basefolder = f'{self._basefolder}{folder}'
         filename = filename or 'defaultcache.db'
 
+        if DatabaseCore._addon_version is None:
+            DatabaseCore._addon_version = get_version()
         self._db_file = self._fileutils.get_file_path(basefolder, filename, join_addon_data=basefolder == folder)
-        self._sc_name = f'{folder}_{filename}_databaserowfactory_{get_version()}'
-        self.check_database_initialization()
-        self.kodi_log(f"CACHE: Initialized: {self._sc_name} - Thread Safety Level: {sqlite3.threadsafety} - SQLite v{sqlite3.sqlite_version}")
+        self._sc_name = f'{folder}_{filename}_databaserowfactory_{DatabaseCore._addon_version}'
+        if self.check_database_initialization():
+            self.kodi_log(f"CACHE: Initialized: {self._sc_name} - Thread Safety Level: {sqlite3.threadsafety} - SQLite v{sqlite3.sqlite_version}")
 
     @property
     def window_home(self):
-        from xbmcgui import Window
-        return Window(10000)
+        if DatabaseCore._home_window is None:
+            from xbmcgui import Window
+            DatabaseCore._home_window = Window(10000)
+        return DatabaseCore._home_window
 
     def get_window_property(self, name):
         return self.window_home.getProperty(name)
@@ -63,34 +69,36 @@ class DatabaseCore:
 
     def check_database_initialization(self):
         if not self.database_initialized:
-            self.init_database()
-            return
+            return bool(self.init_database())
+        return False
 
-    def set_pragmas(self, connection):
+    def set_pragmas(self, connection, read_only=False, is_init=False):
         cursor = connection.cursor()
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
+        if is_init:
+            cursor.execute("PRAGMA journal_mode=WAL")
+        if not read_only:
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA cache_size=-8000")
         cursor.execute("PRAGMA mmap_size=268435456")
         return connection
 
     def init_database(self):
-        # import xbmcvfs
         from jurialmunkey.locker import MutexPropLock
         with MutexPropLock(f'{self._db_file}.lockfile', kodi_log=self.kodi_log):
-            # if xbmcvfs.exists(self._db_file):
-            #     self.set_database_init()
-            #     return
-            database = self.create_database()
+            if self.database_initialized:
+                return False
+            self.create_database()
             self.set_database_init()
-        return database
+        return True
 
     def create_database(self):
         try:
             with TimerFunc(f'CACHE: Initialisation {self._db_file} took:'):
                 self.kodi_log(f'CACHE: Initialising...\n{self._db_file}\n{self._sc_name}', 1)
                 connection = sqlite3.connect(self._db_file, timeout=self._db_timeout)
-                connection = self.set_pragmas(connection)
+                connection = self.set_pragmas(connection, read_only=False, is_init=True)
                 connection = self.create_database_execute(connection)
             return connection
         except Exception as error:
@@ -104,7 +112,7 @@ class DatabaseCore:
             self.kodi_log(f'CACHE: ERROR while retrieving _database: {error}\n{self._sc_name}', log_level)
             return
         connection.row_factory = sqlite3.Row
-        return self.set_pragmas(connection)
+        return self.set_pragmas(connection, read_only=read_only, is_init=False)
 
     def database_execute(self, connection, query, data=None):
         try:

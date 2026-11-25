@@ -77,15 +77,19 @@ class Poller(WindowChecker):
         self._on_idle(POLL_MIN_INCREMENT)
 
     def _on_context(self):
+        self._cleared_property = False
         self._on_idle(POLL_MIN_INCREMENT)
 
     def _on_scroll(self):
+        self._cleared_property = False
         self._on_idle(POLL_MIN_INCREMENT)
 
     def _on_listitem(self):
+        self._cleared_property = False
         self._on_idle(POLL_MIN_INCREMENT)
 
     def _on_clear(self):
+        self._cleared_property = True
         self._on_idle(POLL_MID_INCREMENT)
 
     def _on_exit(self):
@@ -212,7 +216,9 @@ class Poller(WindowChecker):
 
             # Sit idle in a holding pattern if the skin doesn't need the service monitor yet
             if self.is_on_disabled:
-                self._on_clear()
+                if not self._cleared_property:
+                    self._on_clear()
+                    self._cleared_property = True
                 self._on_idle(5)
                 continue
 
