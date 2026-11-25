@@ -14640,10 +14640,23 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
 
     def _build(self):
         try:
-            W = max(960, int(self.getWidth() or 1920))
-            H = max(720, int(self.getHeight() or 1080))
+            W = int(self.getWidth() or 0)
+            H = int(self.getHeight() or 0)
         except Exception:
-            W, H = 1920, 1080
+            W, H = 0, 0
+        if W <= 0:
+            W = 1920
+        if H <= 0:
+            H = 1080
+
+        # Ajustar el backdrop invisible exactamente al lienzo real de la ventana/pantalla
+        try:
+            bg_btn = self.getControl(self._backdrop_id)
+            bg_btn.setPosition(0, 0)
+            bg_btn.setWidth(W)
+            bg_btn.setHeight(H)
+        except Exception:
+            pass
 
         # Deteccion equilibrada de Modo Compacto vs Tactil / Tablet / Móvil
         touch_setting = str(_bridge_addon.getSetting('pause_prompt_touch_mode') or '0').strip()
@@ -14686,11 +14699,11 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
                     if valid_instant:
                         has_instant = True
 
-        # Diseño proporcional adaptable a cualquier resolución o relación de aspecto
-        # (1080p, 720p/laptops 1366x768, 4K, ultrawide, tablets y teléfonos táctiles)
+        # Diseño proporcional adaptable a cualquier resolución, ventana o relación de aspecto
+        # (4:3, 16:9, 16:10, 21:9 ultrawide, 720p, 1080p, 4K, ventanas pequeñas y vertical móvil)
         scale_h = H / 1080.0
-        # En pantallas físicas pequeñas (<= 900px alto real) o táctiles damos un extra de tamaño
-        # para legibilidad y pulsación cómoda sin perder la estética ni la proporción de tarjeta.
+        scale_w = W / 1920.0
+        scale_ui = min(scale_h, max(scale_w, scale_h * 0.72)) if W < H else scale_h
         try:
             phys_w = int(xbmc.getInfoLabel('System.ScreenWidth') or 1920)
             phys_h = int(xbmc.getInfoLabel('System.ScreenHeight') or 1080)
@@ -14698,53 +14711,98 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
             phys_w, phys_h = 1920, 1080
         small_screen = (phys_h > 0 and phys_h <= 850) or (phys_w > 0 and phys_w <= 1400)
 
+        # Preparar texto del encabezado antes de dimensionar la tarjeta para evitar cortes ("...")
+        srv = (self.server_name or "Actual").strip()
+        if srv.lower() in ('torrent', 'magnet'):
+            srv = 'Torrent'
+        elif len(srv) > 18:
+            srv = srv[:17] + '..'
+
+        qual_active = getattr(self, 'current_quality', '') or ''
+        if not qual_active and hasattr(self, 'current_link') and self.current_link:
+            qual_active = _format_quality(self.current_link)
+        has_qual = bool(qual_active and qual_active != 'N/A')
+
         if is_touch:
             dh_ratio = 0.155
-            dw_base = 630 if has_next else 544
+            dw_base = 640 if has_next else 580
             bh_base = 64
-            pad_hitbox = max(14, int(round(18 * scale_h)))
-            gap = max(12, int(round(16 * scale_h)))
+            pad_hitbox = max(10, int(round(18 * scale_ui)))
+            gap = max(10, int(round(16 * scale_ui)))
         else:
-            dh_ratio = 0.140 if small_screen else 0.133
-            dw_base = (576 if small_screen else 550) if has_next else (500 if small_screen else 476)
+            dh_ratio = 0.140 if small_screen else 0.134
+            dw_base = (615 if small_screen else 600) if has_next else (560 if small_screen else 540)
             bh_base = 60 if small_screen else 56
-            pad_hitbox = max(10, int(round(14 * scale_h)))
-            gap = max(12, int(round(14 * scale_h)))
+            pad_hitbox = max(8, int(round(14 * scale_ui)))
+            gap = max(10, int(round(14 * scale_ui)))
 
-        dh = max(118, int(round(H * dh_ratio)))
-        dw = min(int(W * 0.90), max(380, int(round(dw_base * scale_h))))
-        bh = min(int(dh * 0.48), max(46, int(round(bh_base * scale_h))))
+        max_dw = max(260, int(W * 0.94))
+        max_dh = max(92, int(H * 0.30))
+        dh = min(max_dh, max(92, int(round(H * dh_ratio))))
+        dw = min(max_dw, max(300, int(round(dw_base * scale_ui))))
+        bh = min(int(dh * 0.48), max(38, int(round(bh_base * scale_ui))))
 
-        pad_x = max(18, int(round(dw * 0.040)))
-        avail_w = max(240, dw - pad_x * 2)
+        pad_x = max(14, int(round(dw * 0.038)))
+        # Ancho mínimo requerido para que el encabezado completo con font12 nunca se recorte
+        if has_qual:
+            plain_hdr = '¿Cambiar enlace? | %s %s' % (srv, qual_active)
+        else:
+            plain_hdr = '¿Cambiar enlace? | %s' % srv
+        char_px = 16.2 * scale_ui
+        min_hdr_dw = int(round(len(plain_hdr) * char_px)) + pad_x * 2 + max(24, int(round(28 * scale_ui)))
+        if min_hdr_dw > dw:
+            dw = min(max_dw, min_hdr_dw)
+        pad_x = max(14, int(round(dw * 0.038)))
+
+        # En pantallas extremadamente estrechas (ej. móvil vertical), compactar prefijo si aún excediera el 94%
+        max_label_chars = max(18, int((dw - pad_x * 2) / max(8.0, char_px)))
+        prefix_txt = '¿Cambiar enlace?'
+        if len(plain_hdr) > max_label_chars:
+            prefix_txt = 'Cambiar enlace'
+        if has_qual:
+            plain_hdr_2 = '%s | %s %s' % (prefix_txt, srv, qual_active)
+            if len(plain_hdr_2) > max_label_chars:
+                avail_srv = max(6, max_label_chars - len(prefix_txt) - len(qual_active) - 5)
+                if len(srv) > avail_srv:
+                    srv = srv[:max(4, avail_srv - 2)] + '..'
+            header_text = '[B][COLOR FFCFA82C]%s[/COLOR][/B] [COLOR FF666666]|[/COLOR] [COLOR FFDDDDDD]%s[/COLOR] [B][COLOR FFCFA82C]%s[/COLOR][/B]' % (prefix_txt, srv, qual_active)
+        else:
+            plain_hdr_2 = '%s | %s' % (prefix_txt, srv)
+            if len(plain_hdr_2) > max_label_chars:
+                avail_srv = max(6, max_label_chars - len(prefix_txt) - 4)
+                if len(srv) > avail_srv:
+                    srv = srv[:max(4, avail_srv - 2)] + '..'
+            header_text = '[B][COLOR FFCFA82C]%s[/COLOR][/B] [COLOR FF666666]|[/COLOR] [COLOR FFDDDDDD]%s[/COLOR]' % (prefix_txt, srv)
+
+        avail_w = max(200, dw - pad_x * 2)
         if has_next:
-            btn_next_w = max(72, int(round(avail_w * 0.19)))
-            btn_main_w = max(100, (avail_w - btn_next_w - gap * 2) // 2)
+            btn_next_w = max(56, int(round(avail_w * 0.18)))
+            btn_main_w = max(84, (avail_w - btn_next_w - gap * 2) // 2)
             btn_configs = [
                 {'lbl': 'Continuar', 'w': btn_main_w, 'is_icon': False},
                 {'lbl': 'Cambiar',   'w': btn_main_w, 'is_icon': False},
                 {'lbl': '',          'w': btn_next_w, 'is_icon': True, 'instant': has_instant}
             ]
         else:
-            btn_main_w = max(120, (avail_w - gap) // 2)
+            btn_main_w = max(96, (avail_w - gap) // 2)
             btn_configs = [
                 {'lbl': 'Continuar', 'w': btn_main_w, 'is_icon': False},
                 {'lbl': 'Cambiar',   'w': btn_main_w, 'is_icon': False}
             ]
 
-        iw = ih = max(22, int(round(bh * 0.54)))
-        rw = max(22, int(round(bh * 0.52)))
-        rh = max(26, int(round(bh * 0.58)))
-        rx_offset = max(12, int(round(rw * 0.55)))
-        ry_offset = max(8, int(round(rh * 0.30)))
+        iw = ih = max(18, int(round(bh * 0.54)))
+        rw = max(18, int(round(bh * 0.52)))
+        rh = max(22, int(round(bh * 0.58)))
+        rx_offset = max(10, int(round(rw * 0.55)))
+        ry_offset = max(6, int(round(rh * 0.30)))
 
-        margin_x = max(20, int(round(W * 0.021)))
-        dx = max(10, W - dw - margin_x)
+        margin_x = max(12, int(round(W * 0.020)))
+        dx = max(8, W - dw - margin_x)
         if self._pos_setting == '1':  # Inferior derecha
-            margin_y = max(24, int(round(H * 0.046)))
-            dy = max(10, H - dh - margin_y)
+            margin_y = max(16, int(round(H * 0.045)))
+            dy = max(8, H - dh - margin_y)
         else:  # Superior derecha (0)
-            margin_y = max(20, int(round(H * 0.038)))
+            margin_y = max(14, int(round(H * 0.038)))
             dy = margin_y
 
         # Fondo y borde dorado con esquinas redondeadas (9-slice en pause_prompt.xml)
@@ -14757,23 +14815,8 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
             except Exception:
                 pass
 
-        # Servidor actual
-        srv = (self.server_name or "Actual").strip()
-        if srv.lower() in ('torrent', 'magnet'):
-            srv = 'Torrent'
-        elif len(srv) > 15:
-            srv = srv[:14] + '..'
-
-        qual_active = getattr(self, 'current_quality', '') or ''
-        if not qual_active and hasattr(self, 'current_link') and self.current_link:
-            qual_active = _format_quality(self.current_link)
-        if qual_active and qual_active != 'N/A':
-            header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]  [B][COLOR FFCFA82C]%s[/COLOR][/B]' % (srv, qual_active)
-        else:
-            header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
-
-        hdr_h = max(24, int(round(dh * 0.21)))
-        hdr_y = dy + max(12, int(round(dh * 0.11)))
+        hdr_h = max(22, int(round(dh * 0.22)))
+        hdr_y = dy + max(10, int(round(dh * 0.10)))
         try:
             hdr_lbl = self.getControl(53)
             hdr_lbl.setPosition(dx + pad_x, hdr_y)
