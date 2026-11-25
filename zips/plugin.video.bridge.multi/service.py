@@ -132,7 +132,9 @@ import time
 class BridgePlayerService(xbmc.Player):
     def onAVStarted(self):
         try:
-            _inject_active_playback_metadata(self)
+            xbmc.sleep(250)
+            if self.isPlayingVideo():
+                _inject_active_playback_metadata(self)
         except Exception as e:
             xbmc.log("Multi Bridge PlayerService: error en onAVStarted: " + str(e), xbmc.LOGWARNING)
 
@@ -141,34 +143,16 @@ class BridgePlayerService(xbmc.Player):
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
         except Exception:
             pass
-        try:
-            import default
-            if hasattr(default, 'abort_all_network_sockets'):
-                default.abort_all_network_sockets()
-        except Exception as _e_sock:
-            xbmc.log("Multi Bridge PlayerService: error abortando sockets en stop: " + str(_e_sock), xbmc.LOGWARNING)
 
     def onPlayBackEnded(self):
         try:
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
         except Exception:
             pass
-        try:
-            import default
-            if hasattr(default, 'abort_all_network_sockets'):
-                default.abort_all_network_sockets()
-        except Exception:
-            pass
 
     def onPlayBackError(self):
         try:
             xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
-        except Exception:
-            pass
-        try:
-            import default
-            if hasattr(default, 'abort_all_network_sockets'):
-                default.abort_all_network_sockets()
         except Exception:
             pass
 

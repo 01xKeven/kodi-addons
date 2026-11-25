@@ -61,29 +61,24 @@ class _TrackedSocket(_ORIG_SOCKET_CLS):
 socket.socket = _TrackedSocket
 
 def abort_all_network_sockets():
-    """Cierra forzosamente todos los sockets TCP abiertos en cualquier hilo.
-    Despierta inmediatamente (<1ms) hilos bloqueados en recv()/connect() de requests/urllib/urllib3."""
+    """Cierra limpiamente los sockets TCP abiertos registrados por Python sin usar llamadas
+    nativas de C (evita doble cierre de handles OS en Windows x64/Kodi)."""
     try:
         with _OPEN_SOCKETS_LOCK:
             socks = list(_OPEN_SOCKETS)
             _OPEN_SOCKETS.clear()
         for s in socks:
             try:
-                fd = -1
-                try:
-                    fd = s.fileno()
-                except Exception:
-                    pass
-                try:
-                    s.shutdown(socket.SHUT_RDWR)
-                except Exception:
-                    pass
-                if fd >= 0 and sys.platform == 'win32':
-                    try:
-                        import ctypes
-                        ctypes.windll.ws2_32.closesocket(ctypes.c_uint(fd))
-                    except Exception:
-                        pass
+                if hasattr(s, 'fileno') and s.fileno() < 0:
+                    continue
+            except Exception:
+                continue
+            try:
+                s.settimeout(0.01)
+            except Exception:
+                pass
+            try:
+                s.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
             try:
@@ -1162,6 +1157,18 @@ def _release_search_lock_atomic():
         pass
 
 _active_playback_monitor_thread = None
+_ACTIVE_BG_THREADS = []
+_ACTIVE_BG_THREADS_LOCK = threading.Lock()
+
+def _register_bg_thread(th):
+    if not th:
+        return
+    try:
+        with _ACTIVE_BG_THREADS_LOCK:
+            _ACTIVE_BG_THREADS[:] = [t for t in _ACTIVE_BG_THREADS if t.is_alive()]
+            _ACTIVE_BG_THREADS.append(th)
+    except Exception:
+        pass
 
 def wait_for_playback_monitor():
     """Mantiene vivo el hilo principal del invoker de Python mientras dure la reproducción.
@@ -1174,6 +1181,23 @@ def wait_for_playback_monitor():
         while _active_playback_monitor_thread.is_alive() and not mon.abortRequested():
             if mon.waitForAbort(0.25):
                 break
+    # Asegurar cierre limpio de recolectores/pipeline secundarios antes de salir del invoker
+    _BG_TASK_ABORT_EVENT.set()
+    try:
+        with _ACTIVE_BG_THREADS_LOCK:
+            pending = [t for t in _ACTIVE_BG_THREADS if t.is_alive()]
+            _ACTIVE_BG_THREADS.clear()
+        deadline = time.time() + 2.5
+        for t in pending:
+            rem = deadline - time.time()
+            if rem <= 0:
+                break
+            try:
+                t.join(timeout=min(0.5, rem))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False):
     if not media_key: return
@@ -1272,12 +1296,14 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Disparar pipeline secuencial en segundo plano (Fase 1: verificar enlaces faltantes del capitulo actual -> Fase 2: precargar siguiente capitulo)
         try:
-            threading.Thread(
+            _pipe_th = threading.Thread(
                 target=_start_playback_background_pipeline,
                 args=(_m_dict, my_token),
                 daemon=True,
                 name="MultiBridgePlaybackPipeline"
-            ).start()
+            )
+            _register_bg_thread(_pipe_th)
+            _pipe_th.start()
         except Exception as _pipe_e:
             xbmc.log("Multi Bridge: error lanzando pipeline en segundo plano: %s" % str(_pipe_e), xbmc.LOGWARNING)
 
@@ -1663,7 +1689,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             if mon.waitForAbort(0.25): break
 
         _BG_TASK_ABORT_EVENT.set()
-        abort_all_network_sockets()
+        if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+            abort_all_network_sockets()
         if _get_global_monitor_token() != my_token:
             xbmc.log("Multi Bridge: monitor anterior finalizado limpiamente (control transferido al nuevo servidor)", xbmc.LOGINFO)
             return
@@ -3982,6 +4009,115 @@ def _classify_resolution_height(h):
     return _classify_resolution(h=h)
 
 
+def _validate_mp4_integrity(chunk, clean_url, headers, req_to):
+    """Verifica la integridad estructural básica de un contenedor MP4/MOV.
+    Detecta átomos 'moov' duplicados/corruptos (que desplazan los offsets stco y provocan
+    errores de bitstream en MediaCodec y 47 canales / cuelgue de XAudio en FFmpeg)
+    y páginas HTML inyectadas tras la cabecera inicial."""
+    try:
+        if not chunk or len(chunk) < 12 or chunk[4:8] != b'ftyp':
+            return True
+        import struct
+        import requests
+        VALID_BOXES = {
+            b'ftyp', b'free', b'skip', b'wide', b'moov', b'mdat',
+            b'moof', b'meta', b'udta', b'uuid', b'sidx', b'styp', b'emsg', b'prft', b'pdin'
+        }
+        pos = 0
+        seen_moov = False
+        seen_mdat = False
+        moov_end = None
+        while pos + 8 <= len(chunk):
+            sz, typ = struct.unpack('>I4s', chunk[pos:pos + 8])
+            hdr_len = 8
+            if sz == 1 and pos + 16 <= len(chunk):
+                sz = struct.unpack('>Q', chunk[pos + 8:pos + 16])[0]
+                hdr_len = 16
+            if typ not in VALID_BOXES:
+                xbmc.log("Multi Bridge: MP4 inválido (box desconocido %r en offset %d): %s" % (typ, pos, clean_url), xbmc.LOGINFO)
+                return False
+            if sz != 0 and sz < hdr_len:
+                return False
+            if typ == b'moov':
+                if seen_moov:
+                    xbmc.log("Multi Bridge: MP4 corrupto (átomo MOOV duplicado en chunk inicial): %s" % clean_url, xbmc.LOGWARNING)
+                    return False
+                seen_moov = True
+                if pos + hdr_len + 8 <= len(chunk):
+                    c_sz, c_typ = struct.unpack('>I4s', chunk[pos + hdr_len:pos + hdr_len + 8])
+                    if c_sz < 8 or (sz > 0 and c_sz > sz) or not all(32 <= b < 127 for b in c_typ):
+                        xbmc.log("Multi Bridge: MP4 corrupto (sub-átomo MOOV inválido %r): %s" % (c_typ, clean_url), xbmc.LOGWARNING)
+                        return False
+                if sz > 0:
+                    moov_end = pos + sz
+            elif typ == b'mdat':
+                seen_mdat = True
+                data_start = pos + hdr_len
+                if data_start + 16 <= len(chunk):
+                    pay = chunk[data_start:data_start + 64]
+                    pay_low = pay.lower()
+                    if b'<!doctype' in pay_low or b'<html' in pay_low or pay[4:8] == b'moov':
+                        xbmc.log("Multi Bridge: MP4 corrupto (payload mdat inválido): %s" % clean_url, xbmc.LOGWARNING)
+                        return False
+                break
+            if sz == 0:
+                break
+            pos += sz
+
+        # Faststart MP4: moov supera los primeros 64KB -> comprobar qué átomo sigue a moov
+        if seen_moov and not seen_mdat and moov_end and moov_end >= len(chunk) and moov_end < 80 * 1024 * 1024:
+            probe_pos = moov_end
+            for _hop in range(4):
+                r_probe = None
+                pb = b''
+                try:
+                    hp = dict(headers)
+                    hp['Range'] = f'bytes={probe_pos}-{probe_pos + 63}'
+                    p_to = (min(2.0, req_to[0] if isinstance(req_to, tuple) else float(req_to)),
+                            min(2.0, req_to[1] if isinstance(req_to, tuple) else float(req_to)))
+                    r_probe = requests.get(clean_url, headers=hp, stream=True, timeout=p_to, allow_redirects=True, verify=False)
+                    if r_probe.status_code != 206:
+                        break
+                    pb = r_probe.raw.read(64) if hasattr(r_probe, 'raw') else (r_probe.content[:64] if r_probe.content else b'')
+                except Exception:
+                    break
+                finally:
+                    if r_probe is not None:
+                        try: r_probe.close()
+                        except Exception: pass
+                if not pb or len(pb) < 8:
+                    break
+                pb_low = pb[:48].lower()
+                if b'<!doctype' in pb_low or b'<html' in pb_low:
+                    xbmc.log("Multi Bridge: MP4 corrupto (HTML tras moov): %s" % clean_url, xbmc.LOGWARNING)
+                    return False
+                psz, ptyp = struct.unpack('>I4s', pb[:8])
+                phdr = 8
+                if psz == 1 and len(pb) >= 16:
+                    psz = struct.unpack('>Q', pb[8:16])[0]
+                    phdr = 16
+                if ptyp == b'moov':
+                    xbmc.log("Multi Bridge: MP4 corrupto (átomo MOOV duplicado en offset %d): %s" % (probe_pos, clean_url), xbmc.LOGWARNING)
+                    return False
+                if ptyp not in VALID_BOXES or (psz != 0 and psz < phdr):
+                    xbmc.log("Multi Bridge: MP4 corrupto (átomo %r inválido tras moov en offset %d): %s" % (ptyp, probe_pos, clean_url), xbmc.LOGWARNING)
+                    return False
+                if ptyp == b'mdat':
+                    if len(pb) >= phdr + 12:
+                        mpay = pb[phdr:phdr + 48]
+                        if b'<!doctype' in mpay.lower() or b'<html' in mpay.lower() or mpay[4:8] == b'moov':
+                            xbmc.log("Multi Bridge: MP4 corrupto (mdat contiene HTML/moov en offset %d): %s" % (probe_pos, clean_url), xbmc.LOGWARNING)
+                            return False
+                    break
+                if ptyp in (b'free', b'skip', b'wide', b'meta', b'udta', b'uuid') and 8 <= psz <= 2 * 1024 * 1024:
+                    probe_pos += psz
+                else:
+                    break
+        return True
+    except Exception:
+        return True
+
+
 def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
     """Verifica si la URL directa responde y entrega multimedia (evitando servidores caídos como 522/404),
     y detecta la resolución REAL de vídeo (1080p, 720p, 480p, 360p, 240p) leyendo los metadatos HLS o contenedores MP4/MKV.
@@ -4014,17 +4150,22 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
         if is_hls:
             if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                 return False, None
+            r = None
+            manifest_text = ''
             try:
                 r = requests.get(clean_url, headers=headers, timeout=req_to, verify=False)
+                if r.status_code >= 400:
+                    xbmc.log("Multi Bridge: URL HLS descartada por HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
+                    return False, None
+                manifest_text = r.text or ''
             except Exception as e_m3u8:
                 xbmc.log("Multi Bridge: URL HLS inalcanzable (%s): %s" % (clean_url, e_m3u8), xbmc.LOGINFO)
                 return False, None
+            finally:
+                if r is not None:
+                    try: r.close()
+                    except Exception: pass
 
-            if r.status_code >= 400:
-                xbmc.log("Multi Bridge: URL HLS descartada por HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
-                return False, None
-
-            manifest_text = r.text or ''
             if '#EXTM3U' not in manifest_text and '#EXT-X' not in manifest_text:
                 xbmc.log("Multi Bridge: URL HLS descartada por contenido inválido: %s" % clean_url, xbmc.LOGINFO)
                 return False, None
@@ -4050,6 +4191,7 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                 if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                     return False, None
                 if '.m3u8' in sub_url.lower() or not any(ext in sub_url.lower() for ext in ('.ts', '.m4s', '.mp4')):
+                    r_var = None
                     try:
                         r_var = requests.get(sub_url, headers=headers, timeout=req_to, verify=False)
                         if r_var.status_code >= 400:
@@ -4068,10 +4210,15 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                     except Exception as e_sub:
                         xbmc.log("Multi Bridge: error al leer sub-playlist HLS (%s): %s" % (sub_url, e_sub), xbmc.LOGINFO)
                         return False, None
+                    finally:
+                        if r_var is not None:
+                            try: r_var.close()
+                            except Exception: pass
 
                 # Probar el segmento con HEAD o GET Range
                 if xbmc.Monitor().abortRequested() or _BG_TASK_ABORT_EVENT.is_set():
                     return False, None
+                r_seg = None
                 try:
                     h2 = dict(headers)
                     h2['Range'] = 'bytes=0-65535'
@@ -4079,14 +4226,18 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                     if r_seg.status_code in (401, 403, 404, 410, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526) or r_seg.status_code >= 400:
                         xbmc.log("Multi Bridge: segmento HLS descartado por HTTP %d: %s" % (r_seg.status_code, sub_url), xbmc.LOGINFO)
                         return False, None
-                    if not detected_res:
-                        seg_chunk = r_seg.raw.read(65536) if hasattr(r_seg, 'raw') else (r_seg.content[:65536] if r_seg.content else b'')
-                        if seg_chunk:
-                            w_s, h_s = _parse_ts_sps(seg_chunk)
-                            if not h_s:
-                                w_s, h_s = _parse_mp4_resolution(seg_chunk)
-                            if h_s or w_s:
-                                detected_res = _classify_resolution(w_s, h_s)
+                    seg_chunk = r_seg.raw.read(65536) if hasattr(r_seg, 'raw') else (r_seg.content[:65536] if r_seg.content else b'')
+                    if seg_chunk:
+                        seg_low = seg_chunk[:200].lower()
+                        if b'<!doctype' in seg_low or b'<html' in seg_low:
+                            xbmc.log("Multi Bridge: segmento HLS devolvió HTML inválido: %s" % sub_url, xbmc.LOGINFO)
+                            return False, None
+                    if not detected_res and seg_chunk:
+                        w_s, h_s = _parse_ts_sps(seg_chunk)
+                        if not h_s:
+                            w_s, h_s = _parse_mp4_resolution(seg_chunk)
+                        if h_s or w_s:
+                            detected_res = _classify_resolution(w_s, h_s)
                 except Exception as e_seg:
                     _err_s = str(e_seg).lower()
                     if any(_b in _err_s for _b in ('401', '403', 'forbidden', 'unauthorized', 'ssl', 'certificate', 'connection reset', 'connection refused')):
@@ -4094,6 +4245,10 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                         return False, None
                     # Si dio lentitud genérica pero el manifiesto respondió 200 OK, permitir que Kodi pruebe con su búfer
                     xbmc.log("Multi Bridge: segmento HLS lento o advertencia (%s: %s), pero playlist m3u8 es válida -> conservando enlace" % (sub_url, e_seg), xbmc.LOGINFO)
+                finally:
+                    if r_seg is not None:
+                        try: r_seg.close()
+                        except Exception: pass
 
             # Si no se detecto resolucion por etiqueta RESOLUTION, buscar patrones en la URL
             if not detected_res:
@@ -4118,26 +4273,35 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
         detected_res = None
         h_range = dict(headers)
         h_range['Range'] = 'bytes=0-65535'
-        r = requests.get(clean_url, headers=h_range, stream=True, timeout=req_to, allow_redirects=True, verify=False)
-
-        if r.status_code in (401, 403, 404, 410) or r.status_code >= 500:
-            xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
-            return False, None
-
-        ct = (r.headers.get('Content-Type') or '').lower()
+        r = None
+        ct = ''
         chunk = b''
         try:
-            chunk = r.raw.read(65536) if hasattr(r, 'raw') else (r.content[:65536] if r.content else b'')
-        except Exception:
-            pass
+            r = requests.get(clean_url, headers=h_range, stream=True, timeout=req_to, allow_redirects=True, verify=False)
+            if r.status_code in (401, 403, 404, 410) or r.status_code >= 500:
+                xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
+                return False, None
+            ct = (r.headers.get('Content-Type') or '').lower()
+            try:
+                chunk = r.raw.read(65536) if hasattr(r, 'raw') else (r.content[:65536] if r.content else b'')
+            except Exception:
+                pass
+        finally:
+            if r is not None:
+                try: r.close()
+                except Exception: pass
 
         # Descartar si el servidor no entregó datos reales (evita que proxies colgados como megaserver congelen Kodi)
         if not chunk or len(chunk) < 64:
             xbmc.log("Multi Bridge: URL descartada por no entregar bytes de vídeo (%s bytes): %s" % (len(chunk) if chunk else 0, clean_url), xbmc.LOGINFO)
             return False, None
 
-        if 'text/html' in ct and (b'<!doctype' in chunk[:100].lower() or b'<html' in chunk[:100].lower()):
+        chunk_low = chunk[:200].lower()
+        if b'<!doctype' in chunk_low or b'<html' in chunk_low or b'<head' in chunk_low:
             xbmc.log("Multi Bridge: URL descartada por devolver HTML en vez de stream: %s" % clean_url, xbmc.LOGINFO)
+            return False, None
+
+        if not _validate_mp4_integrity(chunk, clean_url, headers, req_to):
             return False, None
 
         if chunk:
@@ -9631,7 +9795,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         try:
             sync_tmdbhelper_playerstring(meta)
             if _res_li[0] is not None:
-                _ensure_playback_headers_on_item(_res_li[0], server_name=server, page_url=getattr(link, 'url', '') or '')
+                _media_url = _ensure_playback_headers_on_item(_res_li[0], server_name=server, page_url=getattr(link, 'url', '') or '') or _res_li[0].getPath() or _media_url
                 set_listitem_info(_res_li[0], meta=meta)
             player.play(_media_url, _res_li[0])
         except Exception as _pe:
@@ -9639,36 +9803,24 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             continue
 
         # ── Step 3: Monitor 3 min reales de reloj ────────────────────────────
-        # Esperar hasta 15 s a que el reproductor arranque.
-        # Si el usuario para el reproductor durante este tiempo, se detecta
-        # como parada manual y se muestra el diálogo de confirmación.
-        started = False
-        user_stopped_early = False
-        was_playing_briefly = False  # el reproductor llegó a iniciar brevemente
-        for _ in range(150):
-            if xbmc.Monitor().abortRequested():
-                user_stopped_early = True
-                break
-            if player.isPlaying():
-                started = True
-                was_playing_briefly = True
-                break
-            # Detectar si el reproductor empezó y el usuario lo paró
-            # (isPlayingVideo puede estar en False aunque player.isPlaying() falló)
-            xbmc.sleep(100)
+        mon_w = xbmc.Monitor()
+        started = _wait_for_playback_progress(
+            player=player,
+            mon=mon_w,
+            timeout=15.0,
+            seek_to_time=0.0,
+            server_name=server
+        )
+        user_stopped_early = mon_w.abortRequested()
 
         if user_stopped_early:
             _cancelled_by_user = True
             break
 
         if not started:
-            xbmc.log('Multi Bridge autoplay [%d/%d] %s nunca arrancó / usuario paró en arranque (15s)' % (
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s nunca arrancó / fallo de códec (15s)' % (
                 idx+1, total_att, server), xbmc.LOGINFO)
-            try: player.stop()
-            except: pass
-            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-            except: pass
-            xbmc.sleep(400)
+            _stop_player_cleanly(player)
 
             _restore_dialog_noblock()
 
@@ -9923,16 +10075,49 @@ def _ensure_playback_headers_on_item(listitem, server_name="", page_url=""):
             return ""
 
 
+def _stop_player_cleanly(player=None):
+    """Detiene el reproductor de Kodi, limpia la lista de reproducción y espera a que
+    CVideoPlayer y el sink de audio (XAudio/AudioTrack/ALSA) liberen sus hilos antes de continuar."""
+    if player is None:
+        player = xbmc.Player()
+    try:
+        if xbmc.getCondVisibility("Player.Paused"):
+            try: player.pause()
+            except Exception: pass
+            xbmc.sleep(50)
+    except Exception:
+        pass
+    try:
+        if player.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+            player.stop()
+    except Exception:
+        pass
+    try:
+        xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+    except Exception:
+        pass
+    mon = xbmc.Monitor()
+    for _ in range(60):  # máx 3.0s esperando cierre limpio
+        try:
+            if not player.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
+                break
+        except Exception:
+            break
+        if mon.waitForAbort(0.05):
+            break
+    xbmc.sleep(250)
+
+
 def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name=""):
     """Espera a que Kodi inicie la reproducción y verifica PROGRESIÓN REAL de reloj/fotogramas.
 
     Protege contra falsos positivos donde `player.isPlayingVideo()` devuelve True pero el
     códec de vídeo está fallando (ej. CBitstreamConverter::Convert error en Android MediaCodec
-    c2.mtk.avc.decoder, reloj estancado en 0.0s sin fotogramas renderizados ni audio válido).
+    o FFmpeg/XAudio colgado en Windows, reloj estancado en 0.0s sin fotogramas ni audio válido).
 
     Retorna True solo si el vídeo arranca y el reloj de reproducción avanza efectivamente.
     Retorna False si expira el tiempo, se abre diálogo de error de Kodi, el reproductor cae,
-    o el tiempo se queda estancado en 0.0s (codec freeze).
+    o el tiempo se queda estancado (codec freeze).
     """
     if player is None:
         player = xbmc.Player()
@@ -9961,11 +10146,14 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
         # Comprobar si el vídeo ya abrió demuxer y levantó el hilo de reproducción
         if player.isPlayingVideo():
             # STREAM ABIERTO: Verificar avance real del reloj de reproducción
-            t_chk_start = time.time()
+            t_first_playing = time.time()
+            t_chk_start = t_first_playing
             initial_t = -1.0
-            max_stall_time = 4.5  # Si pasa este tiempo sin que el reloj avance de 0s, es fallo de códec/freeze
+            max_stall_time = 3.5     # límite sin buffering
+            max_abs_stall_time = 5.5 # límite absoluto incluso si Player.Buffering parpadea
+            cur_t = -1.0
 
-            while (time.time() - t_chk_start) < max_stall_time:
+            while (time.time() - t_chk_start) < max_stall_time and (time.time() - t_first_playing) < max_abs_stall_time:
                 if mon.abortRequested():
                     return False
                 if _is_kodi_modal_dialog_open():
@@ -9979,7 +10167,6 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
                     xbmc.log("Multi Bridge Watchdog: el reproductor se cerró repentinamente tras iniciar [%s]" % server_name, xbmc.LOGINFO)
                     return False
 
-                cur_t = -1.0
                 try:
                     cur_t = float(player.getTime())
                 except Exception:
@@ -9988,17 +10175,11 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
                 if initial_t < 0 and cur_t >= 0.0:
                     initial_t = cur_t
 
-                # Criterio de progreso real:
-                # Si se reanuda (seek_to_time > 2.0): requiere que el reloj alcance >= 0.5s y avance
-                if seek_to_time > 2.0:
-                    if cur_t >= 0.5 and (cur_t > (initial_t + 0.25) or cur_t >= (seek_to_time - 1.0)):
-                        return True
-                else:
-                    # Inicio desde 0s: el reloj debe haber avanzado más allá de 0.35s o haber progresado de forma medible
-                    if cur_t >= 0.35 or (initial_t >= 0.0 and (cur_t - initial_t) >= 0.25 and cur_t > 0.05):
-                        return True
+                # Criterio universal de progreso real: reloj >= 0.35s y con avance medible >= 0.20s
+                if cur_t >= 0.35 and (initial_t < 0 or (cur_t - initial_t) >= 0.20):
+                    return True
 
-                # Si Kodi está buffereando activamente, reiniciar ventana de espera de progreso
+                # Si Kodi está buffereando activamente, extender margen hasta max_abs_stall_time (nunca infinito)
                 try:
                     if xbmc.getCondVisibility("Player.Buffering"):
                         t_chk_start = time.time()
@@ -10009,7 +10190,7 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
 
             # Si el bucle de verificación de progreso expiró sin avance real:
             xbmc.log("Multi Bridge Watchdog: fallo de decodificación o freeze de códec detectado (isPlayingVideo=True pero getTime()=%.2fs tras %.1fs) [%s]" % (
-                cur_t if 'cur_t' in locals() else -1.0, max_stall_time, server_name), xbmc.LOGWARNING)
+                cur_t, time.time() - t_first_playing, server_name), xbmc.LOGWARNING)
             return False
 
         # Estado de carga / buffering
@@ -10318,6 +10499,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         except Exception as _ce:
             xbmc.log("Multi Bridge Fast Autoplay: error leyendo caché previa: %s" % _ce, xbmc.LOGWARNING)
 
+    cached_failed_urls = set()
     if cached_links:
         sorted_cached = _filter_and_sort_links(cached_links)
         normal_cached = [
@@ -10337,33 +10519,42 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             p_dialog_c.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
             p_dialog_c.update(25)
 
-            fast_link = None
-            fast_li = None
-            fast_url = ''
+            handle_absorbed = False
+            resume_prompted = False
+            seek_to_time = 0
+            cached_play_attempts = 0
+            max_cached_play_attempts = 3
+            player = xbmc.Player()
+            mon = xbmc.Monitor()
 
             for cand in normal_cached:
-                if p_dialog_c.iscanceled():
+                if cached_play_attempts >= max_cached_play_attempts:
+                    break
+                if p_dialog_c and p_dialog_c.iscanceled():
                     xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                     try: p_dialog_c.close()
                     except: pass
-                    if handle >= 0:
+                    if not handle_absorbed and handle >= 0:
                         try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
                         except: pass
                     return False
 
+                cand_u_key = _safe_str(getattr(cand, 'url', '')) or str(id(cand))
                 srv_name = _get_link_server_name(cand)
                 lang_raw = _format_language(cand)
                 cand_qual = _format_quality(cand)
-                try:
-                    p_dialog_c.set_stream_info(
-                        server=srv_name,
-                        quality=cand_qual or '1080p',
-                        language=lang_raw or 'Latino',
-                        channel='',
-                        status='Iniciando reproducción...'
-                    )
-                except Exception: pass
-                p_dialog_c.update(60)
+                if p_dialog_c:
+                    try:
+                        p_dialog_c.set_stream_info(
+                            server=srv_name,
+                            quality=cand_qual or '1080p',
+                            language=lang_raw or 'Latino',
+                            channel='',
+                            status='Iniciando reproducción...'
+                        )
+                    except Exception: pass
+                    try: p_dialog_c.update(60)
+                    except Exception: pass
 
                 _res_box = [False, None]
                 def _do_res_cached(c=cand):
@@ -10379,11 +10570,11 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 cand_timeout = max(10.0, float(_get_int_setting('autoplay_resolve_timeout', 12)))
                 res_start = time.time()
                 while _th_c.is_alive() and (time.time() - res_start) < cand_timeout:
-                    if p_dialog_c.iscanceled():
+                    if p_dialog_c and p_dialog_c.iscanceled():
                         xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                         try: p_dialog_c.close()
                         except: pass
-                        if handle >= 0:
+                        if not handle_absorbed and handle >= 0:
                             try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
                             except: pass
                         return False
@@ -10391,154 +10582,158 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 _th_c.join(timeout=0.2)
 
                 ok, li = _res_box[0], _res_box[1]
-                if ok and li:
-                    m_url = ''
-                    try: m_url = li.getPath()
+                if not ok or not li:
+                    cached_failed_urls.add(cand_u_key)
+                    continue
+
+                m_url = ''
+                try: m_url = li.getPath()
+                except: pass
+                is_ok, real_res = _check_stream_url_playable(m_url, server_name=srv_name, timeout=3.0)
+                if not m_url or not is_ok:
+                    cached_failed_urls.add(cand_u_key)
+                    xbmc.log("Multi Bridge Fast Autoplay (Caché): candidato %s no superó verificación de stream" % srv_name, xbmc.LOGINFO)
+                    continue
+
+                if real_res and not _is_cam_quality(cand):
+                    cand.real_quality = real_res
+                    cand.quality = real_res
+                    try: li.setInfo('video', {'quality': real_res})
                     except: pass
-                    is_ok, real_res = _check_stream_url_playable(m_url, server_name=srv_name, timeout=3.0)
-                    if m_url and is_ok:
-                        if real_res and not _is_cam_quality(cand):
-                            cand.real_quality = real_res
-                            cand.quality = real_res
-                            try: li.setInfo('video', {'quality': real_res})
-                            except: pass
-                        _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=getattr(cand, 'url', '') or '')
-                        fast_link = cand
-                        fast_li = li
-                        # BUG FIX: usar la URL actualizada del listitem DESPUÉS de sanitizar cabeceras
-                        # (m_url es la URL antigua pre-sanitización sin User-Agent, que causaba fallo de CDN en Android)
-                        try:
-                            fast_url = li.getPath() or m_url
-                        except Exception:
-                            fast_url = m_url
-                        q_show = _format_quality(cand)
-                        lang_fmt = _format_language(cand)
-                        try:
-                            p_dialog_c.set_stream_info(
-                                server=srv_name,
-                                quality=q_show or '1080p',
-                                language=lang_fmt or 'Latino',
-                                channel='',
-                                status='Iniciando reproducción...'
-                            )
-                        except Exception: pass
+                _ensure_playback_headers_on_item(li, server_name=srv_name, page_url=getattr(cand, 'url', '') or '')
+                try:
+                    fast_url = li.getPath() or m_url
+                except Exception:
+                    fast_url = m_url
+                if not fast_url:
+                    cached_failed_urls.add(cand_u_key)
+                    continue
+
+                if p_dialog_c:
+                    q_show = _format_quality(cand)
+                    lang_fmt = _format_language(cand)
+                    try:
+                        p_dialog_c.set_stream_info(
+                            server=srv_name,
+                            quality=q_show or '1080p',
+                            language=lang_fmt or 'Latino',
+                            channel='',
+                            status='Iniciando reproducción...'
+                        )
                         p_dialog_c.update(100)
-                        break
-                    else:
-                        xbmc.log("Multi Bridge Fast Autoplay (Caché): candidato %s no superó verificación de stream" % srv_name, xbmc.LOGINFO)
+                    except Exception: pass
+                    try: p_dialog_c.close(); del p_dialog_c
+                    except: pass
+                    p_dialog_c = None
+                    try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+                    except: pass
 
-            try: p_dialog_c.close(); del p_dialog_c
-            except: pass
-            try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
-            except: pass
+                if not handle_absorbed:
+                    handle_absorbed = True
+                    _guard_stop = [False]
+                    def _suppress():
+                        for _ in range(30):
+                            if _guard_stop[0]: break
+                            try:
+                                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                                xbmc.executebuiltin('Dialog.Close(error,true)')
+                            except: pass
+                            time.sleep(0.1)
+                    _gt = threading.Thread(target=_suppress, daemon=True)
+                    _gt.start()
 
-            if fast_link and fast_li and fast_url:
-                _guard_stop = [False]
-                def _suppress():
-                    for _ in range(30):
-                        if _guard_stop[0]: break
-                        try:
-                            xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                            xbmc.executebuiltin('Dialog.Close(error,true)')
-                        except: pass
-                        time.sleep(0.1)
-                _gt = threading.Thread(target=_suppress, daemon=True)
-                _gt.start()
-
-                _absorb = xbmcgui.ListItem()
-                try: xbmcplugin.setResolvedUrl(int(handle), False, _absorb)
-                except: pass
-                xbmc.sleep(250)
-                _guard_stop[0] = True
-                try: _gt.join(timeout=0.5)
-                except: pass
+                    _absorb = xbmcgui.ListItem()
+                    try: xbmcplugin.setResolvedUrl(int(handle), False, _absorb)
+                    except: pass
+                    xbmc.sleep(250)
+                    _guard_stop[0] = True
+                    try: _gt.join(timeout=0.5)
+                    except: pass
 
                 if cached_item:
-                    _enrich_link_metadata(fast_link, meta, cached_item)
-                media_key = _get_media_key(meta, fast_link)
-                is_s = bool(meta.get('season') and meta.get('episode'))
-                bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s,
-                                  season=meta.get('season'), episode=meta.get('episode'))
-                seek_to_time = 0
-                if bm:
-                    r_time = float(bm.get('resume_time', 0))
-                    if r_time > 10:
-                        mins = int(r_time // 60); secs = int(r_time % 60)
-                        hrs = mins // 60; mins = mins % 60
-                        time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                        t_title = meta.get('title') or getattr(cached_item, 'title', '') or 'este video'
-                        ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
-                        if ans == 'cancel':
-                            xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
-                            if handle >= 0:
-                                try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                                except: pass
-                            return False
-                        elif ans == 'resume':
-                            seek_to_time = r_time
-                        elif ans == 'restart':
-                            seek_to_time = 0
+                    _enrich_link_metadata(cand, meta, cached_item)
+                media_key = _get_media_key(meta, cand)
+
+                if not resume_prompted:
+                    resume_prompted = True
+                    is_s = bool(meta.get('season') and meta.get('episode'))
+                    bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s,
+                                      season=meta.get('season'), episode=meta.get('episode'))
+                    if bm:
+                        r_time = float(bm.get('resume_time', 0))
+                        if r_time > 10:
+                            mins = int(r_time // 60); secs = int(r_time % 60)
+                            hrs = mins // 60; mins = mins % 60
+                            time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                            t_title = meta.get('title') or getattr(cached_item, 'title', '') or 'este video'
+                            ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+                            if ans == 'cancel':
+                                xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                                return False
+                            elif ans == 'resume':
+                                seek_to_time = r_time
+                            elif ans == 'restart':
+                                seek_to_time = 0
 
                 sync_tmdbhelper_playerstring(meta)
-                set_listitem_info(fast_li, meta=meta)
+                set_listitem_info(li, meta=meta)
                 if seek_to_time > 10:
-                    fast_li.setProperty('StartOffset', str(seek_to_time))
-                    fast_li.setProperty('ResumeTime', str(seek_to_time))
+                    li.setProperty('StartOffset', str(seek_to_time))
+                    li.setProperty('ResumeTime', str(seek_to_time))
                     try:
-                        vt = fast_li.getVideoInfoTag()
+                        vt = li.getVideoInfoTag()
                         if vt: vt.setResumePoint(float(seek_to_time))
                     except Exception: pass
 
-                final_cached = [fast_link] + [l for l in cached_links if getattr(l, 'url', None) != getattr(fast_link, 'url', None)]
-                try:
-                    _store_ram_search_cache(final_cached, cached_item, meta, engine)
-                    _save_search_cache_atomic({
-                        'item': _serialize_item(cached_item),
-                        'links': [_serialize_item(l) for l in final_cached],
-                        'meta': meta,
-                        'engine': engine
-                    })
-                except Exception: pass
+                cached_play_attempts += 1
+                xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea desde CACHÉ con %s! (intento %d/%d)" % (
+                    srv_name, cached_play_attempts, max_cached_play_attempts), xbmc.LOGINFO)
+                player.play(fast_url, li)
 
-                xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea desde CACHÉ con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
-                player = xbmc.Player()
-                player.play(fast_url, fast_li)
-                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
-
-                srv_name_fast = _get_link_server_name(fast_link)
-                mon = xbmc.Monitor()
                 watchdog_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
                 if watchdog_timeout < 10: watchdog_timeout = 10
                 if watchdog_timeout > 16: watchdog_timeout = 16
 
-                # Usar watchdog con verificación de progreso real de reloj (protege contra freeze de MediaCodec en Android)
                 video_started = _wait_for_playback_progress(
                     player=player, mon=mon,
                     timeout=watchdog_timeout,
                     seek_to_time=seek_to_time,
-                    server_name=srv_name_fast
+                    server_name=srv_name
                 )
-                user_aborted = mon.abortRequested()
-
-                if user_aborted:
+                if mon.abortRequested():
                     return True
 
                 if video_started and player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
-                    xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada!", xbmc.LOGINFO)
+                    xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada [%s]!" % srv_name, xbmc.LOGINFO)
+                    final_cached = [cand] + [l for l in cached_links if getattr(l, 'url', None) != getattr(cand, 'url', None)]
+                    try:
+                        _store_ram_search_cache(final_cached, cached_item, meta, engine)
+                        _save_search_cache_atomic({
+                            'item': _serialize_item(cached_item),
+                            'links': [_serialize_item(l) for l in final_cached],
+                            'meta': meta,
+                            'engine': engine
+                        })
+                    except Exception: pass
                     try:
                         xbmc.executebuiltin('Dialog.Close(busydialog,true)')
                         xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                     except Exception: pass
+                    start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
                     wait_for_playback_monitor()
                     return True
 
-                xbmc.log("Multi Bridge Fast Autoplay: enlace en caché no arrancó en Kodi, continuando con búsqueda en canales...", xbmc.LOGINFO)
-                abort_all_network_sockets()
-                try: player.stop()
+                xbmc.log("Multi Bridge Fast Autoplay: candidato en caché [%s] falló al arrancar -> limpiando y probando siguiente..." % srv_name, xbmc.LOGWARNING)
+                cached_failed_urls.add(cand_u_key)
+                _record_session_failed_link(cand, media_key=media_key, meta=meta)
+                _stop_player_cleanly(player)
+
+            if p_dialog_c:
+                try: p_dialog_c.close(); del p_dialog_c
                 except: pass
-                try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+                try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                 except: pass
-                xbmc.sleep(300)
+            xbmc.log("Multi Bridge Fast Autoplay: enlaces en caché no arrancaron en Kodi, continuando con búsqueda en canales...", xbmc.LOGINFO)
 
     ch_data = load_channels_data()
     engine_channels = ch_data.get('channels', {}).get(engine, {})
@@ -10627,7 +10822,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     start_time = time.time()
     timeout_secs = min(60, max(10, _get_int_setting('search_timeout', 40)))
 
-    tested_urls = set()
+    tested_urls = set(cached_failed_urls)
     fast_link = None
     fast_li = None
     fast_url = ''
@@ -10925,9 +11120,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     player = xbmc.Player()
     player.play(fast_url, fast_li)
 
-    # Iniciar monitor de reproducción (para bookmarks y detección de pausa)
-    start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
-
     search_params = (is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms, p_tmdb, p_imdb)
     # Lanzar el recolector en segundo plano para completar los demás canales suavemente
     th_bg = threading.Thread(
@@ -10936,12 +11128,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         daemon=True
     )
     th_bg.name = "FastAutoplayBgCollector"
+    _register_bg_thread(th_bg)
     th_bg.start()
 
     # Bucle de supervisión del vigilante
     active_link = fast_link
     current_attempt = 1
-    max_watchdog_attempts = 3
+    max_watchdog_attempts = 4
 
     while current_attempt <= max_watchdog_attempts:
         mon = xbmc.Monitor()
@@ -10952,7 +11145,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         active_srv_name = _get_link_server_name(active_link)
 
         # Usar watchdog con verificación de progreso real de reloj
-        # (protege contra freeze de MediaCodec en Android donde isPlayingVideo()=True pero getTime() no avanza)
+        # (protege contra freeze de códec en cualquier SO donde isPlayingVideo()=True pero getTime() no avanza)
         video_started = _wait_for_playback_progress(
             player=player, mon=mon,
             timeout=watchdog_timeout,
@@ -10962,6 +11155,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         user_aborted = mon.abortRequested()
 
         if user_aborted:
+            _BG_TASK_ABORT_EVENT.set()
             return True
 
         if video_started and not _is_kodi_modal_dialog_open():
@@ -10971,20 +11165,18 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
                 xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
             except Exception: pass
+            # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
+            start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
             wait_for_playback_monitor()
             return True
 
-        # C) Si llegó aquí, transcurrió el timeout y el vídeo NUNCA arrancó (servidor caído / freeze)
+        # C) Si llegó aquí, transcurrió el timeout o falló la decodificación (servidor caído / freeze)
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: enlace [%s] no inició (timeout/servidor caído). Intento %d de %d..." % (
             _get_link_server_name(active_link), current_attempt, max_watchdog_attempts), xbmc.LOGWARNING)
 
-        # 1. Limpieza rigurosa previa al siguiente intento (garantiza 0 colisiones en CVideoPlayer y mata sockets zombie)
-        abort_all_network_sockets()
-        try: player.stop()
-        except: pass
-        try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-        except: pass
-        xbmc.sleep(300) # Pausa limpia para liberar sockets y demuxers
+        _record_session_failed_link(active_link, media_key=media_key, meta=meta)
+        # 1. Limpieza rigurosa previa al siguiente intento (garantiza 0 colisiones en CVideoPlayer/XAudio/MediaCodec)
+        _stop_player_cleanly(player)
 
         current_attempt += 1
         if current_attempt > max_watchdog_attempts:
@@ -11069,11 +11261,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             })
         except Exception: pass
 
-
-
-        # Iniciar monitor de reproducción (el nuevo token invalida automáticamente cualquier hilo previo)
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
-
         # Iniciar reproducción del nuevo enlace
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: reproduciendo automáticamente siguiente enlace: %s" % _get_link_server_name(active_link), xbmc.LOGINFO)
         _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
@@ -11081,6 +11268,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     # Si se agotaron los intentos sin exito, abrir lista de enlaces para el usuario y gestionar fallback
     if not player.isPlayingVideo():
+        _BG_TASK_ABORT_EVENT.set()
         xbmc.log("Multi Bridge Fast Autoplay: ningun enlace arranco en autoplay rapido", xbmc.LOGINFO)
         xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
         _cur_tmdb = str(meta.get('tmdb') or '')
@@ -13629,11 +13817,12 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
         wait_end = time.time() + 25.0
         while any(t.is_alive() for t in active_threads) and time.time() < wait_end:
             if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
-                abort_all_network_sockets()
+                if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+                    abort_all_network_sockets()
                 return
             time.sleep(0.1)
     finally:
-        if mon.abortRequested() or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
+        if mon.abortRequested() or _SHUTDOWN_REQUESTED:
             abort_all_network_sockets()
         for _th in active_threads:
             try:
@@ -13848,9 +14037,7 @@ def _play_preloaded_episode(preloaded):
             return True
         else:
             xbmc.log("Multi Bridge Instant Play: Enlace %d (%s) no arrancó dentro de 10s. Deteniendo..." % (idx+1, srv), xbmc.LOGWARNING)
-            try: player.stop()
-            except: pass
-            xbmc.sleep(300)
+            _stop_player_cleanly(player)
 
     xbmc.log("Multi Bridge Instant Play: Los enlaces precargados no pudieron iniciar reproducción", xbmc.LOGWARNING)
     return False
