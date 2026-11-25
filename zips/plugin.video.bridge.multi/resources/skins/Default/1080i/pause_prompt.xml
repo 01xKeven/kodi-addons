@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog">
+    <defaultcontrol always="true">100</defaultcontrol>
+    <zorder>200</zorder>
+    <coordinates>
+        <system>1</system>
+        <left>0</left>
+        <top>0</top>
+    </coordinates>
+    <controls>
+        <!-- Backdrop invisible a pantalla completa para cerrar al tocar/hacer clic fuera -->
+        <control type="button" id="99">
+            <left>0</left><top>0</top>
+            <width>1920</width><height>1080</height>
+            <label></label>
+            <texturefocus colordiffuse="00FFFFFF">white.png</texturefocus>
+            <texturenofocus colordiffuse="00FFFFFF">white.png</texturenofocus>
+            <textcolor>00FFFFFF</textcolor>
+            <focusedcolor>00FFFFFF</focusedcolor>
+        </control>
+
+        <!-- TARJETA DEL POPUP DE PAUSA CON ESQUINAS REDONDEADAS Y ANIMACIÓN SUAVE -->
+        <control type="group" id="50">
+            <animation type="WindowOpen" reversible="false">
+                <effect type="fade" start="0" end="100" time="220" tween="sine" />
+                <effect type="slide" start="60,0" end="0,0" time="220" tween="quadratic" easing="out" />
+                <effect type="zoom" start="86" end="100" center="1705,984" time="220" tween="quadratic" easing="out" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="86" end="100" center="1705,86" time="220" tween="quadratic" easing="out" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+            </animation>
+            <animation type="WindowClose" reversible="false">
+                <effect type="fade" start="100" end="0" time="150" tween="sine" />
+                <effect type="zoom" start="100" end="90" center="1705,984" time="150" tween="quadratic" easing="in" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="100" end="90" center="1705,86" time="150" tween="quadratic" easing="in" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+            </animation>
+
+            <!-- Fondo oscuro con esquinas redondeadas -->
+            <control type="image" id="51">
+                <left>1529</left><top>938</top>
+                <width>356</width><height>92</height>
+                <texture border="20">dialog_bg.png</texture>
+                <colordiffuse>F40A0A0E</colordiffuse>
+            </control>
+
+            <!-- Borde dorado exterior con esquinas redondeadas -->
+            <control type="image" id="52">
+                <left>1529</left><top>938</top>
+                <width>356</width><height>92</height>
+                <texture border="20">dialog_border.png</texture>
+                <colordiffuse>FFCFA82C</colordiffuse>
+            </control>
+
+            <!-- Encabezado: ¿Cambiar enlace? | Servidor Calidad -->
+            <control type="label" id="53">
+                <left>1545</left><top>948</top>
+                <width>324</width><height>20</height>
+                <font>font10</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <align>left</align><aligny>center</aligny>
+                <scroll>false</scroll>
+                <label></label>
+            </control>
+
+            <!-- BOTÓN 0: CONTINUAR (ID 100) -->
+            <control type="button" id="100">
+                <left>1548</left><top>978</top>
+                <width>118</width><height>36</height>
+                <label>Continuar</label>
+                <font>font10</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <align>center</align><aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>101</onleft>
+                <onright>101</onright>
+                <onup>100</onup>
+                <ondown>100</ondown>
+            </control>
+            <control type="image" id="200">
+                <left>1548</left><top>978</top>
+                <width>118</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FF554418</colordiffuse>
+            </control>
+            <control type="image" id="300">
+                <left>1548</left><top>978</top>
+                <width>118</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FFCFA82C</colordiffuse>
+            </control>
+
+            <!-- BOTÓN 1: CAMBIAR (ID 101) -->
+            <control type="button" id="101">
+                <left>1676</left><top>978</top>
+                <width>118</width><height>36</height>
+                <label>Cambiar</label>
+                <font>font10</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <align>center</align><aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>100</onleft>
+                <onright>100</onright>
+                <onup>101</onup>
+                <ondown>101</ondown>
+            </control>
+            <control type="image" id="201">
+                <left>1676</left><top>978</top>
+                <width>118</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FF554418</colordiffuse>
+            </control>
+            <control type="image" id="301">
+                <left>1676</left><top>978</top>
+                <width>118</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FFCFA82C</colordiffuse>
+            </control>
+
+            <!-- BOTÓN 2: SIGUIENTE CAPÍTULO (ID 102) -->
+            <control type="button" id="102">
+                <left>1804</left><top>978</top>
+                <width>62</width><height>36</height>
+                <label></label>
+                <font>font10</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <align>center</align><aligny>center</aligny>
+                <pulseonselect>true</pulseonselect>
+                <onleft>101</onleft>
+                <onright>100</onright>
+                <onup>102</onup>
+                <ondown>102</ondown>
+            </control>
+            <control type="image" id="202">
+                <left>1804</left><top>978</top>
+                <width>62</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FF554418</colordiffuse>
+            </control>
+            <control type="image" id="302">
+                <left>1804</left><top>978</top>
+                <width>62</width><height>36</height>
+                <texture border="14">dialog_border.png</texture>
+                <colordiffuse>FFCFA82C</colordiffuse>
+            </control>
+
+            <!-- Icono siguiente episodio -->
+            <control type="image" id="112">
+                <left>1825</left><top>986</top>
+                <width>20</width><height>20</height>
+                <aspectratio align="center" aligny="center">keep</aspectratio>
+                <texture></texture>
+                <colordiffuse>FFCCCCCC</colordiffuse>
+            </control>
+
+            <!-- Rayo dorado si está precargado -->
+            <control type="image" id="113">
+                <left>1853</left><top>970</top>
+                <width>22</width><height>26</height>
+                <aspectratio align="center" aligny="center">keep</aspectratio>
+                <texture></texture>
+                <colordiffuse>FFFFD700</colordiffuse>
+            </control>
+        </control>
+    </controls>
+</window>

@@ -4134,15 +4134,35 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
     req_to = (min(2.5, float(timeout or 2.5)), min(2.5, float(timeout or 2.5)))
-    if 'okcdn.ru' in cu or str(server_name or '').lower() in ('okru', 'ok.ru'):
+    srv_low = str(server_name or '').lower()
+    if 'okcdn.ru' in cu or srv_low in ('okru', 'ok.ru'):
         headers['Referer'] = 'https://ok.ru/'
         req_to = (min(3.5, float(timeout or 3.5)), min(3.5, float(timeout or 3.5)))
+    elif 'dood' in srv_low or 'cloudatacdn' in cu or 'ds2play' in srv_low or 'playmogo' in cu:
+        headers['Referer'] = 'https://playmogo.com/'
+    elif 'streamtape' in srv_low or 'tapecontent' in cu:
+        headers['Referer'] = 'https://streamtape.com/'
+    elif 'voe' in srv_low:
+        headers['Referer'] = 'https://voe.sx/'
+    elif 'mixdrop' in srv_low:
+        headers['Referer'] = 'https://mixdrop.co/'
+    elif 'uqload' in srv_low:
+        headers['Referer'] = 'https://uqload.io/'
+    elif 'vidmoly' in srv_low:
+        headers['Referer'] = 'https://vidmoly.to/'
+    elif 'filelions' in srv_low:
+        headers['Referer'] = 'https://filelions.to/'
+    elif 'goodstream' in srv_low:
+        headers['Referer'] = 'https://goodstream.uno/'
     if '|' in stream_url:
         pipe_parts = stream_url.split('|', 1)[1]
         for h in pipe_parts.split('&'):
             if '=' in h:
                 hk, hv = h.split('=', 1)
-                headers[hk.strip()] = uparse.unquote_plus(hv.strip())
+                clean_hk = uparse.unquote_plus(hk.strip()).strip()
+                clean_hv = uparse.unquote_plus(hv.strip()).split('|')[0].strip()
+                if clean_hk and clean_hv and clean_hk.lower() != 'verifypeer':
+                    headers[clean_hk] = clean_hv
 
     try:
         import requests
@@ -4282,6 +4302,15 @@ def _check_stream_url_playable(stream_url, server_name='', timeout=3.0):
                 xbmc.log("Multi Bridge: URL descartada por código HTTP %d: %s" % (r.status_code, clean_url), xbmc.LOGINFO)
                 return False, None
             ct = (r.headers.get('Content-Type') or '').lower()
+            cr = (r.headers.get('Content-Range') or '').strip()
+            if '/' in cr:
+                try:
+                    tot_sz = int(cr.rsplit('/', 1)[1].strip())
+                    if 0 < tot_sz < 150000:
+                        xbmc.log("Multi Bridge: URL descartada por tamaño de vídeo inválido (%d bytes): %s" % (tot_sz, clean_url), xbmc.LOGINFO)
+                        return False, None
+                except Exception:
+                    pass
             try:
                 chunk = r.raw.read(65536) if hasattr(r, 'raw') else (r.content[:65536] if r.content else b'')
             except Exception:
@@ -4817,6 +4846,11 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
                             prep.quality = final_res
                             try: lnk.real_quality = final_res; lnk.quality = final_res
                             except: pass
+                        try:
+                            prep._bridge_verified = True
+                            lnk._bridge_verified = True
+                        except Exception:
+                            pass
                         return prep
         return None
     except Exception:
@@ -10347,25 +10381,46 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
     sorted_links = _filter_and_sort_links(dedup)
 
     auto_verify = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+    hide_captcha = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+    try:
+        setattr(playing_link, '_bridge_verified', True)
+    except Exception:
+        pass
+
+    p_url = _safe_str(getattr(playing_link, 'url', '') or '')
     verified_links = []
-    if xbmc.Player().isPlayingVideo():
-        xbmc.log("Multi Bridge Fast Autoplay: vídeo en reproducción activa, omitiendo verificación pesada en segundo plano para proteger el ancho de banda del stream.", xbmc.LOGINFO)
-        verified_links = sorted_links
+    pending_unverified = []
+
+    if auto_verify and xbmc.Player().isPlayingVideo():
+        # Vídeo en reproducción activa: NO meter enlaces sin verificar en 'links'.
+        # Guardar en 'links' únicamente el enlace en reproducción, torrents y enlaces ya verificados,
+        # y delegar los restantes a 'unverified_links' para que Fase 1 los verifique suavemente sin saturar la red.
+        xbmc.log("Multi Bridge Fast Autoplay: vídeo en reproducción activa, delegando %d enlace(s) a verificación pasiva (Fase 1) para no mostrar enlaces caídos." % len(sorted_links), xbmc.LOGINFO)
+        for l in sorted_links:
+            l_url = _safe_str(getattr(l, 'url', '') or '')
+            if (l_url and p_url and l_url == p_url) or l == playing_link:
+                continue
+            if _is_torrent_link(l) or getattr(l, '_bridge_verified', False):
+                verified_links.append(l)
+            elif _is_web_captcha_server(_get_link_server_name(l), l):
+                if not hide_captcha:
+                    pending_unverified.append(l)
+            else:
+                pending_unverified.append(l)
     elif auto_verify:
         xbmc.log("Multi Bridge Fast Autoplay: verificando %d enlaces en segundo plano suavemente..." % len(sorted_links), xbmc.LOGINFO)
         with silenced_dialogs():
             try:
                 v_res = _verify_links_headless(sorted_links, engine=engine, p_dialog=None)
-                verified_links = v_res if v_res else sorted_links
+                verified_links = v_res if v_res else []
             except Exception as _ve:
                 xbmc.log("Multi Bridge Fast Autoplay: error verificando en segundo plano: %s" % _ve, xbmc.LOGWARNING)
-                verified_links = sorted_links
+                verified_links = [l for l in sorted_links if _is_torrent_link(l) or getattr(l, '_bridge_verified', False)]
     else:
         verified_links = sorted_links
 
     # Enlace en reproducción siempre en índice 0
     final_links = [playing_link]
-    p_url = _safe_str(getattr(playing_link, 'url', '') or '')
     for l in verified_links:
         l_url = _safe_str(getattr(l, 'url', '') or '')
         if (l_url and p_url and l_url == p_url) or l == playing_link:
@@ -10376,18 +10431,20 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
         xbmc.log('Multi Bridge Fast Autoplay BgCollector: sesion superada por otra busqueda, omitiendo guardado de cache.', xbmc.LOGINFO)
         return
     meta_copy = dict(meta)
-    meta_copy['verified_only'] = auto_verify
+    meta_copy['verified_only'] = bool(auto_verify)
     try:
-        _store_ram_search_cache(final_links, matched_item_holder[0], meta_copy, engine, unverified_links=[])
+        _store_ram_search_cache(final_links, matched_item_holder[0], meta_copy, engine, unverified_links=pending_unverified)
         _save_search_cache_atomic({
             'item': _serialize_item(matched_item_holder[0]),
             'links': [_serialize_item(l) for l in final_links],
-            'unverified_links': [],
+            'unverified_links': [_serialize_item(l) for l in pending_unverified],
             'meta': meta_copy,
             'engine': engine,
-            'is_preloaded_session': False
+            'is_preloaded_session': bool(pending_unverified),
+            'cache_ver': 2
         })
-        xbmc.log("Multi Bridge Fast Autoplay: caché de sesión actualizada con éxito con %d enlaces totales verificados (reproducción activa en índice 0)" % len(final_links), xbmc.LOGINFO)
+        xbmc.log("Multi Bridge Fast Autoplay: caché actualizada (%d verificados/activos, %d pendientes de verificación en Fase 1)" % (
+            len(final_links), len(pending_unverified)), xbmc.LOGINFO)
         if _in_own_list():
             xbmc.executebuiltin('Container.Refresh')
     except Exception as _ce:
@@ -10705,14 +10762,34 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
                 if video_started and player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
                     xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada [%s]!" % srv_name, xbmc.LOGINFO)
+                    try: setattr(cand, '_bridge_verified', True)
+                    except Exception: pass
                     final_cached = [cand] + [l for l in cached_links if getattr(l, 'url', None) != getattr(cand, 'url', None)]
+                    _prev_unverified = []
                     try:
-                        _store_ram_search_cache(final_cached, cached_item, meta, engine)
+                        _rc = _get_ram_search_cache(target_tmdb=p_tmdb, target_season=p_season, target_episode=p_episode)
+                        if _rc and isinstance(_rc, dict) and _rc.get('unverified_links'):
+                            _prev_unverified = list(_rc.get('unverified_links') or [])
+                        elif os.path.exists(SEARCH_CACHE_FILE):
+                            _dc = _read_search_cache_atomic()
+                            if _dc and isinstance(_dc, dict) and _dc.get('unverified_links'):
+                                _prev_unverified = [_deserialize_item(x, engine) if isinstance(x, dict) else x for x in (_dc.get('unverified_links') or [])]
+                                _prev_unverified = [x for x in _prev_unverified if x and getattr(x, 'url', None)]
+                    except Exception:
+                        _prev_unverified = []
+                    _rem_unv = [l for l in _prev_unverified if getattr(l, 'url', None) != getattr(cand, 'url', None)]
+                    meta_c = dict(meta)
+                    meta_c['verified_only'] = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+                    try:
+                        _store_ram_search_cache(final_cached, cached_item, meta_c, engine, unverified_links=_rem_unv)
                         _save_search_cache_atomic({
                             'item': _serialize_item(cached_item),
                             'links': [_serialize_item(l) for l in final_cached],
-                            'meta': meta,
-                            'engine': engine
+                            'unverified_links': [_serialize_item(l) for l in _rem_unv],
+                            'meta': meta_c,
+                            'engine': engine,
+                            'is_preloaded_session': bool(_rem_unv),
+                            'cache_ver': 2
                         })
                     except Exception: pass
                     try:
@@ -11004,13 +11081,26 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         with results_lock:
             fallback_batch = list(all_found_links)
         if fallback_batch:
+            _auto_v_fb = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+            if _auto_v_fb:
+                with silenced_dialogs():
+                    try:
+                        _v_fb = _verify_links_headless(fallback_batch, engine=engine, p_dialog=None)
+                        fallback_batch = _filter_and_sort_links(_v_fb if _v_fb else [l for l in fallback_batch if _is_torrent_link(l)])
+                    except Exception:
+                        fallback_batch = _filter_and_sort_links([l for l in fallback_batch if _is_torrent_link(l)])
+            else:
+                fallback_batch = _filter_and_sort_links(fallback_batch)
+            meta_fb = dict(meta)
+            meta_fb['verified_only'] = _auto_v_fb
             try:
-                _store_ram_search_cache(fallback_batch, matched_item_holder[0], meta, engine)
+                _store_ram_search_cache(fallback_batch, matched_item_holder[0], meta_fb, engine)
                 _save_search_cache_atomic({
                     'item': _serialize_item(matched_item_holder[0]),
                     'links': [_serialize_item(l) for l in fallback_batch],
-                    'meta': meta,
-                    'engine': engine
+                    'meta': meta_fb,
+                    'engine': engine,
+                    'cache_ver': 2
                 })
             except Exception: pass
 
@@ -11094,11 +11184,14 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         except Exception:
             pass
 
+    try: setattr(fast_link, '_bridge_verified', True)
+    except Exception: pass
     # Guardar cache inicial de sesion con fast_link verificado y los restantes no verificados (Opción 3)
     with results_lock:
         init_batch = list(all_found_links)
     pending_initial = [l for l in init_batch if getattr(l, 'url', None) != getattr(fast_link, 'url', None)]
     initial_links = [fast_link] + pending_initial
+    meta['verified_only'] = (_bridge_addon.getSetting('auto_verify_links') == 'true')
     _store_ram_search_cache([fast_link], matched_item_holder[0], meta, engine, unverified_links=pending_initial)
     _save_search_cache_atomic({
         'item': _serialize_item(matched_item_holder[0]),
@@ -11106,7 +11199,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         'unverified_links': [_serialize_item(l) for l in pending_initial],
         'meta': meta,
         'engine': engine,
-        'is_preloaded_session': bool(pending_initial)
+        'is_preloaded_session': bool(pending_initial),
+        'cache_ver': 2
     })
 
     # ── VIGILANTE DE REPRODUCCIÓN (Watchdog sin colisiones) ───────────────────
@@ -11249,6 +11343,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
         # Actualizar caché de sesión colocando el nuevo enlace en el índice 0
         try:
+            try: setattr(active_link, '_bridge_verified', True)
+            except Exception: pass
             _rem_unverified = [l for l in pending_initial if getattr(l, 'url', None) != getattr(active_link, 'url', None)]
             _store_ram_search_cache([active_link], matched_item_holder[0], meta, engine, unverified_links=_rem_unverified)
             _save_search_cache_atomic({
@@ -11257,7 +11353,8 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 'unverified_links': [_serialize_item(l) for l in _rem_unverified],
                 'meta': meta,
                 'engine': engine,
-                'is_preloaded_session': bool(_rem_unverified)
+                'is_preloaded_session': bool(_rem_unverified),
+                'cache_ver': 2
             })
         except Exception: pass
 
@@ -13544,6 +13641,8 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
         xbmc.log("Multi Bridge Pipeline [Fase 1]: No hay enlaces pendientes por verificar para el capítulo actual.", xbmc.LOGINFO)
         return
 
+    # Filtrar y ordenar candidatos pendientes según preferencias del usuario antes de verificar
+    unverified_list = _filter_and_sort_links(unverified_list)
     xbmc.log("Multi Bridge Pipeline [Fase 1]: Iniciando verificación pasiva de %d enlace(s) faltante(s) del capítulo actual..." % len(unverified_list), xbmc.LOGINFO)
 
     # Identificar enlace actualmente en reproducción para preservar su selección en OSD
@@ -13561,11 +13660,92 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
     except Exception:
         pass
 
+    max_func_limit = _get_int_setting('verify_max_functional', 12)
+    if max_func_limit < 0:
+        max_func_limit = 0
+    hide_captcha = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+
+    def _count_direct_verified(lst):
+        cnt = 0
+        for _item in (lst or []):
+            if not _is_torrent_link(_item) and not _is_web_captcha_server(_get_link_server_name(_item), _item):
+                cnt += 1
+        return cnt
+
+    def _persist_phase1_state(rem_list):
+        nonlocal curr_verified
+        sorted_verified = _filter_and_sort_links(curr_verified)
+        curr_verified = sorted_verified
+        if playing_uid or playing_url:
+            new_p_idx = -1
+            for i, l in enumerate(sorted_verified):
+                if playing_uid and _get_link_unique_id(l) == playing_uid:
+                    new_p_idx = i
+                    break
+                if playing_url and getattr(l, 'url', None) == playing_url:
+                    new_p_idx = i
+                    break
+            if new_p_idx >= 0:
+                _current_playing_link_index = new_p_idx
+                try:
+                    xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentPlayingIndex', str(new_p_idx))
+                except Exception:
+                    pass
+        meta_copy = dict(meta)
+        meta_copy['verified_only'] = True
+        try:
+            _store_ram_search_cache(curr_verified, matched_item, meta_copy, engine, unverified_links=rem_list)
+            _save_search_cache_atomic({
+                'item': _serialize_item(matched_item),
+                'links': [_serialize_item(l) for l in curr_verified],
+                'unverified_links': [_serialize_item(l) for l in rem_list],
+                'meta': meta_copy,
+                'engine': engine,
+                'is_preloaded_session': bool(rem_list),
+                'cache_ver': 2
+            })
+            if _in_own_list():
+                xbmc.executebuiltin('Container.Refresh')
+        except Exception as _save_e:
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Error guardando caché incremental: %s" % str(_save_e), xbmc.LOGWARNING)
+
     remaining_unverified = list(unverified_list)
+    existing_urls = {_safe_str(getattr(v, 'url', '')) for v in curr_verified if getattr(v, 'url', None)}
+
+    # Separar torrents y dedup antes de lanzar lotes HTTP
+    queue_to_verify = []
+    torrents_added = False
     for cand in unverified_list:
+        cand_url = _safe_str(getattr(cand, 'url', '') or '')
+        if cand_url and cand_url in existing_urls:
+            if cand in remaining_unverified:
+                remaining_unverified.remove(cand)
+            continue
+        if _is_torrent_link(cand):
+            try: cand.bridge_engine = engine
+            except Exception: pass
+            curr_verified.append(cand)
+            if cand_url:
+                existing_urls.add(cand_url)
+            if cand in remaining_unverified:
+                remaining_unverified.remove(cand)
+            torrents_added = True
+        elif _is_web_captcha_server(_get_link_server_name(cand), cand) and hide_captcha:
+            if cand in remaining_unverified:
+                remaining_unverified.remove(cand)
+        else:
+            queue_to_verify.append(cand)
+
+    if torrents_added:
+        _persist_phase1_state(remaining_unverified)
+
+    batch_size = 3
+    idx_q = 0
+    while idx_q < len(queue_to_verify):
         if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
             xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
-            abort_all_network_sockets()
+            if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+                abort_all_network_sockets()
             return
 
         # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
@@ -13575,105 +13755,54 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
             if mon.waitForAbort(0.5):
                 return
 
-        cand_url = getattr(cand, 'url', None)
-        if cand_url and any(getattr(v, 'url', None) == cand_url for v in curr_verified):
-            if cand in remaining_unverified:
-                remaining_unverified.remove(cand)
-            continue
+        if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
+            break
 
-        is_valid = False
-        verified_cand = None
+        batch = queue_to_verify[idx_q:idx_q + batch_size]
+        idx_q += batch_size
 
-        if _is_torrent_link(cand):
-            is_valid = True
-            verified_cand = cand
-        elif _is_web_captcha_server(_get_link_server_name(cand), cand):
-            if _bridge_addon.getSetting('hide_captcha_links') != 'true':
-                if _check_web_captcha_link_alive(cand_url or ''):
-                    is_valid = True
-                    verified_cand = cand
-        else:
+        verified_batch = []
+        try:
+            with silenced_dialogs():
+                verified_batch = _verify_links_headless(batch, engine=engine, p_dialog=None) or []
+        except Exception as _ve:
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Error verificando lote: %s" % str(_ve), xbmc.LOGDEBUG)
+            verified_batch = []
+
+        for c_done in batch:
+            if c_done in remaining_unverified:
+                remaining_unverified.remove(c_done)
+
+        added_names = []
+        for verified_cand in verified_batch:
+            v_url = _safe_str(getattr(verified_cand, 'url', '') or '')
+            if v_url and v_url in existing_urls:
+                continue
             try:
-                with silenced_dialogs():
-                    v_res = _verify_links_headless([cand], engine=engine, p_dialog=None)
-                    if v_res and len(v_res) > 0:
-                        is_valid = True
-                        verified_cand = v_res[0]
-            except Exception as _ve:
-                xbmc.log("Multi Bridge Pipeline [Fase 1]: Error verificando enlace candidato: %s" % str(_ve), xbmc.LOGDEBUG)
-
-        if cand in remaining_unverified:
-            remaining_unverified.remove(cand)
-
-        if is_valid and verified_cand:
-            try: verified_cand.bridge_engine = engine
-            except Exception: pass
+                verified_cand.bridge_engine = engine
+                setattr(verified_cand, '_bridge_verified', True)
+            except Exception:
+                pass
             curr_verified.append(verified_cand)
+            if v_url:
+                existing_urls.add(v_url)
+            added_names.append(_get_link_server_name(verified_cand))
 
-            # Re-clasificar y ordenar estrictamente según preferencias del usuario (Idioma, Calidad, Servidores)
-            sorted_verified = _filter_and_sort_links(curr_verified)
-            curr_verified = sorted_verified
-
-            # Actualizar el índice del enlace actualmente en reproducción
-            if playing_uid or playing_url:
-                new_p_idx = -1
-                for i, l in enumerate(sorted_verified):
-                    if playing_uid and _get_link_unique_id(l) == playing_uid:
-                        new_p_idx = i
-                        break
-                    if playing_url and getattr(l, 'url', None) == playing_url:
-                        new_p_idx = i
-                        break
-                if new_p_idx >= 0:
-                    _current_playing_link_index = new_p_idx
-                    try:
-                        xbmcgui.Window(10000).setProperty('BridgeMulti.CurrentPlayingIndex', str(new_p_idx))
-                    except Exception:
-                        pass
-
-            # Guardar progresivamente en caché RAM y disco
-            meta_copy = dict(meta)
-            try:
-                _store_ram_search_cache(curr_verified, matched_item, meta_copy, engine, unverified_links=remaining_unverified)
-                _save_search_cache_atomic({
-                    'item': _serialize_item(matched_item),
-                    'links': [_serialize_item(l) for l in curr_verified],
-                    'unverified_links': [_serialize_item(l) for l in remaining_unverified],
-                    'meta': meta_copy,
-                    'engine': engine,
-                    'is_preloaded_session': bool(remaining_unverified)
-                })
-                if _in_own_list():
-                    xbmc.executebuiltin('Container.Refresh')
-            except Exception as _save_e:
-                xbmc.log("Multi Bridge Pipeline [Fase 1]: Error guardando caché incremental: %s" % str(_save_e), xbmc.LOGWARNING)
-
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: Nuevo enlace verificado y añadido al OSD/menú (%s). Total verificados: %d" % (
-                _get_link_server_name(verified_cand), len(curr_verified)
+        if added_names:
+            _persist_phase1_state(remaining_unverified)
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: %d enlace(s) verificado(s) añadidos (%s). Total verificados: %d" % (
+                len(added_names), ', '.join(added_names), len(curr_verified)
             ), xbmc.LOGINFO)
 
-        # Micro-pausa pasiva para mantener la CPU en reposo
-        if mon.waitForAbort(0.2) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
-            abort_all_network_sockets()
+        # Micro-pausa pasiva para mantener la CPU y ancho de banda suaves
+        if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
+            if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+                abort_all_network_sockets()
             return
 
     # Fin de Fase 1: guardar estado definitivo limpio
-    try:
-        meta_copy = dict(meta)
-        _store_ram_search_cache(curr_verified, matched_item, meta_copy, engine, unverified_links=[])
-        _save_search_cache_atomic({
-            'item': _serialize_item(matched_item),
-            'links': [_serialize_item(l) for l in curr_verified],
-            'unverified_links': [],
-            'meta': meta_copy,
-            'engine': engine,
-            'is_preloaded_session': False
-        })
-        if _in_own_list():
-            xbmc.executebuiltin('Container.Refresh')
-    except Exception:
-        pass
-
+    _persist_phase1_state([])
     xbmc.log("Multi Bridge Pipeline [Fase 1]: Completada con éxito. %d enlaces totales verificados y listos." % len(curr_verified), xbmc.LOGINFO)
 
 
@@ -14263,7 +14392,7 @@ def _play_next_episode(meta, next_ep):
 # Custom Pause Prompt Dialog & Floating Links Dialog
 # ---------------------------------------------------------
 
-class _PausePromptDialog(xbmcgui.WindowDialog):
+class _PausePromptDialog(xbmcgui.WindowXMLDialog):
     ACTION_MOVE_LEFT   = 1
     ACTION_MOVE_RIGHT  = 2
     ACTION_SELECT_ITEM = 7
@@ -14278,8 +14407,11 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
     ACTION_MOUSE_MOVE       = 107
     ACTION_BACKSPACE   = 110
 
-    def __init__(self, current_server_name="", current_quality="", meta=None, is_test=False):
-        super().__init__()
+    def __new__(cls, *args, **kwargs):
+        addon_path = _bridge_addon.getAddonInfo('path')
+        return super(_PausePromptDialog, cls).__new__(cls, 'pause_prompt.xml', addon_path, 'Default', '1080i')
+
+    def __init__(self, current_server_name="", current_quality="", meta=None, is_test=False, *args, **kwargs):
         self._is_closed = False
         self.selected = -1  # 0=No (continuar), 1=Abrir enlaces, 2=Siguiente capitulo, -1=Cerrar/Atras
         self.current = 0    # 0=No (continuar) por defecto a la izquierda
@@ -14289,13 +14421,15 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         self.is_test = is_test
         self.next_ep = _get_next_episode_info(self.meta)
         self._btn_ids = []
-        self._highlights = []
+        self._hl_ids = []
         self._control_map = {}
         self._btn_rects = []
+        self._backdrop_id = 99
+        self._pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '1').strip()
         try:
-            self._build()
-        except Exception as e:
-            xbmc.log('BridgeMulti PausePromptDialog build error: ' + str(e), xbmc.LOGWARNING)
+            xbmcgui.Window(10000).setProperty('bridge.pp_pos', '0' if self._pos_setting == '0' else '1')
+        except Exception:
+            pass
         self._start_playback_watchdog()
 
     def _start_playback_watchdog(self):
@@ -14320,12 +14454,15 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         t.name = "PausePromptWatchdog"
         t.start()
 
-    def _white(self):
-        return _get_addon_white_texture()
+    def onInit(self):
+        try:
+            self._build()
+        except Exception as e:
+            xbmc.log('BridgeMulti PausePromptDialog onInit error: ' + str(e), xbmc.LOGWARNING)
 
     def _build(self):
-        W = self.getWidth() or 1920
-        H = self.getHeight() or 1080
+        W = 1920
+        H = 1080
 
         # Deteccion equilibrada de Modo Compacto vs Tactil
         touch_setting = str(_bridge_addon.getSetting('pause_prompt_touch_mode') or '0').strip()
@@ -14336,7 +14473,6 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             is_touch = False
         else:                       # 0 = Automatico
             try:
-                # En Windows, Mac o Linux de escritorio -> Siempre compacto y discreto
                 is_pc = bool(
                     xbmc.getCondVisibility('System.Platform.Windows') or
                     xbmc.getCondVisibility('System.Platform.OSX') or
@@ -14351,10 +14487,6 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     is_touch = False
             except Exception:
                 is_touch = False
-
-        border = 2
-        GOLD = 'FFCFA82C'
-        white = self._white()
 
         has_next = bool(getattr(self, 'next_ep', None))
         has_instant = False
@@ -14374,10 +14506,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                         has_instant = True
 
         if is_touch:
-            # === Modo Tactil Celular (moderado y equilibrado, nunca gigante) ===
             bh = 44
-            btn_font = 'font11'
-            hdr_font = 'font11'
             pad_hitbox = 12
             if has_next:
                 dw, dh = 410, 102
@@ -14403,10 +14532,7 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                 rx_offset = 14
                 ry_offset = 9
         else:
-            # === Modo Compacto Nativo (PC / TV / Tablet: elegante, discreto en esquina) ===
             bh = 36
-            btn_font = 'font10'
-            hdr_font = 'font10'
             pad_hitbox = 8
             if has_next:
                 dw, dh = 356, 92
@@ -14432,26 +14558,24 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                 rx_offset = 13
                 ry_offset = 8
 
-        pos_setting = str(_bridge_addon.getSetting('pause_prompt_position') or '1').strip()
         margin_x = 35
         dx = W - dw - margin_x
-        if pos_setting == '1':  # Inferior derecha
+        if self._pos_setting == '1':  # Inferior derecha
             margin_y = 50
             dy = H - dh - margin_y
         else:  # Superior derecha (0)
             margin_y = 40
             dy = margin_y
 
-        # Backdrop a pantalla completa para capturar clics/toques fuera del popup y reanudar
-        self._backdrop_btn = xbmcgui.ControlButton(0, 0, W, H, '', '', '',
-                                                   textColor='00000000', focusedColor='00000000')
-        self.addControl(self._backdrop_btn)
-        self._backdrop_id = self._backdrop_btn.getId()
-
-        # Borde dorado exterior
-        self.addControl(xbmcgui.ControlImage(dx, dy, dw, dh, white, colorDiffuse=GOLD))
-        # Fondo oscuro interior
-        self.addControl(xbmcgui.ControlImage(dx+border, dy+border, dw-border*2, dh-border*2, white, colorDiffuse='F40A0A0E'))
+        # Fondo y borde dorado con esquinas redondeadas (9-slice en pause_prompt.xml)
+        for cid in (51, 52):
+            try:
+                c = self.getControl(cid)
+                c.setPosition(dx, dy)
+                c.setWidth(dw)
+                c.setHeight(dh)
+            except Exception:
+                pass
 
         # Servidor actual
         srv = (self.server_name or "Actual").strip()
@@ -14460,7 +14584,6 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
         elif len(srv) > 13:
             srv = srv[:12] + '..'
 
-        # Encabezado con modo tactil / compacto adaptativo
         qual_active = getattr(self, 'current_quality', '') or ''
         if not qual_active and hasattr(self, 'current_link') and self.current_link:
             qual_active = _format_quality(self.current_link)
@@ -14468,50 +14591,62 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]  [B][COLOR FFCFA82C]%s[/COLOR][/B]' % (srv, qual_active)
         else:
             header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
+
         hdr_y = dy + (12 if is_touch else 10)
         hdr_h = 22 if is_touch else 20
-        self.addControl(xbmcgui.ControlLabel(
-            dx+16, hdr_y, dw-32, hdr_h,
-            header_text,
-            font=hdr_font))
+        try:
+            hdr_lbl = self.getControl(53)
+            hdr_lbl.setPosition(dx + 16, hdr_y)
+            hdr_lbl.setWidth(dw - 32)
+            hdr_lbl.setHeight(hdr_h)
+            hdr_lbl.setLabel(header_text)
+        except Exception:
+            pass
 
         total_w = sum(b['w'] for b in btn_configs) + gap * (len(btn_configs) - 1)
         bx = dx + (dw - total_w) // 2
         by = dy + (44 if is_touch else 40)
 
+        self._btn_ids = []
+        self._hl_ids = []
+        self._control_map = {}
+        self._btn_rects = []
+
         cur_x = bx
         for i, cfg in enumerate(btn_configs):
             bw = cfg['w']
-            btn = xbmcgui.ControlButton(
-                cur_x, by, bw, bh, cfg['lbl'], '', '',
-                font=btn_font, textColor='FFCCCCCC', focusedColor='FFFFFFFF', alignment=6)
-            self.addControl(btn)
-            btn_id = btn.getId()
-            self._btn_ids.append(btn_id)
-            self._control_map[btn_id] = i
+            btn_id = 100 + i
+            dim_id = 200 + i
+            hl_id = 300 + i
 
-            # Hitbox para soporte tactil y cursor
+            self._btn_ids.append(btn_id)
+            self._hl_ids.append(hl_id)
+            self._control_map[btn_id] = i
+            self._control_map[dim_id] = i
+            self._control_map[hl_id] = i
             self._btn_rects.append((cur_x - pad_hitbox, by - pad_hitbox, cur_x + bw + pad_hitbox, by + bh + pad_hitbox, i))
 
-            m, t = 2, 2
-            # Marco dorado tenue permanente
-            for _bx, _by, _bw, _bh in (
-                    (cur_x-m, by-m, bw+m*2, t),
-                    (cur_x-m, by+bh+m-t, bw+m*2, t),
-                    (cur_x-m, by-m, t, bh+m*2),
-                    (cur_x+bw+m-t, by-m, t, bh+m*2)):
-                border_img = xbmcgui.ControlImage(_bx, _by, _bw, _bh, white, colorDiffuse='FF443311')
-                self.addControl(border_img)
-                self._control_map[border_img.getId()] = i
+            try:
+                btn = self.getControl(btn_id)
+                btn.setPosition(cur_x, by)
+                btn.setWidth(bw)
+                btn.setHeight(bh)
+                btn.setLabel(cfg['lbl'])
+                btn.setVisible(True)
+            except Exception:
+                pass
 
-            # Resaltado brillante cuando tiene foco
-            hl = [
-                xbmcgui.ControlImage(cur_x-m, by-m, bw+m*2, bh+m*2, white, colorDiffuse='33CFA82C'),
-                xbmcgui.ControlImage(cur_x-m, by-m, bw+m*2, t+1, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(cur_x-m, by+bh+m-t-1, bw+m*2, t+1, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(cur_x-m, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
-                xbmcgui.ControlImage(cur_x+bw+m-t-1, by-m, t+1, bh+m*2, white, colorDiffuse=GOLD),
-            ]
+            m = 2
+            for bid in (dim_id, hl_id):
+                try:
+                    b_img = self.getControl(bid)
+                    b_img.setPosition(cur_x - m, by - m)
+                    b_img.setWidth(bw + m * 2)
+                    b_img.setHeight(bh + m * 2)
+                    if bid == dim_id:
+                        b_img.setVisible(True)
+                except Exception:
+                    pass
 
             if cfg['is_icon']:
                 try:
@@ -14520,14 +14655,17 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     icon_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_next.png'
                 ix = cur_x + (bw - iw) // 2
                 iy = by + (bh - ih) // 2
-                icon_img = xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFCCCCCC')
-                self.addControl(icon_img)
-                self._control_map[icon_img.getId()] = i
+                try:
+                    icon_ctrl = self.getControl(112)
+                    icon_ctrl.setImage(icon_path)
+                    icon_ctrl.setPosition(ix, iy)
+                    icon_ctrl.setWidth(iw)
+                    icon_ctrl.setHeight(ih)
+                    icon_ctrl.setVisible(True)
+                    self._control_map[112] = i
+                except Exception:
+                    pass
 
-                icon_hl = xbmcgui.ControlImage(ix, iy, iw, ih, icon_path, colorDiffuse='FFFFFFFF')
-                hl.append(icon_hl)
-
-                # Si hay enlaces precargados para reproduccion instantanea, colocar rayo dorado en la esquina superior derecha
                 if cfg.get('instant'):
                     try:
                         badge_path = os.path.join(_bridge_addon.getAddonInfo('path'), 'resources', 'media', 'icon_rayo_badge.png')
@@ -14535,36 +14673,72 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                         badge_path = 'special://home/addons/plugin.video.bridge.multi/resources/media/icon_rayo_badge.png'
                     rx = cur_x + bw - rx_offset
                     ry = by - ry_offset
-                    badge_img = xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFD700')
-                    self.addControl(badge_img)
-                    self._control_map[badge_img.getId()] = i
-
-                    badge_hl = xbmcgui.ControlImage(rx, ry, rw, rh, badge_path, colorDiffuse='FFFFFFFF')
-                    hl.append(badge_hl)
-
-            for c in hl:
-                self.addControl(c)
-                self._control_map[c.getId()] = i
-            self._highlights.append(hl)
+                    try:
+                        badge_ctrl = self.getControl(113)
+                        badge_ctrl.setImage(badge_path)
+                        badge_ctrl.setPosition(rx, ry)
+                        badge_ctrl.setWidth(rw)
+                        badge_ctrl.setHeight(rh)
+                        badge_ctrl.setVisible(True)
+                        self._control_map[113] = i
+                    except Exception:
+                        pass
+                else:
+                    try: self.getControl(113).setVisible(False)
+                    except Exception: pass
 
             cur_x += bw + gap
 
+        if not has_next:
+            for hid in (102, 202, 302, 112, 113):
+                try: self.getControl(hid).setVisible(False)
+                except Exception: pass
+
+        # Enlazar navegación direccional entre botones visibles
+        try:
+            n_btns = len(self._btn_ids)
+            for idx_b, bid in enumerate(self._btn_ids):
+                c_btn = self.getControl(bid)
+                c_left = self.getControl(self._btn_ids[(idx_b - 1) % n_btns])
+                c_right = self.getControl(self._btn_ids[(idx_b + 1) % n_btns])
+                c_btn.controlLeft(c_left)
+                c_btn.controlRight(c_right)
+        except Exception:
+            pass
+
         self._update_highlight()
         try:
-            self.setFocus(self.getControl(self._btn_ids[0]))
+            self.setFocusId(self._btn_ids[0])
         except Exception:
             pass
 
     def _update_highlight(self):
-        for i, hl in enumerate(self._highlights):
-            for c in hl:
-                try: c.setVisible(i == self.current)
-                except: pass
+        for i, hl_id in enumerate(self._hl_ids):
+            try:
+                self.getControl(hl_id).setVisible(i == self.current)
+            except Exception:
+                pass
+        if len(self._btn_ids) >= 3:
+            try:
+                self.getControl(112).setColorDiffuse('FFFFFFFF' if self.current == 2 else 'FFCCCCCC')
+            except Exception:
+                pass
+
+    def onFocus(self, control_id):
+        if control_id in self._btn_ids:
+            idx = self._btn_ids.index(control_id)
+            if idx != self.current:
+                self.current = idx
+                self._update_highlight()
+        elif control_id in self._control_map:
+            idx = self._control_map[control_id]
+            if idx != self.current:
+                self.current = idx
+                self._update_highlight()
 
     def onAction(self, action):
         aid = action.getId()
 
-        # Deteccion de movimiento de cursor (Hover)
         try:
             fid = self.getFocusId()
             if fid in self._btn_ids:
@@ -14589,23 +14763,24 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
                     pass
             self.selected = -1
             self.close()
-        elif aid == self.ACTION_MOVE_LEFT:
-            if self._btn_ids:
-                self.current = (self.current - 1) % len(self._btn_ids)
-                self._update_highlight()
-                try: self.setFocus(self.getControl(self._btn_ids[self.current]))
-                except: pass
-        elif aid == self.ACTION_MOVE_RIGHT:
-            if self._btn_ids:
-                self.current = (self.current + 1) % len(self._btn_ids)
-                self._update_highlight()
-                try: self.setFocus(self.getControl(self._btn_ids[self.current]))
-                except: pass
+        elif aid in (self.ACTION_MOVE_LEFT, self.ACTION_MOVE_RIGHT):
+            # La navegación nativa <onleft>/<onright> y controlLeft/controlRight del XML
+            # ya mueve el foco y dispara onFocus; solo aseguramos el foco si está fuera.
+            try:
+                fid = self.getFocusId()
+                if fid in self._btn_ids:
+                    idx = self._btn_ids.index(fid)
+                    if idx != self.current:
+                        self.current = idx
+                        self._update_highlight()
+                elif self._btn_ids:
+                    self.setFocusId(self._btn_ids[self.current])
+            except Exception:
+                pass
         elif aid == self.ACTION_SELECT_ITEM:
             self.selected = self.current
             self.close()
         elif aid in (self.ACTION_MOUSE_LEFT_CLICK, self.ACTION_MOUSE_DOUBLE_CLICK, 100, 103, 501, 510):
-            # Comprobar primero por coordenadas exactas del puntero / toque
             try:
                 mx = int(action.getAmount1())
                 my = int(action.getAmount2())
@@ -14618,7 +14793,6 @@ class _PausePromptDialog(xbmcgui.WindowDialog):
             except Exception:
                 pass
 
-            # Breve margen para que Kodi actualice el foco bajo el dedo en pantallas tactiles
             try:
                 xbmc.sleep(80)
             except: pass
@@ -15341,6 +15515,13 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
 
 
 def _load_cached_links_for_dialog(offset=0):
+    _hide_cap = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+    def _clean_dialog_links(_lst):
+        _res = _filter_discarded_links(_lst)
+        if _hide_cap:
+            _res = [l for l in _res if _is_torrent_link(l) or not _is_web_captcha_server(_get_link_server_name(l), l)]
+        return _res
+
     # 1. RAM Cache instantáneo (0 ms, sin acceso a disco ni deserialización)
     try:
         ram = _get_ram_search_cache()
@@ -15350,7 +15531,7 @@ def _load_cached_links_for_dialog(offset=0):
                 c_matched = ram.get('matched_item')
                 c_meta = ram.get('meta', {}) or {}
                 c_engine = ram.get('engine', 'alfa') or 'alfa'
-                valid_links = [l for l in c_links if len(_safe_str(getattr(l, 'url', ''))) <= 1500]
+                valid_links = _clean_dialog_links([l for l in c_links if len(_safe_str(getattr(l, 'url', ''))) <= 1500])
                 if offset > 0 and offset < len(valid_links):
                     valid_links = valid_links[offset:]
                 if valid_links:
@@ -15387,7 +15568,7 @@ def _load_cached_links_for_dialog(offset=0):
             c_links = [_deserialize_item(l, c_engine) for l in raw_valid]
             c_matched = _deserialize_item(cache.get('item'), c_engine)
 
-        c_links = [l for l in (c_links or []) if l is not None and getattr(l, 'url', None)]
+        c_links = _clean_dialog_links([l for l in (c_links or []) if l is not None and getattr(l, 'url', None)])
         if c_links:
             for i, l in enumerate(c_links):
                 if getattr(l, '_bridge_orig_idx', None) is None:
@@ -16096,7 +16277,9 @@ def main():
             except: pass
             if _vl:
                 _force_links = _filter_and_sort_links(_vl)
-                _force_verified = True
+            else:
+                _force_links = _filter_and_sort_links([l for l in _force_links if _is_torrent_link(l)])
+            _force_verified = True
 
         _force_meta2 = dict(_force_meta)
         _force_meta2['engine'] = eng
@@ -16110,7 +16293,8 @@ def main():
                 'item': _serialize_item(_force_matched) if _force_matched else None,
                 'links': [_serialize_item(l) for l in (_force_links or [])],
                 'meta': _force_meta2,
-                'engine': eng
+                'engine': eng,
+                'cache_ver': 2
             })
         except Exception:
             pass
@@ -16388,12 +16572,19 @@ def main():
                 _age = _time.time() - _mtime
                 if _age < _cache_max_age_secs:
                     _c = _read_search_cache_atomic()
+                    _c_meta = {}
+                    _c_links = []
+                    _cached_engine = 'alfa'
                     if _c and isinstance(_c, dict):
                         _c_meta = _c.get('meta', {}) or {}
                         _c_links = _c.get('links', [])
                         _cached_engine = _c.get('engine', 'alfa') or 'alfa'
 
-                    if _c_links and _is_same_media_item(_c_meta, _init_meta):
+                    _auto_v_chk = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+                    _stale_unverified_cache = (_auto_v_chk and _c and _c.get('cache_ver') != 2 and not _c_meta.get('verified_only'))
+                    if _stale_unverified_cache:
+                        xbmc.log("Multi Bridge: caché antigua sin cache_ver=2 descartada para exigir enlaces verificados.", xbmc.LOGINFO)
+                    elif _c_links and _is_same_media_item(_c_meta, _init_meta):
                         _cur_def_eng = _get_int_setting('default_engine', 0)
                         if _is_s_play:
                             # Para series, Balandro es el único motor. Si la cache es de Balandro, es válida
@@ -16542,7 +16733,9 @@ def main():
                 v_links = _verify_links_headless(links, engine=eng, p_dialog=None)
                 if v_links:
                     links = _filter_and_sort_links(v_links)
-                    verified_flag = True
+                else:
+                    links = _filter_and_sort_links([l for l in links if _is_torrent_link(l)])
+                verified_flag = True
 
             meta = {
                 'tmdb': tmdb_id or get_param('tmdb'), 'imdb': imdb_id or get_param('imdb'), 'tvdb': tvdb_id or get_param('tvdb'), 'trakt': trakt_id or get_param('trakt'),
@@ -16565,7 +16758,8 @@ def main():
                     'item': _serialize_item(matched_item) if matched_item else None,
                     'links': [_serialize_item(l) for l in (links or [])],
                     'meta': meta,
-                    'engine': eng
+                    'engine': eng,
+                    'cache_ver': 2
                 })
             except: pass
             try:
@@ -16743,7 +16937,9 @@ def main():
                 v_links = _verify_links_headless(links, engine=eng, p_dialog=None)
                 if v_links:
                     links = v_links
-                    verified_flag = True
+                else:
+                    links = [l for l in links if _is_torrent_link(l)]
+                verified_flag = True
 
             links = _filter_and_sort_links(links)
             meta = {
@@ -16767,7 +16963,8 @@ def main():
                     'item': _serialize_item(matched_item),
                     'links': [_serialize_item(l) for l in (links or [])],
                     'meta': meta,
-                    'engine': eng
+                    'engine': eng,
+                    'cache_ver': 2
                 })
             except Exception: pass
             try:
