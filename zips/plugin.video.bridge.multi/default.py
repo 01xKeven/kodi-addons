@@ -4786,15 +4786,12 @@ def _resolve_single_link_for_verification(lnk, engine='alfa', servertools=None):
         if not url and not getattr(prep, 'video_urls', None):
             return None
 
-        # Servidores protegidos con captcha (ej. Powvideo):
-        # Si el usuario activo ocultar captchas, descartar directamente.
-        # Comprobacion HTTP ultrarrapida: si responde 200/403 se conserva, si es 404 se descarta como basura.
+        # Servidores protegidos con captcha (ej. Powvideo, Streamplay):
+        # Jamás se verifican por red; se devuelven directamente si no están ocultos.
         if _is_web_captcha_server(actual_srv, prep):
             if _bridge_addon.getSetting('hide_captcha_links') == 'true':
                 return None
-            if _check_web_captcha_link_alive(url):
-                return prep
-            return None
+            return prep
 
         servers_to_try = []
         if actual_srv and actual_srv not in ('directo', 'none', ''): servers_to_try.append(actual_srv)
@@ -4980,13 +4977,17 @@ class _PipelineLinkVerifier:
                         if _is_torrent_link(cp):
                             self.verified_torrents.append(cp)
                         elif _is_web_captcha_server(_get_link_server_name(cp), cp):
-                            # Salvaguarda: si resultó ser captcha, enviar directamente sin contar como funcional
+                            # Salvaguarda: si resultó ser captcha, enviar directamente sin contar como funcional ni marcar verificado
                             if _bridge_addon.getSetting('hide_captcha_links') != 'true':
                                 self.verified_captchas.append(cp)
                         else:
-                            self.verified_direct.append(cp)
+                            if self.verify_max_functional <= 0 or len(self.verified_direct) < self.verify_max_functional:
+                                try: setattr(cp, '_bridge_verified', True)
+                                except Exception: pass
+                                self.verified_direct.append(cp)
                             if self.verify_max_functional > 0 and len(self.verified_direct) >= self.verify_max_functional:
                                 self.direct_done.set()
+                                self.global_stop.set()
             except Exception:
                 pass
             finally:
@@ -5088,7 +5089,8 @@ class _PipelineLinkVerifier:
             except Exception:
                 pass
         with self.lock:
-            all_v = self.verified_direct + self.verified_torrents + self.verified_captchas
+            d_list = self.verified_direct[:self.verify_max_functional] if self.verify_max_functional > 0 else list(self.verified_direct)
+            all_v = d_list + self.verified_torrents + self.verified_captchas
             if all_v:
                 return all_v
         return fallback_links or []
@@ -5133,8 +5135,8 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     stop_event = threading.Event()
 
     max_workers = min(20, max(2, _get_int_setting('verify_threads_max', 16)))
-    verify_timeout = _get_int_setting('verify_timeout', 30)
-    verify_max_functional = _get_int_setting('verify_max_functional', 10)
+    verify_timeout = _get_int_setting('verify_timeout', 10)
+    verify_max_functional = _get_int_setting('verify_max_functional', 12)
     if verify_max_functional < 0: verify_max_functional = 0
     if max_workers < 1: max_workers = 1
     if verify_timeout < 3: verify_timeout = 3
@@ -5203,8 +5205,11 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
                             verified_results[orig_idx] = _cp
                             captcha_indices.add(orig_idx)
                     else:
-                        verified_results[orig_idx] = _cp
-                        direct_verified_indices.add(orig_idx)
+                        if verify_max_functional <= 0 or len(direct_verified_indices) < verify_max_functional:
+                            try: setattr(_cp, '_bridge_verified', True)
+                            except Exception: pass
+                            verified_results[orig_idx] = _cp
+                            direct_verified_indices.add(orig_idx)
         except Exception: pass
         finally:
             with lock:
@@ -10484,19 +10489,21 @@ def _fast_autoplay_background_collector_impl(engine, meta, matched_item_holder, 
     pending_unverified = []
 
     if auto_verify and xbmc.Player().isPlayingVideo():
-        # Vídeo en reproducción activa: NO meter enlaces sin verificar en 'links'.
-        # Guardar en 'links' únicamente el enlace en reproducción, torrents y enlaces ya verificados,
-        # y delegar los restantes a 'unverified_links' para que Fase 1 los verifique suavemente sin saturar la red.
-        xbmc.log("Multi Bridge Fast Autoplay: vídeo en reproducción activa, delegando %d enlace(s) a verificación pasiva (Fase 1) para no mostrar enlaces caídos." % len(sorted_links), xbmc.LOGINFO)
+        # Vídeo en reproducción activa: NO meter enlaces directos sin verificar en 'links'.
+        # Torrents y captchas (si no están ocultos) se envían directamente sin verificarse ni contar al límite;
+        # solo los directos normales entran en 'unverified_links' para Fase 1.
+        xbmc.log("Multi Bridge Fast Autoplay: vídeo en reproducción activa, delegando directos a Fase 1 (torrents y captchas pasan directo)." , xbmc.LOGINFO)
         for l in sorted_links:
             l_url = _safe_str(getattr(l, 'url', '') or '')
             if (l_url and p_url and l_url == p_url) or l == playing_link:
                 continue
-            if _is_torrent_link(l) or getattr(l, '_bridge_verified', False):
+            if _is_torrent_link(l):
                 verified_links.append(l)
             elif _is_web_captcha_server(_get_link_server_name(l), l):
                 if not hide_captcha:
-                    pending_unverified.append(l)
+                    verified_links.append(l)
+            elif getattr(l, '_bridge_verified', False):
+                verified_links.append(l)
             else:
                 pending_unverified.append(l)
     elif auto_verify:
@@ -11201,11 +11208,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             _auto_v_fb = (_bridge_addon.getSetting('auto_verify_links') == 'true')
             if _auto_v_fb:
                 with silenced_dialogs():
+                    _hc_fb = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+                    _fb_bypass = [l for l in fallback_batch if _is_torrent_link(l) or (not _hc_fb and _is_web_captcha_server(_get_link_server_name(l), l))]
                     try:
                         _v_fb = _verify_links_headless(fallback_batch, engine=engine, p_dialog=None)
-                        fallback_batch = _filter_and_sort_links(_v_fb if _v_fb else [l for l in fallback_batch if _is_torrent_link(l)])
+                        fallback_batch = _filter_and_sort_links(_v_fb if _v_fb else _fb_bypass)
                     except Exception:
-                        fallback_batch = _filter_and_sort_links([l for l in fallback_batch if _is_torrent_link(l)])
+                        fallback_batch = _filter_and_sort_links(_fb_bypass)
             else:
                 fallback_batch = _filter_and_sort_links(fallback_batch)
             meta_fb = dict(meta)
@@ -11303,16 +11312,33 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     try: setattr(fast_link, '_bridge_verified', True)
     except Exception: pass
-    # Guardar cache inicial de sesion con fast_link verificado y los restantes no verificados (Opción 3)
+    # Guardar cache inicial de sesion con fast_link verificado + torrents/captchas directos,
+    # y dejar únicamente los enlaces directos normales sin verificar en unverified_links (Opción 3)
     with results_lock:
         init_batch = list(all_found_links)
-    pending_initial = [l for l in init_batch if getattr(l, 'url', None) != getattr(fast_link, 'url', None)]
-    initial_links = [fast_link] + pending_initial
-    meta['verified_only'] = (_bridge_addon.getSetting('auto_verify_links') == 'true')
-    _store_ram_search_cache([fast_link], matched_item_holder[0], meta, engine, unverified_links=pending_initial)
+    _hide_cap_init = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+    _auto_v_init = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+    ready_initial = [fast_link]
+    pending_initial = []
+    for _il in init_batch:
+        if getattr(_il, 'url', None) == getattr(fast_link, 'url', None):
+            continue
+        if _is_torrent_link(_il):
+            ready_initial.append(_il)
+        elif _is_web_captcha_server(_get_link_server_name(_il), _il):
+            if not _hide_cap_init:
+                ready_initial.append(_il)
+        elif not _auto_v_init or getattr(_il, '_bridge_verified', False):
+            ready_initial.append(_il)
+        else:
+            pending_initial.append(_il)
+    ready_initial = _filter_and_sort_links(ready_initial)
+    initial_links = list(ready_initial) + list(pending_initial)
+    meta['verified_only'] = _auto_v_init
+    _store_ram_search_cache(ready_initial, matched_item_holder[0], meta, engine, unverified_links=pending_initial)
     _save_search_cache_atomic({
         'item': _serialize_item(matched_item_holder[0]),
-        'links': [_serialize_item(fast_link)],
+        'links': [_serialize_item(l) for l in ready_initial],
         'unverified_links': [_serialize_item(l) for l in pending_initial],
         'meta': meta,
         'engine': engine,
@@ -13834,9 +13860,10 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
     remaining_unverified = list(unverified_list)
     existing_urls = {_safe_str(getattr(v, 'url', '')) for v in curr_verified if getattr(v, 'url', None)}
 
-    # Separar torrents y dedup antes de lanzar lotes HTTP
+    # Separar torrents y captchas antes de lanzar lotes HTTP:
+    # ambos pasan directamente sin verificarse ni contar hacia max_func_limit.
     queue_to_verify = []
-    torrents_added = False
+    direct_bypass_added = False
     for cand in unverified_list:
         cand_url = _safe_str(getattr(cand, 'url', '') or '')
         if cand_url and cand_url in existing_urls:
@@ -13851,14 +13878,21 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
                 existing_urls.add(cand_url)
             if cand in remaining_unverified:
                 remaining_unverified.remove(cand)
-            torrents_added = True
-        elif _is_web_captcha_server(_get_link_server_name(cand), cand) and hide_captcha:
+            direct_bypass_added = True
+        elif _is_web_captcha_server(_get_link_server_name(cand), cand):
+            if not hide_captcha:
+                try: cand.bridge_engine = engine
+                except Exception: pass
+                curr_verified.append(cand)
+                if cand_url:
+                    existing_urls.add(cand_url)
+                direct_bypass_added = True
             if cand in remaining_unverified:
                 remaining_unverified.remove(cand)
         else:
             queue_to_verify.append(cand)
 
-    if torrents_added:
+    if direct_bypass_added:
         _persist_phase1_state(remaining_unverified)
 
     batch_size = 3
@@ -13897,25 +13931,41 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
                 remaining_unverified.remove(c_done)
 
         added_names = []
+        limit_hit = False
         for verified_cand in verified_batch:
             v_url = _safe_str(getattr(verified_cand, 'url', '') or '')
             if v_url and v_url in existing_urls:
                 continue
+            is_tor_v = _is_torrent_link(verified_cand)
+            is_cap_v = _is_web_captcha_server(_get_link_server_name(verified_cand), verified_cand)
+            if is_cap_v and hide_captcha:
+                continue
+            if not is_tor_v and not is_cap_v:
+                if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
+                    limit_hit = True
+                    continue
+                try: setattr(verified_cand, '_bridge_verified', True)
+                except Exception: pass
             try:
                 verified_cand.bridge_engine = engine
-                setattr(verified_cand, '_bridge_verified', True)
             except Exception:
                 pass
             curr_verified.append(verified_cand)
             if v_url:
                 existing_urls.add(v_url)
-            added_names.append(_get_link_server_name(verified_cand))
+            if not is_tor_v and not is_cap_v:
+                added_names.append(_get_link_server_name(verified_cand))
 
         if added_names:
             _persist_phase1_state(remaining_unverified)
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: %d enlace(s) verificado(s) añadidos (%s). Total verificados: %d" % (
-                len(added_names), ', '.join(added_names), len(curr_verified)
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: %d enlace(s) directo(s) verificado(s) añadidos (%s). Directos: %d%s | Total en lista: %d" % (
+                len(added_names), ', '.join(added_names), _count_direct_verified(curr_verified),
+                ('/%d' % max_func_limit) if max_func_limit > 0 else '', len(curr_verified)
             ), xbmc.LOGINFO)
+
+        if limit_hit or (max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit):
+            xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
+            break
 
         # Micro-pausa pasiva para mantener la CPU y ancho de banda suaves
         if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
@@ -16282,7 +16332,8 @@ def main():
             if _vl:
                 _se_links = _filter_and_sort_links(_vl)
             else:
-                _se_links = _filter_and_sort_links([l for l in _se_links if _is_torrent_link(l)])
+                _hc_se = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+                _se_links = _filter_and_sort_links([l for l in _se_links if _is_torrent_link(l) or (not _hc_se and _is_web_captcha_server(_get_link_server_name(l), l))])
             _se_verified = True
 
         _se_meta2 = dict(_se_meta)
@@ -16405,7 +16456,8 @@ def main():
             if _vl:
                 _force_links = _filter_and_sort_links(_vl)
             else:
-                _force_links = _filter_and_sort_links([l for l in _force_links if _is_torrent_link(l)])
+                _hc_fr = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+                _force_links = _filter_and_sort_links([l for l in _force_links if _is_torrent_link(l) or (not _hc_fr and _is_web_captcha_server(_get_link_server_name(l), l))])
             _force_verified = True
 
         _force_meta2 = dict(_force_meta)
@@ -16861,7 +16913,8 @@ def main():
                 if v_links:
                     links = _filter_and_sort_links(v_links)
                 else:
-                    links = _filter_and_sort_links([l for l in links if _is_torrent_link(l)])
+                    _hc = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+                    links = _filter_and_sort_links([l for l in links if _is_torrent_link(l) or (not _hc and _is_web_captcha_server(_get_link_server_name(l), l))])
                 verified_flag = True
 
             meta = {
@@ -17065,7 +17118,8 @@ def main():
                 if v_links:
                     links = v_links
                 else:
-                    links = [l for l in links if _is_torrent_link(l)]
+                    _hc2 = (_bridge_addon.getSetting('hide_captcha_links') == 'true')
+                    links = [l for l in links if _is_torrent_link(l) or (not _hc2 and _is_web_captcha_server(_get_link_server_name(l), l))]
                 verified_flag = True
 
             links = _filter_and_sort_links(links)
