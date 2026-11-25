@@ -4563,6 +4563,7 @@ def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
         sort_q = b_prefs.get('servers_sort_quality', 0)
 
     is_tor = _is_torrent_link(it)
+    is_cap = (not is_tor) and _is_web_captcha_server(_get_link_server_name(it), it)
     srv = 'torrent' if is_tor else (_get_link_server_name(it) or getattr(it, 'server', '') or '').lower()
     if not srv: srv = 'indeterminado'
 
@@ -4605,9 +4606,14 @@ def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
     hierarchy = b_prefs.get('sort_hierarchy', ('lang', 'quality', 'server'))
     key = []
 
-    # Opción: Forzar Torrents siempre debajo de enlaces directos
-    if b_prefs.get('force_torrents_bottom', True):
-        key.append(1 if is_tor else 0)
+    # Categoría fija: Directos/HTTP (0) -> Captchas en su propia categoría (1) -> Torrents (2 si force_torrents_bottom)
+    if is_cap:
+        cat_rank = 1
+    elif is_tor and b_prefs.get('force_torrents_bottom', True):
+        cat_rank = 2
+    else:
+        cat_rank = 0
+    key.append(cat_rank)
 
     for crit in hierarchy:
         key.extend(criteria_map.get(crit, ()))
@@ -15122,6 +15128,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         self.active_tab = initial_tab if initial_tab is not None else 0
         self.active_filter = None
         self.last_cm_time = 0
+        self._cm_open = False
         self.display_items = []
 
         # Separar directos, torrents y captchas para clasificacion e informacion
@@ -15162,7 +15169,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
                 try: setattr(self.playing_item, '_is_currently_playing', True)
                 except Exception: pass
 
-        # Respetar jerarquia: dentro de cada idioma, HTTP primero y Torrents debajo
+        # Respetar jerarquia: HTTP primero -> Captchas en su propia categoria -> Torrents debajo (y dentro de cada categoria: idioma, calidad, servidor)
         try:
             b_prefs = _get_filter_prefs()
             sort_q = b_prefs.get('servers_sort_quality', 0)
@@ -15608,11 +15615,16 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
     def onAction(self, action):
         aid = action.getId()
         if aid in (117, 101, 11):  # Menu contextual / Info
-            import time
-            if time.time() - self.last_cm_time < 0.5:
+            if getattr(self, '_cm_open', False):
                 return
-            self.last_cm_time = time.time()
-            self.handle_context_menu()
+            if time.time() - self.last_cm_time < 0.8:
+                return
+            self._cm_open = True
+            try:
+                self.handle_context_menu()
+            finally:
+                self.last_cm_time = time.time()
+                self._cm_open = False
             return
 
         if aid in (9, 10, 92, 110):  # Atras / ESC / Cancelar
@@ -15673,6 +15685,13 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         else:
             self.active_filter = chosen_action
             self._populate_list()
+        try:
+            self.setFocusId(2000)
+            ctrl = self.getControl(2000)
+            if ctrl and self.display_items:
+                ctrl.selectItem(0)
+        except Exception:
+            pass
 
     def close(self):
         if getattr(self, '_is_closed', False):
