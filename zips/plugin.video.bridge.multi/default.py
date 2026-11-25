@@ -1268,12 +1268,16 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         xbmc.log("Multi Bridge: monitor de reproducción ACTIVO (vídeo detectado en reproducción: %s)" % (title_str or media_key), xbmc.LOGINFO)
 
-        # Asegurar el cierre inmediato del spinner de carga de Kodi (busydialog / extendedbusydialog)
-        # al iniciar la reproducción para que no aparezca sobre el vídeo
+        # Asegurar el cierre inmediato del spinner de carga y barras OSD/SeekBar tras cambio en caliente
+        # para que los subtítulos aparezcan abajo desde el primer instante
         try:
             xbmc.executebuiltin('Dialog.Close(busydialog,true)')
             xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
             xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+            if old_playing_file:
+                xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
         except Exception:
             pass
 
@@ -1497,9 +1501,11 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 if abs(_cur_seek_t - float(seek_to_time)) > 4.0:
                     xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
                     p.seekTime(float(seek_to_time))
-                    if not mon.waitForAbort(0.35):
-                        try: xbmc.executebuiltin('Dialog.Close(seekbar,true)')
-                        except Exception: pass
+                    mon.waitForAbort(0.15)
+                if old_playing_file:
+                    xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                    xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                    xbmcgui.Window(10000).clearProperty('BridgeMulti.HotSwitching')
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
         elif seek_to_time <= 0 or force_beginning:
@@ -10340,6 +10346,13 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
 
                 # Criterio universal de progreso real: reloj >= 0.35s y con avance medible >= 0.20s
                 if cur_t >= 0.35 and (initial_t < 0 or (cur_t - initial_t) >= 0.20):
+                    if ignore_file:
+                        try:
+                            xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                            xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                            xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+                        except Exception:
+                            pass
                     return True
 
                 # Si Kodi está buffereando activamente, extender margen hasta max_abs_stall_time (nunca infinito)
@@ -12154,7 +12167,10 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                             xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
                             if xbmc.getCondVisibility("Player.Paused"):
                                 xbmc.Player().pause()
-                                xbmc.sleep(40)
+                                for _ in range(5):
+                                    if not xbmc.getCondVisibility("Player.Paused"):
+                                        break
+                                    xbmc.sleep(35)
                         except Exception:
                             pass
                     sync_tmdbhelper_playerstring(meta)
@@ -12218,7 +12234,10 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
                     if xbmc.getCondVisibility("Player.Paused"):
                         xbmc.Player().pause()
-                        xbmc.sleep(40)
+                        for _ in range(5):
+                            if not xbmc.getCondVisibility("Player.Paused"):
+                                break
+                            xbmc.sleep(35)
                 except Exception:
                     pass
             sys.argv[1] = '-1' if is_switch else str(handle)
@@ -16133,6 +16152,10 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
         pass
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.HotSwitching', 'true')
+    except Exception:
+        pass
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=cur_time)
     if played in ('cancel', 'no_client'):
         return played

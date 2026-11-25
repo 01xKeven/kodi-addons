@@ -132,6 +132,12 @@ import time
 class BridgePlayerService(xbmc.Player):
     def onAVStarted(self):
         try:
+            w = xbmcgui.Window(10000)
+            if w.getProperty('BridgeMulti.HotSwitching') == 'true':
+                w.clearProperty('BridgeMulti.HotSwitching')
+                xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
             xbmc.sleep(250)
             if self.isPlayingVideo():
                 _inject_active_playback_metadata(self)
