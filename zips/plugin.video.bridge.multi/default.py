@@ -2656,11 +2656,14 @@ def _get_item_tmdb(item):
         ch = _safe_str(getattr(item, 'channel', '')).lower()
         if any(x in ch for x in ('poseidon', 'cuevana', 'pelisplus', 'estrenosgo', 'pelisforte')):
             m = re.search(r'/(?:pelicula|serie|series|tv|movie)/(\d{2,9})(?:/|[-_]|$)', url)
-            if m and int(m.group(1)) > 0:
+            if m and int(m.group(1)) > 0 and not (1900 <= int(m.group(1)) <= 2099):
                 return m.group(1)
+            m2 = re.search(r'/(?:pelicula|serie|series|tv|movie)/[^/?#]*-(\d{5,9})(?:[/?#]|$)', url)
+            if m2 and int(m2.group(1)) > 0:
+                return m2.group(1)
         else:
             m = re.search(r'/(?:pelicula|serie|series|tv|movie)/(\d{2,9})/(?:[^/?#]+)', url)
-            if m and int(m.group(1)) > 0:
+            if m and int(m.group(1)) > 0 and not (1900 <= int(m.group(1)) <= 2099):
                 return m.group(1)
     return None
 
@@ -2730,7 +2733,7 @@ def is_slug_or_raw_consistent(raw_title, target_title, target_year, item=None, e
                 if subtitle not in raw_c:
                     raw_y_match = _get_item_year(item, raw_title, embedded_title_years=embedded_years)
                     if raw_y_match and target_year:
-                        if abs(int(raw_y_match) - int(target_year)) > 1: return False
+                        if int(raw_y_match) != int(target_year): return False
     raw_num = _extract_title_number(raw_sub)
     tgt_num = _extract_title_number(tgt_sub)
     if raw_num is not None or tgt_num is not None:
@@ -2745,8 +2748,7 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
       - TMDb match: +10000 (mismatch: REJECT)
       - IMDb match: +8000  (mismatch: REJECT)
       - Exact Year match: +3000
-      - Off-by-1 Year: +2000
-      - Year mismatch (>1): REJECT (0)
+      - Year mismatch (!=): REJECT (0)
       - Exact Clean Title match: +1000
       - Compact de-spaced match (hyphens/dots/acronyms): +950
       - Number words & Roman numerals normalized match: +900
@@ -2809,13 +2811,10 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
     year_score = 0
     if item_year and target_year:
         try:
-            y_diff = abs(int(item_year) - int(target_year))
-            if y_diff == 0:
+            if int(item_year) == int(target_year):
                 year_score = 3000
-            elif y_diff == 1:
-                year_score = 2000
             else:
-                # Strong rejection for year mismatch (e.g. 1984 vs 2026)
+                # Strict exact year only (any difference >= 1 year is rejected)
                 return 0
         except:
             pass
@@ -5689,12 +5688,12 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         try:
             _url_year = extract_year_from_url(_u)
             if _url_year:
-                if abs(_url_year - year_t) > 1:
+                if int(_url_year) != int(year_t):
                     try:
                         xbmc.log("Multi Bridge: %s '%s' descartado por año en URL (%d != %d)" % (channel_id, _u, _url_year, year_t), xbmc.LOGINFO)
                     except: pass
                     return False
-                # Coincide con el año objetivo (tolerancia +/- 1)
+                # Coincide exactamente con el año objetivo
                 _mark_confirmed()
                 return True
         except Exception:
@@ -5775,7 +5774,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         # 0.8. Check específico de HDFull y similares (ej: /buscar/year/2013 o /year/2013)
         hdfull_years = [int(y) for y in _re2.findall(r'/(?:buscar/)?year/(\d{4})', html, _re2.I)]
         if hdfull_years:
-            if any(abs(y - year_t) <= 1 for y in hdfull_years):
+            if any(y == year_t for y in hdfull_years):
                 _mark_confirmed()
                 return True
             else:
@@ -5815,7 +5814,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 head_years.extend(hy)
 
         if head_years:
-            if any(abs(y - year_t) <= 1 for y in head_years):
+            if any(y == year_t for y in head_years):
                 _mark_confirmed()
                 return True
             try:
@@ -5830,7 +5829,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         for mt in meta_titles:
             all_my.extend([int(y) for y in _re2.findall(years_re, mt)])
         if all_my:
-            if any(abs(y - year_t) <= 1 for y in all_my):
+            if any(y == year_t for y in all_my):
                 _mark_confirmed()
                 return True
             return False
@@ -5842,7 +5841,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         for md in meta_dates:
             all_md.extend([int(y) for y in _re2.findall(years_re, md)])
         if all_md:
-            if any(abs(y - year_t) <= 1 for y in all_md):
+            if any(y == year_t for y in all_md):
                 _mark_confirmed()
                 return True
             return False
@@ -5853,7 +5852,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             _t = _re2.sub(r'<[^>]+>', ' ', _mt.group(1))
             ty = [int(y) for y in _re2.findall(years_re, _t)]
             if ty:
-                if any(abs(y - year_t) <= 1 for y in ty):
+                if any(y == year_t for y in ty):
                     _mark_confirmed()
                     return True
                 return False
@@ -5862,7 +5861,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         j_dates = _re2.findall(r'["\'](?:releaseDate|releasedEvent)["\']\s*:\s*["\']?(19\d\d|20[0-3]\d)', html, _re2.IGNORECASE)
         if j_dates:
             jy = [int(y) for y in j_dates]
-            if any(abs(y - year_t) <= 1 for y in jy):
+            if any(y == year_t for y in jy):
                 _mark_confirmed()
                 return True
             return False
@@ -5871,7 +5870,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         lbl_m = _re2.search(r'>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*[:<](?:<[^>]+>|\s)*\b(19\d\d|20[0-3]\d)\b|>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b', html, _re2.IGNORECASE)
         if lbl_m:
             ly = int(lbl_m.group(1) or lbl_m.group(2))
-            if abs(ly - year_t) <= 1:
+            if ly == year_t:
                 _mark_confirmed()
                 return True
             return False
@@ -5880,7 +5879,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         inline_m = _re2.search(r'(?:ver\s+pel[ií]cula|online|estreno|a[ñn]o)[^<]{0,50}(?:\[|\()\s*(19\d\d|20[0-3]\d)\s*(?:\]|\)|,)', html, _re2.IGNORECASE)
         if inline_m:
             iy = int(inline_m.group(1))
-            if abs(iy - year_t) <= 1:
+            if iy == year_t:
                 _mark_confirmed()
                 return True
             try:
@@ -5892,7 +5891,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         cls_m = _re2.search(r'<[^>]+class=["\'][^"\']*\b(?:year|release)\b[^"\']*["\'][^>]*>\s*\b(19\d\d|20[0-3]\d)\b\s*<', html, _re2.IGNORECASE)
         if cls_m:
             cy = int(cls_m.group(1))
-            if abs(cy - year_t) <= 1:
+            if cy == year_t:
                 _mark_confirmed()
                 return True
             return False
@@ -5901,7 +5900,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         areshd_lbl = _re2.search(r'>\s*\b(19\d\d|20[0-3]\d)\b\s*</span[^>]*>\s*(?:<[^>]+>\s*)*A[ñn]o\b', html, _re2.IGNORECASE)
         if areshd_lbl:
             ay = int(areshd_lbl.group(1))
-            if abs(ay - year_t) <= 1:
+            if ay == year_t:
                 _mark_confirmed()
                 return True
             return False
@@ -5940,7 +5939,7 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         _all = [int(y) for y in _re2.findall(years_re, html)]
         if _all:
             _uniq = set(_all)
-            if len(_uniq) == 1 and len(_all) >= 3 and abs(list(_uniq)[0] - year_t) > 1:
+            if len(_uniq) == 1 and len(_all) >= 3 and list(_uniq)[0] != year_t:
                 return False
 
         if imdb_mismatch:
@@ -5992,7 +5991,7 @@ def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=Fals
                         ry_str = (r.get('release_date') or r.get('first_air_date') or '')[:4]
                         if (rt == t_clean or rot == t_clean) and ry_str.isdigit():
                             ry = int(ry_str)
-                            if target_y and abs(ry - target_y) > 1:
+                            if target_y and ry != target_y:
                                 homonyms = True
                                 break
                     if not homonyms:
@@ -6010,6 +6009,75 @@ def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=Fals
         return False
 
 _tmdb_identity_cache = {}
+_tmdb_runtime_cache = {}
+
+def _fetch_tmdb_runtime_secs(tmdb_id):
+    """Obtiene la duración oficial en segundos desde TMDb para validar películas."""
+    if not tmdb_id:
+        return 0
+    tid = str(tmdb_id).strip()
+    if not tid.isdigit():
+        return 0
+    if tid in _tmdb_runtime_cache:
+        return _tmdb_runtime_cache[tid]
+    secs = 0
+    try:
+        api_key = "a1ab8b8669da03637a4b98fa39c39228"
+        import json as _json
+        import urllib.request as _ureq
+        import ssl as _ssl
+        ctx = None
+        try: ctx = _ssl._create_unverified_context()
+        except Exception: pass
+        url = f"https://api.themoviedb.org/3/movie/{tid}?api_key={api_key}&language=en"
+        kwargs = {'timeout': 3.5}
+        if ctx: kwargs['context'] = ctx
+        with _ureq.urlopen(url, **kwargs) as resp:
+            data = _json.loads(resp.read().decode('utf-8', errors='ignore'))
+        rt = int(data.get('runtime') or 0) if isinstance(data, dict) else 0
+        if rt > 0:
+            secs = rt * 60
+    except Exception:
+        secs = 0
+    try:
+        if len(_tmdb_runtime_cache) > 300:
+            _tmdb_runtime_cache.clear()
+        if secs > 0:
+            _tmdb_runtime_cache[tid] = secs
+    except Exception:
+        pass
+    return secs
+
+def _is_playing_wrong_runtime(player, tmdb_id, is_series=False):
+    """Verifica tras iniciar reproducción si el archivo pertenece realmente a otra película
+    (ej. película de 2h cuando el original en TMDb dura 1h20-1h30, o tráiler/corto).
+    Retorna (mismatch_bool, expected_mins, actual_mins)."""
+    if is_series or not tmdb_id:
+        return False, 0, 0
+    expected_secs = _fetch_tmdb_runtime_secs(tmdb_id)
+    if expected_secs < 2400:
+        return False, 0, 0
+    actual_secs = 0.0
+    for _ in range(15):
+        try:
+            if not player.isPlayingVideo():
+                break
+            actual_secs = float(player.getTotalTime() or 0.0)
+            if actual_secs >= 60.0:
+                break
+        except Exception:
+            break
+        xbmc.sleep(100)
+    if actual_secs < 60.0:
+        return False, 0, 0
+    exp_m = int(round(expected_secs / 60.0))
+    act_m = int(round(actual_secs / 60.0))
+    if actual_secs < 900.0:
+        return True, exp_m, act_m
+    diff = abs(actual_secs - float(expected_secs))
+    if diff > max(1200.0, float(expected_secs) * 0.25):
+        return True, exp_m, act_m
+    return False, exp_m, act_m
 
 _PAREN_TAG_RE = re.compile(r'(?i)^\s*(4k|uhd|2160p|1080p|720p|480p|360p|bluray|blu-ray|bdrip|brrip|hdrip|hdtv|dvdrip|dvdscr|web-?d[l1]|webrip|web-rip|x26[45]|h26[45]|hevc|avc|xvid|divx|latino|castellano|espa[ñn]ol|subtitulad[oa]s?|dual|audio|hdr|sdr|dts|aac|ac3|mp3|extended|remastered|unrated|theatrical|directors?\s*cut|3d|sbs|hsbs|hdts|hd-ts|cam|ts|vose?|repack|proper)\s*$')
 
@@ -6068,7 +6136,7 @@ def _tmdb_identity_conflict(raw_title, target_tmdb, target_year):
                             _ry = _safe_str(top.get('release_date') or '')[:4]
                             _ty = _safe_str(target_year or '').strip()
                             if _ry.isdigit() and _ty.isdigit():
-                                if abs(int(_ry) - int(_ty)) > 1:
+                                if int(_ry) != int(_ty):
                                     conflict = True
                             else:
                                 conflict = True
@@ -6439,12 +6507,16 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     it_search.search_type = 'tvshow' if is_series else 'movie'
                     if not hasattr(it_search, 'infoLabels') or not isinstance(getattr(it_search, 'infoLabels', None), dict):
                         it_search.infoLabels = {}
-                    if target_tmdb:
-                        it_search.infoLabels['tmdb_id'] = str(target_tmdb)
-                    if target_imdb:
-                        it_search.infoLabels['imdb_id'] = str(target_imdb)
-                    if target_year:
-                        it_search.infoLabels['year'] = str(target_year)
+                    else:
+                        it_search.infoLabels = dict(it_search.infoLabels)
+                    # Nunca pre-inyectar tmdb_id/imdb_id/year en it_search.infoLabels antes de canal.search():
+                    # muchos canales usan it_search.clone(...) y contaminarían resultados erróneos haciéndolos pasar por válidos.
+                    for _pk in ('tmdb_id', 'tmdb', 'imdb_id', 'imdb', 'year', 'release_date', 'premiered'):
+                        it_search.infoLabels.pop(_pk, None)
+                    try: it_search.year = ''
+                    except Exception: pass
+                    try: it_search.tmdb_id = ''
+                    except Exception: pass
                     if is_series:
                         it_search.contentSerieName = cur_term
                         it_search.contentType = 'tvshow'
@@ -6556,15 +6628,17 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
             # Confianza del match (pelis y series): sin TMDb/IMDb ni año no se puede
             # distinguir homonimos (ej. Horas desesperadas 1990 vs 2013, o series homónimas).
             try:
-                _w_weak = (not _get_item_tmdb(it) and not _get_item_imdb(it)
-                           and not _get_item_year(it, title_check))
+                _it_tmdb_c = _get_item_tmdb(it)
+                _it_imdb_c = _get_item_imdb(it)
+                _it_year_c = _get_item_year(it, title_check)
+                _w_weak = (not _it_tmdb_c and not _it_imdb_c and not _it_year_c)
+                _needs_web_check = _w_weak or (not is_series and target_tmdb and not _it_tmdb_c and not _it_imdb_c)
             except Exception:
                 _w_weak = False
+                _needs_web_check = False
             xbmc.log("Multi Bridge: %s MATCH (score=%d) '%s' para term '%s' (target_year=%s tmdb=%s)%s" % (channel_id, score, title_check, cur_term, target_year, target_tmdb, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
-            # Chequeo de pagina real: si el match es debil y conocemos el año,
-            # se verifica el año que muestra la web (con aviso). Si la web
-            # muestra otro año, se salta este candidato (sin tocar el canal).
-            if _w_weak and (target_year or target_imdb or target_tmdb):
+            # Chequeo de pagina real: verifica año exacto, IMDb ID y reparto TMDB en la ficha real de la web.
+            if _needs_web_check and (target_year or target_imdb or target_tmdb):
                 try:
                     if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
                         xbmc.log("Multi Bridge: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
@@ -6862,12 +6936,16 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                     it_search.search_type = 'tvshow' if is_series else 'movie'
                     if not hasattr(it_search, 'infoLabels') or not isinstance(getattr(it_search, 'infoLabels', None), dict):
                         it_search.infoLabels = {}
-                    if target_tmdb:
-                        it_search.infoLabels['tmdb_id'] = str(target_tmdb)
-                    if target_imdb:
-                        it_search.infoLabels['imdb_id'] = str(target_imdb)
-                    if target_year:
-                        it_search.infoLabels['year'] = str(target_year)
+                    else:
+                        it_search.infoLabels = dict(it_search.infoLabels)
+                    # Nunca pre-inyectar tmdb_id/imdb_id/year en it_search.infoLabels antes de canal.search():
+                    # muchos canales usan it_search.clone(...) y contaminarían resultados erróneos haciéndolos pasar por válidos.
+                    for _pk in ('tmdb_id', 'tmdb', 'imdb_id', 'imdb', 'year', 'release_date', 'premiered'):
+                        it_search.infoLabels.pop(_pk, None)
+                    try: it_search.year = ''
+                    except Exception: pass
+                    try: it_search.tmdb_id = ''
+                    except Exception: pass
                     if is_series:
                         it_search.contentSerieName = cur_term
                         it_search.contentType = 'tvshow'
@@ -6936,15 +7014,16 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
 
         for score, it, title_check in candidates:
             try:
-                _w_weak = (not _get_item_tmdb(it) and not _get_item_imdb(it)
-                           and not _get_item_year(it, title_check))
+                _it_tmdb_c = _get_item_tmdb(it)
+                _it_imdb_c = _get_item_imdb(it)
+                _it_year_c = _get_item_year(it, title_check)
+                _w_weak = (not _it_tmdb_c and not _it_imdb_c and not _it_year_c)
+                _needs_web_check = _w_weak or (not is_series and target_tmdb and not _it_tmdb_c and not _it_imdb_c)
             except Exception:
                 _w_weak = False
+                _needs_web_check = False
             xbmc.log("Multi Bridge [Balandro]: %s MATCH (score=%d) '%s' para term '%s'%s" % (channel_id, score, title_check, cur_term, ' [match debil: sin anio ni ID]' if _w_weak else ''), xbmc.LOGINFO)
-            # Chequeo de pagina real: si el match es debil y conocemos el año,
-            # se verifica el año que muestra la web (con aviso). Si la web
-            # muestra otro año, se salta este candidato (sin tocar el canal).
-            if _w_weak and (target_year or target_imdb or target_tmdb):
+            if _needs_web_check and (target_year or target_imdb or target_tmdb):
                 try:
                     if not _detail_year_consistent(getattr(it, 'url', ''), target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series):
                         xbmc.log("Multi Bridge [Balandro]: %s '%s' descartado: la web muestra otro año, ID o reparto" % (channel_id, title_check), xbmc.LOGINFO)
@@ -7769,6 +7848,7 @@ def _run_parallel_search_impl(engine='alfa'):
         target_year = p_year
         all_names = [t for t in [target_title, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig')] if t]
         alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en')] if t and t != target_title]
+
     target_tmdb = p_tmdb
     target_imdb = p_imdb
 
@@ -9864,8 +9944,20 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
             continue
 
-        xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, monitoreando 3 min reales...' % (
+        xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, verificando duración y monitoreando 3 min reales...' % (
             idx+1, total_att, server), xbmc.LOGINFO)
+
+        _is_s_fb = bool((meta or {}).get('season') and (meta or {}).get('episode'))
+        _rt_bad, _exp_m, _act_m = _is_playing_wrong_runtime(player, (meta or {}).get('tmdb'), is_series=_is_s_fb)
+        if _rt_bad:
+            xbmc.log('Multi Bridge autoplay [%d/%d] %s descartado por duración incompatible (TMDb %d min vs archivo %d min)' % (
+                idx+1, total_att, server, _exp_m, _act_m), xbmc.LOGWARNING)
+            _record_session_failed_link(link, media_key=resume_media_key, meta=meta)
+            _stop_player_cleanly(player)
+            _restore_dialog_noblock()
+            if total_att - (idx + 1) > 0:
+                _show_bridge_notification('Multi Bridge · Autoplay', 'Película incorrecta (%d min vs %d min) · Probando siguiente...' % (_act_m, _exp_m), 3000)
+            continue
 
 
 
@@ -10527,6 +10619,24 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         all_names = [t for t in [target_title, title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_en or get_param('title_en'), title_orig or get_param('title_orig')] if t]
         alt_terms = [t for t in [title_es or get_param('title_es'), title_lat or get_param('title_lat'), title_orig or get_param('title_orig'), title_en or get_param('title_en')] if t and t != target_title]
 
+    # Complementar variantes de título desde TMDb también en Fast Autoplay (ej. 'La Odisea' + 'The Odyssey')
+    try:
+        _distinct_fa = len(set([_safe_str(x).lower().strip() for x in all_names if x]))
+        if p_tmdb and _distinct_fa < 3:
+            _fetched_fa = _fetch_tmdb_titles(p_tmdb, is_series)
+            for _ft in (_fetched_fa or []):
+                if _ft and _ft not in all_names:
+                    all_names.append(_ft)
+                if _ft and _ft != target_title and _ft not in alt_terms:
+                    alt_terms.append(_ft)
+        for _av in _alias_variants(all_names):
+            if _av and _av not in all_names:
+                all_names.append(_av)
+            if _av and _av != target_title and _av not in alt_terms:
+                alt_terms.append(_av)
+    except Exception:
+        pass
+
     # ── Reproducción instantánea desde CACHÉ si está disponible ──────────────
     if not cached_links:
         try:
@@ -10761,6 +10871,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     return True
 
                 if video_started and player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
+                    _rt_bad_c, _exp_c, _act_c = _is_playing_wrong_runtime(player, p_tmdb, is_series=is_series)
+                    if _rt_bad_c:
+                        xbmc.log("Multi Bridge Fast Autoplay: candidato en caché [%s] descartado por duración incompatible (TMDb %d min vs archivo %d min)" % (srv_name, _exp_c, _act_c), xbmc.LOGWARNING)
+                        cached_failed_urls.add(cand_u_key)
+                        _record_session_failed_link(cand, media_key=media_key, meta=meta)
+                        _stop_player_cleanly(player)
+                        continue
                     xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada [%s]!" % srv_name, xbmc.LOGINFO)
                     try: setattr(cand, '_bridge_verified', True)
                     except Exception: pass
@@ -11253,16 +11370,21 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             return True
 
         if video_started and not _is_kodi_modal_dialog_open():
-            xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
-            try:
-                xbmc.executebuiltin('Dialog.Close(busydialog,true)')
-                xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
-                xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
-            except Exception: pass
-            # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
-            start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
-            wait_for_playback_monitor()
-            return True
+            _rt_bad_w, _exp_w, _act_w = _is_playing_wrong_runtime(player, p_tmdb, is_series=is_series)
+            if _rt_bad_w:
+                xbmc.log("Multi Bridge Fast Autoplay Watchdog: [%s] descartado por duración incompatible (TMDb %d min vs archivo %d min)" % (
+                    _get_link_server_name(active_link), _exp_w, _act_w), xbmc.LOGWARNING)
+            else:
+                xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
+                try:
+                    xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+                    xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
+                    xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+                except Exception: pass
+                # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
+                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
+                wait_for_playback_monitor()
+                return True
 
         # C) Si llegó aquí, transcurrió el timeout o falló la decodificación (servidor caído / freeze)
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: enlace [%s] no inició (timeout/servidor caído). Intento %d de %d..." % (
@@ -14461,10 +14583,13 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
             xbmc.log('BridgeMulti PausePromptDialog onInit error: ' + str(e), xbmc.LOGWARNING)
 
     def _build(self):
-        W = 1920
-        H = 1080
+        try:
+            W = max(960, int(self.getWidth() or 1920))
+            H = max(720, int(self.getHeight() or 1080))
+        except Exception:
+            W, H = 1920, 1080
 
-        # Deteccion equilibrada de Modo Compacto vs Tactil
+        # Deteccion equilibrada de Modo Compacto vs Tactil / Tablet / Móvil
         touch_setting = str(_bridge_addon.getSetting('pause_prompt_touch_mode') or '0').strip()
         is_touch = False
         if touch_setting == '1':    # Forzar tactil
@@ -14479,12 +14604,12 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
                     xbmc.getCondVisibility('System.Platform.Linux')
                 )
                 is_android = bool(xbmc.getCondVisibility('System.Platform.Android'))
-                if is_pc and not is_android:
+                if is_android:
+                    is_touch = True
+                elif is_pc:
                     is_touch = False
-                elif is_android:
-                    is_touch = bool(xbmc.getCondVisibility('System.IsPhone'))
                 else:
-                    is_touch = False
+                    is_touch = bool(xbmc.getCondVisibility('System.IsPhone'))
             except Exception:
                 is_touch = False
 
@@ -14505,66 +14630,65 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
                     if valid_instant:
                         has_instant = True
 
-        if is_touch:
-            bh = 44
-            pad_hitbox = 12
-            if has_next:
-                dw, dh = 410, 102
-                btn_configs = [
-                    {'lbl': 'Continuar', 'w': 135, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 135, 'is_icon': False},
-                    {'lbl': '',          'w': 76,  'is_icon': True, 'instant': has_instant}
-                ]
-                gap = 12
-                iw, ih = 22, 22
-                rw, rh = 24, 28
-                rx_offset = 14
-                ry_offset = 9
-            else:
-                dw, dh = 350, 102
-                btn_configs = [
-                    {'lbl': 'Continuar', 'w': 145, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 145, 'is_icon': False}
-                ]
-                gap = 14
-                iw, ih = 22, 22
-                rw, rh = 24, 28
-                rx_offset = 14
-                ry_offset = 9
-        else:
-            bh = 36
-            pad_hitbox = 8
-            if has_next:
-                dw, dh = 356, 92
-                btn_configs = [
-                    {'lbl': 'Continuar', 'w': 118, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 118, 'is_icon': False},
-                    {'lbl': '',          'w': 62,  'is_icon': True, 'instant': has_instant}
-                ]
-                gap = 10
-                iw, ih = 20, 20
-                rw, rh = 22, 26
-                rx_offset = 13
-                ry_offset = 8
-            else:
-                dw, dh = 330, 92
-                btn_configs = [
-                    {'lbl': 'Continuar', 'w': 138, 'is_icon': False},
-                    {'lbl': 'Cambiar',   'w': 138, 'is_icon': False}
-                ]
-                gap = 12
-                iw, ih = 20, 20
-                rw, rh = 22, 26
-                rx_offset = 13
-                ry_offset = 8
+        # Diseño proporcional adaptable a cualquier resolución o relación de aspecto
+        # (1080p, 720p/laptops 1366x768, 4K, ultrawide, tablets y teléfonos táctiles)
+        scale_h = H / 1080.0
+        # En pantallas físicas pequeñas (<= 900px alto real) o táctiles damos un extra de tamaño
+        # para legibilidad y pulsación cómoda sin perder la estética ni la proporción de tarjeta.
+        try:
+            phys_w = int(xbmc.getInfoLabel('System.ScreenWidth') or 1920)
+            phys_h = int(xbmc.getInfoLabel('System.ScreenHeight') or 1080)
+        except Exception:
+            phys_w, phys_h = 1920, 1080
+        small_screen = (phys_h > 0 and phys_h <= 850) or (phys_w > 0 and phys_w <= 1400)
 
-        margin_x = 35
-        dx = W - dw - margin_x
+        if is_touch:
+            dh_ratio = 0.155
+            dw_base = 630 if has_next else 544
+            bh_base = 64
+            pad_hitbox = max(14, int(round(18 * scale_h)))
+            gap = max(12, int(round(16 * scale_h)))
+        else:
+            dh_ratio = 0.140 if small_screen else 0.133
+            dw_base = (576 if small_screen else 550) if has_next else (500 if small_screen else 476)
+            bh_base = 60 if small_screen else 56
+            pad_hitbox = max(10, int(round(14 * scale_h)))
+            gap = max(12, int(round(14 * scale_h)))
+
+        dh = max(118, int(round(H * dh_ratio)))
+        dw = min(int(W * 0.90), max(380, int(round(dw_base * scale_h))))
+        bh = min(int(dh * 0.48), max(46, int(round(bh_base * scale_h))))
+
+        pad_x = max(18, int(round(dw * 0.040)))
+        avail_w = max(240, dw - pad_x * 2)
+        if has_next:
+            btn_next_w = max(72, int(round(avail_w * 0.19)))
+            btn_main_w = max(100, (avail_w - btn_next_w - gap * 2) // 2)
+            btn_configs = [
+                {'lbl': 'Continuar', 'w': btn_main_w, 'is_icon': False},
+                {'lbl': 'Cambiar',   'w': btn_main_w, 'is_icon': False},
+                {'lbl': '',          'w': btn_next_w, 'is_icon': True, 'instant': has_instant}
+            ]
+        else:
+            btn_main_w = max(120, (avail_w - gap) // 2)
+            btn_configs = [
+                {'lbl': 'Continuar', 'w': btn_main_w, 'is_icon': False},
+                {'lbl': 'Cambiar',   'w': btn_main_w, 'is_icon': False}
+            ]
+
+        iw = ih = max(22, int(round(bh * 0.54)))
+        rw = max(22, int(round(bh * 0.52)))
+        rh = max(26, int(round(bh * 0.58)))
+        rx_offset = max(12, int(round(rw * 0.55)))
+        ry_offset = max(8, int(round(rh * 0.30)))
+
+        margin_x = max(20, int(round(W * 0.021)))
+        dx = max(10, W - dw - margin_x)
         if self._pos_setting == '1':  # Inferior derecha
-            margin_y = 50
-            dy = H - dh - margin_y
+            margin_y = max(24, int(round(H * 0.046)))
+            dy = max(10, H - dh - margin_y)
         else:  # Superior derecha (0)
-            margin_y = 40
+            margin_y = max(20, int(round(H * 0.038)))
             dy = margin_y
 
         # Fondo y borde dorado con esquinas redondeadas (9-slice en pause_prompt.xml)
@@ -14581,8 +14705,8 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
         srv = (self.server_name or "Actual").strip()
         if srv.lower() in ('torrent', 'magnet'):
             srv = 'Torrent'
-        elif len(srv) > 13:
-            srv = srv[:12] + '..'
+        elif len(srv) > 15:
+            srv = srv[:14] + '..'
 
         qual_active = getattr(self, 'current_quality', '') or ''
         if not qual_active and hasattr(self, 'current_link') and self.current_link:
@@ -14592,12 +14716,12 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
         else:
             header_text = '[B][COLOR FFCFA82C]¿Cambiar enlace?[/COLOR][/B]  [COLOR FF666666]|[/COLOR]  [COLOR FFDDDDDD]%s[/COLOR]' % srv
 
-        hdr_y = dy + (12 if is_touch else 10)
-        hdr_h = 22 if is_touch else 20
+        hdr_h = max(24, int(round(dh * 0.21)))
+        hdr_y = dy + max(12, int(round(dh * 0.11)))
         try:
             hdr_lbl = self.getControl(53)
-            hdr_lbl.setPosition(dx + 16, hdr_y)
-            hdr_lbl.setWidth(dw - 32)
+            hdr_lbl.setPosition(dx + pad_x, hdr_y)
+            hdr_lbl.setWidth(dw - pad_x * 2)
             hdr_lbl.setHeight(hdr_h)
             hdr_lbl.setLabel(header_text)
         except Exception:
@@ -14605,7 +14729,7 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
 
         total_w = sum(b['w'] for b in btn_configs) + gap * (len(btn_configs) - 1)
         bx = dx + (dw - total_w) // 2
-        by = dy + (44 if is_touch else 40)
+        by = dy + dh - bh - max(16, int(round(dh * 0.14)))
 
         self._btn_ids = []
         self._hl_ids = []
@@ -16156,8 +16280,10 @@ def main():
             try: _pv.close()
             except: pass
             if _vl:
-                _se_links  = _filter_and_sort_links(_vl)
-                _se_verified = True
+                _se_links = _filter_and_sort_links(_vl)
+            else:
+                _se_links = _filter_and_sort_links([l for l in _se_links if _is_torrent_link(l)])
+            _se_verified = True
 
         _se_meta2 = dict(_se_meta)
         _se_meta2['engine'] = _se_engine
@@ -16171,7 +16297,8 @@ def main():
                 'item': _serialize_item(_se_matched) if _se_matched else None,
                 'links': [_serialize_item(l) for l in (_se_links or [])],
                 'meta': _se_meta2,
-                'engine': _se_engine
+                'engine': _se_engine,
+                'cache_ver': 2
             })
         except: pass
         try:

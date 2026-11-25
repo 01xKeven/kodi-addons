@@ -23,37 +23,37 @@
         <control type="group" id="50">
             <animation type="WindowOpen" reversible="false">
                 <effect type="fade" start="0" end="100" time="220" tween="sine" />
-                <effect type="slide" start="60,0" end="0,0" time="220" tween="quadratic" easing="out" />
-                <effect type="zoom" start="86" end="100" center="1705,984" time="220" tween="quadratic" easing="out" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
-                <effect type="zoom" start="86" end="100" center="1705,86" time="220" tween="quadratic" easing="out" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="slide" start="70,0" end="0,0" time="220" tween="quadratic" easing="out" />
+                <effect type="zoom" start="86" end="100" center="1605,956" time="220" tween="quadratic" easing="out" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="86" end="100" center="1605,116" time="220" tween="quadratic" easing="out" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
             </animation>
             <animation type="WindowClose" reversible="false">
                 <effect type="fade" start="100" end="0" time="150" tween="sine" />
-                <effect type="zoom" start="100" end="90" center="1705,984" time="150" tween="quadratic" easing="in" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
-                <effect type="zoom" start="100" end="90" center="1705,86" time="150" tween="quadratic" easing="in" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="100" end="90" center="1605,956" time="150" tween="quadratic" easing="in" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="100" end="90" center="1605,116" time="150" tween="quadratic" easing="in" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
             </animation>
 
             <!-- Fondo oscuro con esquinas redondeadas -->
             <control type="image" id="51">
-                <left>1529</left><top>938</top>
-                <width>356</width><height>92</height>
-                <texture border="20">dialog_bg.png</texture>
+                <left>1330</left><top>884</top>
+                <width>550</width><height>144</height>
+                <texture border="22">dialog_bg.png</texture>
                 <colordiffuse>F40A0A0E</colordiffuse>
             </control>
 
             <!-- Borde dorado exterior con esquinas redondeadas -->
             <control type="image" id="52">
-                <left>1529</left><top>938</top>
-                <width>356</width><height>92</height>
-                <texture border="20">dialog_border.png</texture>
+                <left>1330</left><top>884</top>
+                <width>550</width><height>144</height>
+                <texture border="22">dialog_border.png</texture>
                 <colordiffuse>FFCFA82C</colordiffuse>
             </control>
 
             <!-- Encabezado: ¿Cambiar enlace? | Servidor Calidad -->
             <control type="label" id="53">
-                <left>1545</left><top>948</top>
-                <width>324</width><height>20</height>
-                <font>font10</font>
+                <left>1352</left><top>898</top>
+                <width>506</width><height>30</height>
+                <font>font13</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <align>left</align><aligny>center</aligny>
                 <scroll>false</scroll>
@@ -62,14 +62,14 @@
 
             <!-- BOTÓN 0: CONTINUAR (ID 100) -->
             <control type="button" id="100">
-                <left>1548</left><top>978</top>
-                <width>118</width><height>36</height>
+                <left>1352</left><top>944</top>
+                <width>184</width><height>58</height>
                 <label>Continuar</label>
-                <font>font10</font>
+                <font>font12</font>
                 <textcolor>FFCCCCCC</textcolor>
                 <focusedcolor>FFFFFFFF</focusedcolor>
-                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
-                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <texturefocus border="16" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="16" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
                 <align>center</align><aligny>center</aligny>
                 <pulseonselect>true</pulseonselect>
                 <onleft>101</onleft>
@@ -78,28 +78,28 @@
                 <ondown>100</ondown>
             </control>
             <control type="image" id="200">
-                <left>1548</left><top>978</top>
-                <width>118</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1352</left><top>944</top>
+                <width>184</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FF554418</colordiffuse>
             </control>
             <control type="image" id="300">
-                <left>1548</left><top>978</top>
-                <width>118</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1352</left><top>944</top>
+                <width>184</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FFCFA82C</colordiffuse>
             </control>
 
             <!-- BOTÓN 1: CAMBIAR (ID 101) -->
             <control type="button" id="101">
-                <left>1676</left><top>978</top>
-                <width>118</width><height>36</height>
+                <left>1550</left><top>944</top>
+                <width>184</width><height>58</height>
                 <label>Cambiar</label>
-                <font>font10</font>
+                <font>font12</font>
                 <textcolor>FFCCCCCC</textcolor>
                 <focusedcolor>FFFFFFFF</focusedcolor>
-                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
-                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <texturefocus border="16" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="16" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
                 <align>center</align><aligny>center</aligny>
                 <pulseonselect>true</pulseonselect>
                 <onleft>100</onleft>
@@ -108,28 +108,28 @@
                 <ondown>101</ondown>
             </control>
             <control type="image" id="201">
-                <left>1676</left><top>978</top>
-                <width>118</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1550</left><top>944</top>
+                <width>184</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FF554418</colordiffuse>
             </control>
             <control type="image" id="301">
-                <left>1676</left><top>978</top>
-                <width>118</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1550</left><top>944</top>
+                <width>184</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FFCFA82C</colordiffuse>
             </control>
 
             <!-- BOTÓN 2: SIGUIENTE CAPÍTULO (ID 102) -->
             <control type="button" id="102">
-                <left>1804</left><top>978</top>
-                <width>62</width><height>36</height>
+                <left>1748</left><top>944</top>
+                <width>108</width><height>58</height>
                 <label></label>
-                <font>font10</font>
+                <font>font12</font>
                 <textcolor>FFCCCCCC</textcolor>
                 <focusedcolor>FFFFFFFF</focusedcolor>
-                <texturefocus border="14" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
-                <texturenofocus border="14" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
+                <texturefocus border="16" colordiffuse="40CFA82C">dialog_bg.png</texturefocus>
+                <texturenofocus border="16" colordiffuse="16FFFFFF">dialog_bg.png</texturenofocus>
                 <align>center</align><aligny>center</aligny>
                 <pulseonselect>true</pulseonselect>
                 <onleft>101</onleft>
@@ -138,22 +138,22 @@
                 <ondown>102</ondown>
             </control>
             <control type="image" id="202">
-                <left>1804</left><top>978</top>
-                <width>62</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1748</left><top>944</top>
+                <width>108</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FF554418</colordiffuse>
             </control>
             <control type="image" id="302">
-                <left>1804</left><top>978</top>
-                <width>62</width><height>36</height>
-                <texture border="14">dialog_border.png</texture>
+                <left>1748</left><top>944</top>
+                <width>108</width><height>58</height>
+                <texture border="16">dialog_border.png</texture>
                 <colordiffuse>FFCFA82C</colordiffuse>
             </control>
 
             <!-- Icono siguiente episodio -->
             <control type="image" id="112">
-                <left>1825</left><top>986</top>
-                <width>20</width><height>20</height>
+                <left>1786</left><top>957</top>
+                <width>32</width><height>32</height>
                 <aspectratio align="center" aligny="center">keep</aspectratio>
                 <texture></texture>
                 <colordiffuse>FFCCCCCC</colordiffuse>
@@ -161,8 +161,8 @@
 
             <!-- Rayo dorado si está precargado -->
             <control type="image" id="113">
-                <left>1853</left><top>970</top>
-                <width>22</width><height>26</height>
+                <left>1832</left><top>934</top>
+                <width>30</width><height>34</height>
                 <aspectratio align="center" aligny="center">keep</aspectratio>
                 <texture></texture>
                 <colordiffuse>FFFFD700</colordiffuse>
