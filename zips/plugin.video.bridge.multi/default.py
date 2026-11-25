@@ -1302,6 +1302,10 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
+        try:
+            xbmcgui.Window(10000).setProperty('BridgeMulti.PlaybackStartTs', str(time.time()))
+        except Exception:
+            pass
 
         # Disparar pipeline secuencial en segundo plano (Fase 1: verificar enlaces faltantes del capitulo actual -> Fase 2: precargar siguiente capitulo)
         try:
@@ -1489,8 +1493,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 except: pass
                 if mon.waitForAbort(0.25): return
             try:
-                xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
-                p.seekTime(float(seek_to_time))
+                _cur_seek_t = float(p.getTime() or 0.0)
+                if abs(_cur_seek_t - float(seek_to_time)) > 4.0:
+                    xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
+                    p.seekTime(float(seek_to_time))
+                    if not mon.waitForAbort(0.35):
+                        try: xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                        except Exception: pass
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
         elif seek_to_time <= 0 or force_beginning:
@@ -11382,6 +11391,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     search_params = (is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms, p_tmdb, p_imdb)
     # Lanzar el recolector en segundo plano para completar los demás canales suavemente
+    global _BG_COLLECTOR_RUNNING
+    with _BG_COLLECTOR_LOCK:
+        _BG_COLLECTOR_RUNNING = True
     th_bg = threading.Thread(
         target=_fast_autoplay_background_collector,
         args=(engine, meta, matched_item_holder, fast_link, enabled_players, started_indices, results_dict, results_lock, all_found_links, search_params, initial_links, my_collector_token),
@@ -11389,7 +11401,12 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     )
     th_bg.name = "FastAutoplayBgCollector"
     _register_bg_thread(th_bg)
-    th_bg.start()
+    try:
+        th_bg.start()
+    except Exception:
+        with _BG_COLLECTOR_LOCK:
+            _BG_COLLECTOR_RUNNING = False
+        raise
 
     # Bucle de supervisión del vigilante
     active_link = fast_link
@@ -12130,6 +12147,16 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     # Solo en Android (MediaCodec) se detiene antes para liberar el decodificador de hardware.
                     if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
                         _android_stop_playback_if_active()
+                    elif is_switch:
+                        try:
+                            xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                            xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                            xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+                            if xbmc.getCondVisibility("Player.Paused"):
+                                xbmc.Player().pause()
+                                xbmc.sleep(40)
+                        except Exception:
+                            pass
                     sync_tmdbhelper_playerstring(meta)
                     xbmc.Player().play(media_url, _resolved_li[0])
                 return True
@@ -12184,6 +12211,16 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         try:
             if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
                 _android_stop_playback_if_active()
+            elif is_switch:
+                try:
+                    xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                    xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                    xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+                    if xbmc.getCondVisibility("Player.Paused"):
+                        xbmc.Player().pause()
+                        xbmc.sleep(40)
+                except Exception:
+                    pass
             sys.argv[1] = '-1' if is_switch else str(handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
@@ -13774,6 +13811,68 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
                 if not matched_item:
                     matched_item = _deserialize_item(disk_cache.get('item'), engine) if isinstance(disk_cache.get('item'), dict) else disk_cache.get('item')
 
+    def _reload_cache_state():
+        nonlocal unverified_list, curr_verified, matched_item, engine
+        _unv = []
+        _ver = list(curr_verified)
+        _eng = engine
+        _mi = matched_item
+        ram2 = _get_ram_search_cache()
+        if ram2:
+            r_meta2 = ram2.get('meta') or {}
+            r_tmdb2 = _norm_id_str(r_meta2.get('tmdb') or meta.get('tmdb'))
+            r_season2 = _norm_id_str(r_meta2.get('season') or meta.get('season'))
+            r_ep2 = _norm_id_str(r_meta2.get('episode') or meta.get('episode'))
+            m2 = True
+            if cur_tmdb and r_tmdb2 and cur_tmdb != r_tmdb2: m2 = False
+            if cur_season and r_season2 and cur_season != r_season2: m2 = False
+            if cur_ep and r_ep2 and cur_ep != r_ep2: m2 = False
+            if m2:
+                _eng = ram2.get('engine', _eng) or _eng
+                _unv = list(ram2.get('unverified_links') or [])
+                if ram2.get('links'):
+                    _ver = list(ram2.get('links') or [])
+                if not _mi:
+                    _mi = ram2.get('matched_item')
+        if not _unv:
+            dc2 = _read_search_cache_atomic()
+            if dc2 and isinstance(dc2, dict):
+                d_meta2 = dc2.get('meta') or {}
+                d_tmdb2 = _norm_id_str(d_meta2.get('tmdb') or meta.get('tmdb'))
+                d_season2 = _norm_id_str(d_meta2.get('season') or meta.get('season'))
+                d_ep2 = _norm_id_str(d_meta2.get('episode') or meta.get('episode'))
+                m2 = True
+                if cur_tmdb and d_tmdb2 and cur_tmdb != d_tmdb2: m2 = False
+                if cur_season and d_season2 and cur_season != d_season2: m2 = False
+                if cur_ep and d_ep2 and cur_ep != d_ep2: m2 = False
+                if m2:
+                    _eng = dc2.get('engine', _eng) or _eng
+                    _unv = [_deserialize_item(x, _eng) if isinstance(x, dict) else x for x in (dc2.get('unverified_links') or [])]
+                    _unv = [x for x in _unv if x and getattr(x, 'url', None)]
+                    if dc2.get('links') and not _ver:
+                        _ver = [_deserialize_item(x, _eng) if isinstance(x, dict) else x for x in (dc2.get('links') or [])]
+                        _ver = [x for x in _ver if x and getattr(x, 'url', None)]
+                    if not _mi:
+                        _mi = _deserialize_item(dc2.get('item'), _eng) if isinstance(dc2.get('item'), dict) else dc2.get('item')
+        unverified_list = _unv
+        curr_verified = _ver
+        matched_item = _mi
+        engine = _eng
+
+    def _wait_bg_collector(max_wait=45.0):
+        t0 = time.time()
+        while _BG_COLLECTOR_RUNNING and (time.time() - t0) < max_wait:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                return False
+            if mon.waitForAbort(0.25):
+                return False
+        return True
+
+    if not unverified_list and _BG_COLLECTOR_RUNNING:
+        if not _wait_bg_collector():
+            return
+        _reload_cache_state()
+
     if not unverified_list:
         xbmc.log("Multi Bridge Pipeline [Fase 1]: No hay enlaces pendientes por verificar para el capítulo actual.", xbmc.LOGINFO)
         return
@@ -13846,121 +13945,141 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
         except Exception as _save_e:
             xbmc.log("Multi Bridge Pipeline [Fase 1]: Error guardando caché incremental: %s" % str(_save_e), xbmc.LOGWARNING)
 
-    remaining_unverified = list(unverified_list)
-    existing_urls = {_safe_str(getattr(v, 'url', '')) for v in curr_verified if getattr(v, 'url', None)}
-
-    # Separar torrents y captchas antes de lanzar lotes HTTP:
-    # ambos pasan directamente sin verificarse ni contar hacia max_func_limit.
-    queue_to_verify = []
-    direct_bypass_added = False
-    for cand in unverified_list:
-        cand_url = _safe_str(getattr(cand, 'url', '') or '')
-        if cand_url and cand_url in existing_urls:
-            if cand in remaining_unverified:
-                remaining_unverified.remove(cand)
-            continue
-        if _is_torrent_link(cand):
-            try: cand.bridge_engine = engine
-            except Exception: pass
-            curr_verified.append(cand)
-            if cand_url:
-                existing_urls.add(cand_url)
-            if cand in remaining_unverified:
-                remaining_unverified.remove(cand)
-            direct_bypass_added = True
-        elif _is_web_captcha_server(_get_link_server_name(cand), cand):
-            if not hide_captcha:
+    def _run_verification_pass(cand_items):
+        nonlocal curr_verified
+        if not cand_items:
+            return
+        rem_unv = list(cand_items)
+        q_verify = []
+        direct_bypass_added = False
+        for cand in cand_items:
+            cand_url = _safe_str(getattr(cand, 'url', '') or '')
+            if cand_url and cand_url in existing_urls:
+                if cand in rem_unv:
+                    rem_unv.remove(cand)
+                continue
+            if _is_torrent_link(cand):
                 try: cand.bridge_engine = engine
                 except Exception: pass
                 curr_verified.append(cand)
                 if cand_url:
                     existing_urls.add(cand_url)
+                if cand in rem_unv:
+                    rem_unv.remove(cand)
                 direct_bypass_added = True
-            if cand in remaining_unverified:
-                remaining_unverified.remove(cand)
-        else:
-            queue_to_verify.append(cand)
+            elif _is_web_captcha_server(_get_link_server_name(cand), cand):
+                if not hide_captcha:
+                    try: cand.bridge_engine = engine
+                    except Exception: pass
+                    curr_verified.append(cand)
+                    if cand_url:
+                        existing_urls.add(cand_url)
+                    direct_bypass_added = True
+                if cand in rem_unv:
+                    rem_unv.remove(cand)
+            else:
+                q_verify.append(cand)
 
-    if direct_bypass_added:
-        _persist_phase1_state(remaining_unverified)
+        if direct_bypass_added:
+            _persist_phase1_state(rem_unv)
 
-    batch_size = 3
-    idx_q = 0
-    while idx_q < len(queue_to_verify):
-        if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
-            if mon.abortRequested() or _SHUTDOWN_REQUESTED:
-                abort_all_network_sockets()
-            return
-
-        # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
-        while _floating_dialog_active or _is_dialog_active_global():
+        batch_size = 3
+        idx_q = 0
+        while idx_q < len(q_verify):
             if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
-                return
-            if mon.waitForAbort(0.5):
-                return
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Interrumpido por cambio de reproducción o detención del reproductor", xbmc.LOGINFO)
+                if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+                    abort_all_network_sockets()
+                return False
 
-        if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
-            break
+            # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
+            while _floating_dialog_active or _is_dialog_active_global():
+                if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                    return False
+                if mon.waitForAbort(0.5):
+                    return False
 
-        batch = queue_to_verify[idx_q:idx_q + batch_size]
-        idx_q += batch_size
+            if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
+                break
 
-        verified_batch = []
-        try:
-            with silenced_dialogs():
-                verified_batch = _verify_links_headless(batch, engine=engine, p_dialog=None) or []
-        except Exception as _ve:
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: Error verificando lote: %s" % str(_ve), xbmc.LOGDEBUG)
+            batch = q_verify[idx_q:idx_q + batch_size]
+            idx_q += batch_size
+
             verified_batch = []
-
-        for c_done in batch:
-            if c_done in remaining_unverified:
-                remaining_unverified.remove(c_done)
-
-        added_names = []
-        limit_hit = False
-        for verified_cand in verified_batch:
-            v_url = _safe_str(getattr(verified_cand, 'url', '') or '')
-            if v_url and v_url in existing_urls:
-                continue
-            is_tor_v = _is_torrent_link(verified_cand)
-            is_cap_v = _is_web_captcha_server(_get_link_server_name(verified_cand), verified_cand)
-            if is_cap_v and hide_captcha:
-                continue
-            if not is_tor_v and not is_cap_v:
-                if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
-                    limit_hit = True
-                    continue
-                try: setattr(verified_cand, '_bridge_verified', True)
-                except Exception: pass
             try:
-                verified_cand.bridge_engine = engine
-            except Exception:
-                pass
-            curr_verified.append(verified_cand)
-            if v_url:
-                existing_urls.add(v_url)
-            if not is_tor_v and not is_cap_v:
-                added_names.append(_get_link_server_name(verified_cand))
+                with silenced_dialogs():
+                    verified_batch = _verify_links_headless(batch, engine=engine, p_dialog=None) or []
+            except Exception as _ve:
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Error verificando lote: %s" % str(_ve), xbmc.LOGDEBUG)
+                verified_batch = []
 
-        if added_names:
-            _persist_phase1_state(remaining_unverified)
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: %d enlace(s) directo(s) verificado(s) añadidos (%s). Directos: %d%s | Total en lista: %d" % (
-                len(added_names), ', '.join(added_names), _count_direct_verified(curr_verified),
-                ('/%d' % max_func_limit) if max_func_limit > 0 else '', len(curr_verified)
-            ), xbmc.LOGINFO)
+            for c_done in batch:
+                if c_done in rem_unv:
+                    rem_unv.remove(c_done)
 
-        if limit_hit or (max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit):
-            xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
-            break
+            added_names = []
+            limit_hit = False
+            for verified_cand in verified_batch:
+                v_url = _safe_str(getattr(verified_cand, 'url', '') or '')
+                if v_url and v_url in existing_urls:
+                    continue
+                is_tor_v = _is_torrent_link(verified_cand)
+                is_cap_v = _is_web_captcha_server(_get_link_server_name(verified_cand), verified_cand)
+                if is_cap_v and hide_captcha:
+                    continue
+                if not is_tor_v and not is_cap_v:
+                    if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
+                        limit_hit = True
+                        continue
+                    try: setattr(verified_cand, '_bridge_verified', True)
+                    except Exception: pass
+                try:
+                    verified_cand.bridge_engine = engine
+                except Exception:
+                    pass
+                curr_verified.append(verified_cand)
+                if v_url:
+                    existing_urls.add(v_url)
+                if not is_tor_v and not is_cap_v:
+                    added_names.append(_get_link_server_name(verified_cand))
 
-        # Micro-pausa pasiva para mantener la CPU y ancho de banda suaves
-        if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
-            if mon.abortRequested() or _SHUTDOWN_REQUESTED:
-                abort_all_network_sockets()
+            if added_names:
+                _persist_phase1_state(rem_unv)
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: %d enlace(s) directo(s) verificado(s) añadidos (%s). Directos: %d%s | Total en lista: %d" % (
+                    len(added_names), ', '.join(added_names), _count_direct_verified(curr_verified),
+                    ('/%d' % max_func_limit) if max_func_limit > 0 else '', len(curr_verified)
+                ), xbmc.LOGINFO)
+
+            if limit_hit or (max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit):
+                xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
+                break
+
+            # Micro-pausa pasiva para mantener la CPU y ancho de banda suaves
+            if mon.waitForAbort(0.15) or _BG_TASK_ABORT_EVENT.is_set() or not p.isPlayingVideo():
+                if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+                    abort_all_network_sockets()
+                return False
+        return True
+
+    existing_urls = {_safe_str(getattr(v, 'url', '')) for v in curr_verified if getattr(v, 'url', None)}
+    if not _run_verification_pass(unverified_list):
+        return
+
+    # Si el recolector en segundo plano de Fast Autoplay aún estaba buscando otros canales,
+    # esperar a que termine y verificar también los enlaces directos restantes que haya encontrado.
+    if _BG_COLLECTOR_RUNNING and (max_func_limit <= 0 or _count_direct_verified(curr_verified) < max_func_limit):
+        if not _wait_bg_collector():
             return
+        _reload_cache_state()
+        for _cv in curr_verified:
+            _cu = _safe_str(getattr(_cv, 'url', '') or '')
+            if _cu:
+                existing_urls.add(_cu)
+        extra_unv = _filter_and_sort_links(unverified_list) if unverified_list else []
+        if extra_unv:
+            if not _run_verification_pass(extra_unv):
+                return
 
     # Fin de Fase 1: guardar estado definitivo limpio
     _persist_phase1_state([])
@@ -14184,6 +14303,133 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
         xbmc.log("Multi Bridge Pipeline [Fase 2]: Ningún enlace funcional encontrado para %s." % cache_key, xbmc.LOGINFO)
 
 
+def _notify_preferred_captcha_if_needed(meta, my_token, p, mon):
+    """En Fast Autoplay, tras revisar todos los enlaces directos, avisa durante la reproducción
+    si no hubo ningún enlace directo de mayor prioridad idiomática pero sí existe un enlace Captcha
+    en un idioma preferido (ej. Latino o Castellano cuando los directos solo están en VOSE)."""
+    try:
+        if xbmcgui.Window(10000).getProperty('bridge.in_autoplay') != 'true':
+            return
+        if _bridge_addon.getSetting('hide_captcha_links') == 'true':
+            return
+        if xbmcgui.Window(10000).getProperty('BridgeMulti.CaptchaNotifiedToken') == str(my_token):
+            return
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or _BG_TASK_ABORT_EVENT.is_set():
+            return
+        if not p.isPlayingVideo():
+            return
+
+        # Si el recolector en segundo plano todavía está buscando canales, esperar a que concluya
+        t_bg = time.time()
+        while _BG_COLLECTOR_RUNNING and (time.time() - t_bg) < 45.0:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                return
+            if mon.waitForAbort(0.25):
+                return
+
+        # Esperar al menos 3 segundos desde el inicio de reproducción antes de mostrar el aviso
+        try:
+            start_ts = float(xbmcgui.Window(10000).getProperty('BridgeMulti.PlaybackStartTs') or '0')
+        except Exception:
+            start_ts = 0.0
+        if start_ts <= 0.0:
+            start_ts = time.time()
+        while (time.time() - start_ts) < 3.0:
+            if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
+                return
+            if mon.waitForAbort(0.2):
+                return
+
+        cur_tmdb = _norm_id_str(meta.get('tmdb') if meta else '')
+        cur_season = _norm_id_str(meta.get('season') if meta else '')
+        cur_ep = _norm_id_str(meta.get('episode') if meta else '')
+
+        links = []
+        ram = _get_ram_search_cache(target_tmdb=cur_tmdb, target_season=cur_season, target_episode=cur_ep)
+        if ram and ram.get('links'):
+            links = list(ram.get('links') or [])
+        else:
+            dc = _read_search_cache_atomic()
+            if dc and isinstance(dc, dict) and dc.get('links'):
+                d_meta = dc.get('meta') or {}
+                d_tmdb = _norm_id_str(d_meta.get('tmdb'))
+                d_season = _norm_id_str(d_meta.get('season'))
+                d_ep = _norm_id_str(d_meta.get('episode'))
+                if (not cur_tmdb or not d_tmdb or cur_tmdb == d_tmdb) and \
+                   (not cur_season or not d_season or cur_season == d_season) and \
+                   (not cur_ep or not d_ep or cur_ep == d_ep):
+                    eng = dc.get('engine', 'balandro') or 'balandro'
+                    links = [_deserialize_item(x, eng) if isinstance(x, dict) else x for x in (dc.get('links') or [])]
+                    links = [x for x in links if x and getattr(x, 'url', None)]
+
+        if not links:
+            return
+
+        b_prefs = _get_filter_prefs()
+        links = _filter_discarded_links(links, disc_list=b_prefs.get('servers_discarded', []))
+        if not links:
+            return
+
+        p_lat = int(b_prefs.get('preferencia_idioma_lat', 1) or 0)
+        p_esp = int(b_prefs.get('preferencia_idioma_esp', 2) or 0)
+        p_vos = int(b_prefs.get('preferencia_idioma_vos', 3) or 0)
+
+        def _lang_rank_label(it):
+            l_str = (_safe_str(getattr(it, 'language', '')) + ' ' + _get_link_language_group(it)).upper()
+            if 'LAT' in l_str:
+                return p_lat, 'Latino'
+            if 'ESP' in l_str or 'CAST' in l_str:
+                return p_esp, 'Castellano'
+            if 'VOS' in l_str or 'VO' in l_str or 'SUB' in l_str or 'ENG' in l_str:
+                return p_vos, 'VOSE'
+            return 0, ''
+
+        best_direct_rank = 99
+        captcha_cands = []
+        sort_q = b_prefs.get('servers_sort_quality', 0)
+
+        for l in links:
+            if _is_torrent_link(l):
+                continue
+            rk, lbl = _lang_rank_label(l)
+            if _is_web_captcha_server(_get_link_server_name(l), l):
+                if rk > 0 and lbl:
+                    captcha_cands.append((rk, lbl, _get_hierarchical_sort_key(l, b_prefs=b_prefs, sort_q=sort_q), l))
+            else:
+                if rk > 0 and rk < best_direct_rank:
+                    best_direct_rank = rk
+
+        if not captcha_cands:
+            return
+
+        captcha_cands.sort(key=lambda x: (x[0], x[2]))
+        best_cap_rk, best_cap_lbl, _, best_cap_item = captcha_cands[0]
+
+        if best_cap_rk >= best_direct_rank:
+            return
+
+        if mon.abortRequested() or _get_global_monitor_token() != my_token or _BG_TASK_ABORT_EVENT.is_set():
+            return
+        if not p.isPlayingVideo() or xbmcgui.Window(10000).getProperty('bridge.in_autoplay') != 'true':
+            return
+
+        cap_srv = (_get_link_server_name(best_cap_item) or 'Captcha').strip()
+        try:
+            xbmcgui.Window(10000).setProperty('BridgeMulti.CaptchaNotifiedToken', str(my_token))
+        except Exception:
+            pass
+        xbmc.log("Multi Bridge Fast Autoplay: avisando Captcha en %s (%s) [cap_rank=%d < direct_rank=%d]" % (
+            best_cap_lbl, cap_srv, best_cap_rk, best_direct_rank), xbmc.LOGINFO)
+        xbmcgui.Dialog().notification(
+            'Multi Bridge',
+            'Enlace Captcha en %s disponible (%s)' % (best_cap_lbl, cap_srv),
+            xbmcgui.NOTIFICATION_INFO,
+            4500
+        )
+    except Exception as _cn_e:
+        xbmc.log("Multi Bridge: error comprobando aviso captcha preferido: %s" % _cn_e, xbmc.LOGDEBUG)
+
+
 def _start_playback_background_pipeline(meta, my_token):
     """Pipeline orquestador de dos fases en segundo plano:
     FASE 1: Verifica suavemente los enlaces pendientes del capítulo actual y actualiza el OSD y menú de pausa.
@@ -14199,9 +14445,14 @@ def _start_playback_background_pipeline(meta, my_token):
     except Exception as e:
         xbmc.log("Multi Bridge Pipeline: Error en Fase 1: %s" % str(e), xbmc.LOGWARNING)
 
-    # Validar que la reproducción continúa activa antes de pasar a Fase 2
+    # Validar que la reproducción continúa activa antes de notificar captcha o pasar a Fase 2
     if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
         xbmc.log("Multi Bridge Pipeline: Descartado antes de Fase 2 (reproducción terminada o nueva sesión)", xbmc.LOGINFO)
+        return
+
+    _notify_preferred_captcha_if_needed(meta, my_token, p, mon)
+
+    if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo():
         return
 
     if _bridge_addon.getSetting('preload_next_episode') == 'false':
