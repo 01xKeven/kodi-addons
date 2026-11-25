@@ -24,35 +24,35 @@
             <animation type="WindowOpen" reversible="false">
                 <effect type="fade" start="0" end="100" time="220" tween="sine" />
                 <effect type="slide" start="70,0" end="0,0" time="220" tween="quadratic" easing="out" />
-                <effect type="zoom" start="86" end="100" center="1570,956" time="220" tween="quadratic" easing="out" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
-                <effect type="zoom" start="86" end="100" center="1570,116" time="220" tween="quadratic" easing="out" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="86" end="100" center="1630,956" time="220" tween="quadratic" easing="out" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="86" end="100" center="1630,116" time="220" tween="quadratic" easing="out" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
             </animation>
             <animation type="WindowClose" reversible="false">
                 <effect type="fade" start="100" end="0" time="150" tween="sine" />
-                <effect type="zoom" start="100" end="90" center="1570,956" time="150" tween="quadratic" easing="in" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
-                <effect type="zoom" start="100" end="90" center="1570,116" time="150" tween="quadratic" easing="in" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="100" end="90" center="1630,956" time="150" tween="quadratic" easing="in" condition="!String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
+                <effect type="zoom" start="100" end="90" center="1630,116" time="150" tween="quadratic" easing="in" condition="String.IsEqual(Window(10000).Property(bridge.pp_pos),0)" />
             </animation>
 
             <!-- Fondo oscuro con esquinas redondeadas -->
             <control type="image" id="51">
-                <left>1260</left><top>884</top>
-                <width>620</width><height>144</height>
+                <left>1380</left><top>884</top>
+                <width>500</width><height>144</height>
                 <texture border="22">dialog_bg.png</texture>
                 <colordiffuse>F40A0A0E</colordiffuse>
             </control>
 
             <!-- Borde dorado exterior con esquinas redondeadas -->
             <control type="image" id="52">
-                <left>1260</left><top>884</top>
-                <width>620</width><height>144</height>
+                <left>1380</left><top>884</top>
+                <width>500</width><height>144</height>
                 <texture border="22">dialog_border.png</texture>
                 <colordiffuse>FFCFA82C</colordiffuse>
             </control>
 
             <!-- Encabezado: ¿Cambiar enlace? | Servidor Calidad -->
             <control type="label" id="53">
-                <left>1284</left><top>898</top>
-                <width>572</width><height>30</height>
+                <left>1400</left><top>898</top>
+                <width>460</width><height>30</height>
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <align>left</align><aligny>center</aligny>

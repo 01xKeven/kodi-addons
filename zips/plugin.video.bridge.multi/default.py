@@ -1199,7 +1199,7 @@ def wait_for_playback_monitor():
     except Exception:
         pass
 
-def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False):
+def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False, old_playing_file=None):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
     _BG_TASK_ABORT_EVENT.clear()
@@ -1234,6 +1234,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         # Esperar hasta 180 segundos (3 minutos) a que inicie la reproducción
         # Esto es vital para torrents (Elementum, Quasar) que tardan en conectar con peers y descargar el pre-buffer
         video_started = False
+        _switch_wait_start = time.time()
         for _w in range(720):
             if mon.abortRequested() or _get_global_monitor_token() != my_token:
                 xbmc.log("Multi Bridge: monitor descartado antes de iniciar (superado por nuevo enlace o cancelado)", xbmc.LOGINFO)
@@ -1242,6 +1243,14 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 xbmc.log("Multi Bridge: monitor detectó error de reproducción de Kodi antes de iniciar", xbmc.LOGINFO)
                 return
             if p.isPlayingVideo():
+                if old_playing_file:
+                    try:
+                        _pf = p.getPlayingFile() or ''
+                    except Exception:
+                        _pf = ''
+                    if _pf and _pf == old_playing_file and (time.time() - _switch_wait_start) < 3.5:
+                        if mon.waitForAbort(0.1): return
+                        continue
                 # Comprobar que la clave de medios coincide con la sesión actual
                 cur_k = ''
                 try: cur_k = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or ''
@@ -10245,7 +10254,7 @@ def _stop_player_cleanly(player=None):
     xbmc.sleep(250)
 
 
-def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name=""):
+def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name="", ignore_file=None):
     """Espera a que Kodi inicie la reproducción y verifica PROGRESIÓN REAL de reloj/fotogramas.
 
     Protege contra falsos positivos donde `player.isPlayingVideo()` devuelve True pero el
@@ -10282,6 +10291,14 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
 
         # Comprobar si el vídeo ya abrió demuxer y levantó el hilo de reproducción
         if player.isPlayingVideo():
+            if ignore_file:
+                try:
+                    _cur_pf = player.getPlayingFile() or ''
+                except Exception:
+                    _cur_pf = ''
+                if _cur_pf and _cur_pf == ignore_file and (time.time() - t_start) < 3.5:
+                    xbmc.sleep(100)
+                    continue
             # STREAM ABIERTO: Verificar avance real del reloj de reproducción
             t_first_playing = time.time()
             t_chk_start = t_first_playing
@@ -11572,9 +11589,6 @@ def _autoplay_link(link, handle, engine, matched_item=None):
         platformtools = mods['platformtools']
         parent = matched_item if matched_item else link
 
-        # Spinner nativo de Kodi en lugar de ventana emergente
-        xbmc.executebuiltin('ActivateWindow(busydialog)')
-
         _resolved_li = [None]
         _result      = [None]   # True=ok, False=fail, 'cancel'=user cancelled
 
@@ -11956,9 +11970,6 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         platformtools = mods['platformtools']
         parent = matched_item if matched_item else prepared
 
-        # Spinner nativo de Kodi en lugar de ventana emergente
-        xbmc.executebuiltin('ActivateWindow(busydialog)')
-
         import xbmcplugin as _xp
         _resolved_li = [None]
         _result = [None]   # True=éxito, False=fallo, 'cancel'=cancelado por usuario
@@ -12090,9 +12101,13 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                         _update_link_real_quality_in_cache(None, q_from_url, link_obj=link)
                     except Exception:
                         pass
-                sync_tmdbhelper_playerstring(meta)
                 if _resolved_li[0] is not None:
                     set_listitem_info(_resolved_li[0], meta=meta)
+                    try:
+                        _resolved_li[0].setContentLookup(False)
+                        _resolved_li[0].setProperty('IsPlayable', 'true')
+                    except Exception:
+                        pass
                     if seek_to_time > 0:
                         _resolved_li[0].setProperty('StartOffset', str(float(seek_to_time)))
                         _resolved_li[0].setProperty('ResumeTime', str(float(seek_to_time)))
@@ -12110,29 +12125,13 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 if handle > 0 and not is_switch:
                     xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
                 else:
-                    try:
-                        if is_switch and (xbmc.Player().isPlaying() or xbmc.getCondVisibility("Player.HasMedia")):
-                            try:
-                                if xbmc.getCondVisibility("Player.Paused"):
-                                    try: xbmc.Player().pause()
-                                    except: pass
-                                    xbmc.sleep(50)
-                            except: pass
-                            xbmc.Player().stop()
-                            try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-                            except: pass
-                            for _ in range(60):
-                                if not xbmc.Player().isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
-                                    break
-                                xbmc.sleep(50)
-                            xbmc.sleep(300)
-                    except Exception:
-                        pass
+                    # En PC/Desktop el reemplazo directo con Player.play() mientras está pausado evita salir
+                    # a MyVideoNav (window 10025) y evita sondeos CCurlFile::Stat colgados contra proxies locales.
+                    # Solo en Android (MediaCodec) se detiene antes para liberar el decodificador de hardware.
+                    if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
+                        _android_stop_playback_if_active()
                     sync_tmdbhelper_playerstring(meta)
-                    if _resolved_li[0] is not None:
-                        set_listitem_info(_resolved_li[0], meta=meta)
                     xbmc.Player().play(media_url, _resolved_li[0])
-                    sync_tmdbhelper_playerstring(meta)
                 return True
             else:
                 xbmc.log(f"Multi Bridge: {server_name} resolvió pero no proporcionó la ruta final del vídeo", xbmc.LOGWARNING)
@@ -12183,24 +12182,8 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         if not mods: return False
         platformtools = mods['platformtools']
         try:
-            if is_switch and (xbmc.Player().isPlaying() or xbmc.getCondVisibility("Player.HasMedia")):
-                try:
-                    try:
-                        if xbmc.getCondVisibility("Player.Paused"):
-                            try: xbmc.Player().pause()
-                            except: pass
-                            xbmc.sleep(50)
-                    except: pass
-                    xbmc.Player().stop()
-                    try: xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
-                    except: pass
-                    for _ in range(60):
-                        if not xbmc.Player().isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
-                            break
-                        xbmc.sleep(50)
-                    xbmc.sleep(300)
-                except Exception:
-                    pass
+            if is_switch and bool(xbmc.getCondVisibility('System.Platform.Android')):
+                _android_stop_playback_if_active()
             sys.argv[1] = '-1' if is_switch else str(handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
@@ -14724,35 +14707,35 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
         has_qual = bool(qual_active and qual_active != 'N/A')
 
         if is_touch:
-            dh_ratio = 0.155
-            dw_base = 640 if has_next else 580
-            bh_base = 64
+            dh_ratio = 0.152
+            dw_base = 530 if has_next else 475
+            bh_base = 62
             pad_hitbox = max(10, int(round(18 * scale_ui)))
-            gap = max(10, int(round(16 * scale_ui)))
-        else:
-            dh_ratio = 0.140 if small_screen else 0.134
-            dw_base = (615 if small_screen else 600) if has_next else (560 if small_screen else 540)
-            bh_base = 60 if small_screen else 56
-            pad_hitbox = max(8, int(round(14 * scale_ui)))
             gap = max(10, int(round(14 * scale_ui)))
+        else:
+            dh_ratio = 0.138 if small_screen else 0.132
+            dw_base = (505 if small_screen else 490) if has_next else (455 if small_screen else 440)
+            bh_base = 58 if small_screen else 54
+            pad_hitbox = max(8, int(round(14 * scale_ui)))
+            gap = max(10, int(round(12 * scale_ui)))
 
         max_dw = max(260, int(W * 0.94))
         max_dh = max(92, int(H * 0.30))
         dh = min(max_dh, max(92, int(round(H * dh_ratio))))
-        dw = min(max_dw, max(300, int(round(dw_base * scale_ui))))
+        dw = min(max_dw, max(280, int(round(dw_base * scale_ui))))
         bh = min(int(dh * 0.48), max(38, int(round(bh_base * scale_ui))))
 
-        pad_x = max(14, int(round(dw * 0.038)))
-        # Ancho mínimo requerido para que el encabezado completo con font12 nunca se recorte
+        pad_x = max(14, int(round(dw * 0.036)))
+        # Ancho mínimo requerido para que el encabezado completo con font12 nunca se recorte manteniendo tamaño mediano
         if has_qual:
             plain_hdr = '¿Cambiar enlace? | %s %s' % (srv, qual_active)
         else:
             plain_hdr = '¿Cambiar enlace? | %s' % srv
-        char_px = 16.2 * scale_ui
-        min_hdr_dw = int(round(len(plain_hdr) * char_px)) + pad_x * 2 + max(24, int(round(28 * scale_ui)))
+        char_px = 12.6 * scale_ui
+        min_hdr_dw = int(round(len(plain_hdr) * char_px)) + pad_x * 2 + max(16, int(round(18 * scale_ui)))
         if min_hdr_dw > dw:
             dw = min(max_dw, min_hdr_dw)
-        pad_x = max(14, int(round(dw * 0.038)))
+        pad_x = max(14, int(round(dw * 0.036)))
 
         # En pantallas extremadamente estrechas (ej. móvil vertical), compactar prefijo si aún excediera el 94%
         max_label_chars = max(18, int((dw - pad_x * 2) / max(8.0, char_px)))
@@ -15852,10 +15835,13 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
     p = xbmc.Player()
     cur_time = 0.0
     total_time = 0.0
+    prev_file = ''
     try:
         if p.isPlayingVideo():
             cur_time = float(p.getTime())
             total_time = float(p.getTotalTime())
+            try: prev_file = p.getPlayingFile() or ''
+            except Exception: prev_file = ''
     except Exception:
         pass
     if cur_time <= 0.0 and force_cur_time > 0.0:
@@ -15904,7 +15890,10 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
             m_idx = links.index(chosen)
         except (ValueError, AttributeError):
             m_idx = chosen_idx
-        start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=cur_time, current_link_index=m_idx, meta=meta)
+        start_playback_monitor(
+            media_key, title_str=meta.get('title', ''), seek_to_time=cur_time,
+            current_link_index=m_idx, meta=meta, old_playing_file=prev_file or None
+        )
         return True
     return False
 
@@ -15988,12 +15977,12 @@ def _wait_for_kodi_modal_dialog_to_dismiss(mon=None, max_wait=60.0):
     return saw
 
 
-def _verify_playback_started(is_torrent=False, timeout=None):
+def _verify_playback_started(is_torrent=False, timeout=None, ignore_file=None):
     p = xbmc.Player()
     mon = xbmc.Monitor()
     if timeout is None:
         timeout = 40.0 if is_torrent else 25.0
-    return _wait_for_playback_progress(player=p, mon=mon, timeout=timeout, server_name="ManualSwitch")
+    return _wait_for_playback_progress(player=p, mon=mon, timeout=timeout, server_name="ManualSwitch", ignore_file=ignore_file)
 def show_floating_links_dialog(offset=0):
     global _search_in_progress, _links_view_active
     _search_in_progress = False
@@ -16155,8 +16144,13 @@ def _show_floating_links_dialog_impl(offset=0):
         is_tor = (srv_name.lower() == 'torrent' or _is_torrent_link(chosen_link))
 
         if was_playback:
+            try:
+                _prev_sw_file = p.getPlayingFile() if p.isPlayingVideo() else ''
+            except Exception:
+                _prev_sw_file = ''
             played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time, chosen_link=chosen_link)
         else:
+            _prev_sw_file = ''
             played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, global_idx=(chosen_idx + offset), chosen_link=chosen_link)
 
         if played in ('cancel', 'no_client'):
@@ -16164,7 +16158,7 @@ def _show_floating_links_dialog_impl(offset=0):
 
         playback_ok = False
         if played:
-            playback_ok = _verify_playback_started(is_torrent=is_tor)
+            playback_ok = _verify_playback_started(is_torrent=is_tor, ignore_file=_prev_sw_file or None)
 
         if playback_ok or p.isPlayingVideo():
             return True
