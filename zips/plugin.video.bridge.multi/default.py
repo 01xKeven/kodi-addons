@@ -5316,8 +5316,10 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None, force=False):
     if max_workers < 1: max_workers = 1
     if verify_timeout < 3: verify_timeout = 3
     if not p_dialog:
-        # Modo segundo plano: timeout estricto de socket (máx 5s) para evitar hilos huérfanos
-        verify_timeout = min(verify_timeout, 5)
+        # Modo segundo plano (Fase 1): conservar timeout útil (8-10s) con concurrencia moderada
+        # para que servidores HLS/ResolveURL lentos no se pierdan falsamente a los 5s.
+        verify_timeout = min(max(verify_timeout, 8), 10)
+        max_workers = min(max_workers, 6)
 
     orig_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(verify_timeout)
@@ -14242,7 +14244,7 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
         if direct_bypass_added:
             _persist_phase1_state(rem_unv)
 
-        batch_size = 3
+        batch_size = 6
         idx_q = 0
         while idx_q < len(q_verify):
             if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
@@ -14250,13 +14252,6 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
                 if mon.abortRequested() or _SHUTDOWN_REQUESTED:
                     abort_all_network_sockets()
                 return False
-
-            # Pausar la verificación en segundo plano si el diálogo modal o menú de enlaces está abierto
-            while _floating_dialog_active or _is_dialog_active_global():
-                if mon.abortRequested() or _get_global_monitor_token() != my_token or not p.isPlayingVideo() or _BG_TASK_ABORT_EVENT.is_set():
-                    return False
-                if mon.waitForAbort(0.5):
-                    return False
 
             if max_func_limit > 0 and _count_direct_verified(curr_verified) >= max_func_limit:
                 xbmc.log("Multi Bridge Pipeline [Fase 1]: Límite de enlaces funcionales alcanzado (%d). Finalizando verificación." % max_func_limit, xbmc.LOGINFO)
@@ -17816,28 +17811,40 @@ def main():
 
 
 def _cleanup_on_invoker_exit():
-    """Garantiza que ningún hilo secundario ni watchdog quede bloqueando a CPythonInvoker al finalizar."""
+    """Garantiza que ningún hilo secundario ni socket quede bloqueando a CPythonInvoker al finalizar."""
     global _bridge_addon
     try:
         _stop_shutdown_watchdog(timeout=0.5)
     except Exception:
         pass
     try:
+        aborting = False
+        try:
+            aborting = bool(xbmc.Monitor().abortRequested())
+        except Exception:
+            pass
         has_playback = bool(_active_playback_monitor_thread and _active_playback_monitor_thread.is_alive())
-        if not has_playback:
-            try:
-                has_late = any(t.is_alive() and getattr(t, 'name', '') == 'LateCollector' for t in threading.enumerate())
-            except Exception:
-                has_late = False
-            if not has_late:
-                _BG_TASK_ABORT_EVENT.set()
-                abort_all_network_sockets()
+        if aborting or not has_playback:
+            # Al salir sin reproducción activa (o al cerrar Kodi), abortar siempre tareas/sockets
+            # de fondo (incluido LateCollector) para que CPythonInvoker cierre limpio y sin crashes.
+            _BG_TASK_ABORT_EVENT.set()
+            abort_all_network_sockets()
             with _ACTIVE_BG_THREADS_LOCK:
                 pending = [t for t in _ACTIVE_BG_THREADS if t.is_alive()]
                 _ACTIVE_BG_THREADS.clear()
+            for t in threading.enumerate():
+                if t is threading.current_thread():
+                    continue
+                if t.is_alive() and getattr(t, 'name', '') in ('LateCollector', 'MultiBridgePlaybackPipeline'):
+                    if t not in pending:
+                        pending.append(t)
+            deadline = time.time() + 1.2
             for t in pending:
+                rem = deadline - time.time()
+                if rem <= 0:
+                    break
                 try:
-                    t.join(timeout=0.4)
+                    t.join(timeout=min(0.35, rem))
                 except Exception:
                     pass
     except Exception:

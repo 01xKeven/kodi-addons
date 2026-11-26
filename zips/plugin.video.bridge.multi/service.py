@@ -323,7 +323,9 @@ def _inject_active_playback_metadata(player, properties_only=False):
 
 def check_first_run_device_service(monitor=None):
     try:
-        addon = xbmcaddon.Addon('plugin.video.bridge.multi')
+        if monitor and monitor.abortRequested():
+            return
+        addon = xbmcaddon.Addon()
         if addon.getSetting('first_install_setup_done') == 'true':
             return
         addon.setSetting('hide_captcha_links', 'false')
@@ -334,6 +336,8 @@ def check_first_run_device_service(monitor=None):
 
 
 def run_service():
+    monitor = xbmc.Monitor()
+
     # Limpieza inicial de variables y locks de busqueda
     try:
         xbmcgui.Window(10000).setProperty('BridgeMulti.SearchProcessRunning', 'false')
@@ -346,23 +350,37 @@ def run_service():
     except Exception:
         pass
 
-    try:
-        import default
-        if hasattr(default, 'check_and_run_migration'):
-            default.check_and_run_migration()
-        if hasattr(default, 'check_orphan_players'):
-            default.check_orphan_players()
-        if hasattr(default, 'sync_captcha_servers'):
-            default.sync_captcha_servers()
-    except Exception as e:
-        xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
-
     # Mantener vivo el listener de eventos de reproduccion en el servicio 24/7
     player_service = BridgePlayerService()
 
-    # Iniciar monitor de conexion a internet en hilo daemon (cierre inmediato de Kodi en 0s)
     import threading
-    monitor = xbmc.Monitor()
+    _default_mod = [None]
+
+    def _run_startup_tasks():
+        if monitor.waitForAbort(2):
+            return
+        try:
+            import default as _def
+            _default_mod[0] = _def
+            if monitor.abortRequested():
+                return
+            if hasattr(_def, 'check_and_run_migration'):
+                _def.check_and_run_migration()
+            if monitor.abortRequested():
+                return
+            if hasattr(_def, 'check_orphan_players'):
+                _def.check_orphan_players()
+            if monitor.abortRequested():
+                return
+            if hasattr(_def, 'sync_captcha_servers'):
+                _def.sync_captcha_servers()
+        except Exception as e:
+            xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
+
+    t_init = threading.Thread(target=_run_startup_tasks, daemon=True, name="BridgeMultiStartupInit")
+    t_init.start()
+
+    # Iniciar monitor de conexion a internet en hilo daemon (cierre inmediato de Kodi en 0s)
     t_net = threading.Thread(target=_network_monitor_loop, args=(monitor,), daemon=True)
     t_net.name = "BridgeMultiNetworkMonitor"
     t_net.start()
@@ -380,37 +398,36 @@ def run_service():
         if _sync_timer >= 600:
             _sync_timer = 0
             try:
-                if hasattr(default, 'sync_captcha_servers'):
-                    default.sync_captcha_servers()
+                _def = _default_mod[0]
+                if _def and hasattr(_def, 'sync_captcha_servers'):
+                    _def.sync_captcha_servers()
             except Exception:
                 pass
 
     # Cierre limpio e inmediato al apagar Kodi
     try:
-        if hasattr(default, '_SHUTDOWN_REQUESTED'):
-            default._SHUTDOWN_REQUESTED = True
-        if hasattr(default, '_BG_TASK_ABORT_EVENT'):
-            default._BG_TASK_ABORT_EVENT.set()
-        if hasattr(default, '_stop_shutdown_watchdog'):
-            default._stop_shutdown_watchdog(timeout=0.4)
-        if hasattr(default, 'abort_all_network_sockets'):
-            default.abort_all_network_sockets()
+        _def = _default_mod[0]
+        if _def:
+            if hasattr(_def, '_SHUTDOWN_REQUESTED'):
+                _def._SHUTDOWN_REQUESTED = True
+            if hasattr(_def, '_BG_TASK_ABORT_EVENT'):
+                _def._BG_TASK_ABORT_EVENT.set()
+            if hasattr(_def, '_stop_shutdown_watchdog'):
+                _def._stop_shutdown_watchdog(timeout=0.4)
+            if hasattr(_def, 'abort_all_network_sockets'):
+                _def.abort_all_network_sockets()
+            if hasattr(_def, '_bridge_addon'):
+                _def._bridge_addon = None
     except Exception:
         pass
     try:
-        if t_net and t_net.is_alive():
-            t_net.join(timeout=0.8)
-        if t_dev and t_dev.is_alive():
-            t_dev.join(timeout=0.4)
+        for _th, _tmo in ((t_net, 0.6), (t_dev, 0.3), (t_init, 0.6)):
+            if _th and _th.is_alive():
+                _th.join(timeout=_tmo)
     except Exception:
         pass
     try:
-        if hasattr(default, '_bridge_addon'):
-            default._bridge_addon = None
-        del default
-    except Exception:
-        pass
-    try:
+        _default_mod[0] = None
         del player_service
         del monitor
     except Exception:
