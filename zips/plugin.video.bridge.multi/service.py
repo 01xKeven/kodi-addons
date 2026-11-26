@@ -371,7 +371,7 @@ def run_service():
         if monitor.waitForAbort(0.25):
             break
         _sync_timer += 0.25
-        if _sync_timer >= 60:
+        if _sync_timer >= 600:
             _sync_timer = 0
             try:
                 if hasattr(default, 'sync_captcha_servers'):
@@ -381,8 +381,27 @@ def run_service():
 
     # Cierre limpio e inmediato al apagar Kodi
     try:
+        if hasattr(default, '_SHUTDOWN_REQUESTED'):
+            default._SHUTDOWN_REQUESTED = True
+        if hasattr(default, '_BG_TASK_ABORT_EVENT'):
+            default._BG_TASK_ABORT_EVENT.set()
+        if hasattr(default, '_stop_shutdown_watchdog'):
+            default._stop_shutdown_watchdog(timeout=0.4)
         if hasattr(default, 'abort_all_network_sockets'):
             default.abort_all_network_sockets()
+    except Exception:
+        pass
+    try:
+        if t_net and t_net.is_alive():
+            t_net.join(timeout=0.8)
+        if t_dev and t_dev.is_alive():
+            t_dev.join(timeout=0.4)
+    except Exception:
+        pass
+    try:
+        if hasattr(default, '_bridge_addon'):
+            default._bridge_addon = None
+        del default
     except Exception:
         pass
     try:

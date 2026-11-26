@@ -90,36 +90,58 @@ def abort_all_network_sockets():
 
 _SHUTDOWN_WATCHDOG_STARTED = False
 _SHUTDOWN_WATCHDOG_LOCK = threading.Lock()
+_SHUTDOWN_WATCHDOG_STOP = threading.Event()
+_SHUTDOWN_WATCHDOG_THREAD = None
 
 def _ensure_shutdown_watchdog():
-    global _SHUTDOWN_WATCHDOG_STARTED
+    global _SHUTDOWN_WATCHDOG_STARTED, _SHUTDOWN_WATCHDOG_THREAD
     with _SHUTDOWN_WATCHDOG_LOCK:
         if _SHUTDOWN_WATCHDOG_STARTED:
             return
         _SHUTDOWN_WATCHDOG_STARTED = True
+        _SHUTDOWN_WATCHDOG_STOP.clear()
 
     def _watch():
         global _SHUTDOWN_REQUESTED, _SHUTDOWN_WATCHDOG_STARTED
+        mon = None
         try:
             mon = xbmc.Monitor()
-            while not mon.abortRequested():
+            while not _SHUTDOWN_WATCHDOG_STOP.is_set() and not mon.abortRequested():
                 if mon.waitForAbort(0.15):
                     break
-            _SHUTDOWN_REQUESTED = True
-            _BG_TASK_ABORT_EVENT.set()
-            try:
-                socket.setdefaulttimeout(0.02)
-            except Exception:
-                pass
-            abort_all_network_sockets()
+            if mon.abortRequested():
+                _SHUTDOWN_REQUESTED = True
+                _BG_TASK_ABORT_EVENT.set()
+                try:
+                    socket.setdefaulttimeout(0.02)
+                except Exception:
+                    pass
+                abort_all_network_sockets()
         except Exception:
             pass
         finally:
+            try:
+                if mon is not None:
+                    del mon
+            except Exception:
+                pass
             with _SHUTDOWN_WATCHDOG_LOCK:
                 _SHUTDOWN_WATCHDOG_STARTED = False
 
     t = threading.Thread(target=_watch, name="MultiBridgeShutdownWatchdog", daemon=True)
+    _SHUTDOWN_WATCHDOG_THREAD = t
     t.start()
+
+def _stop_shutdown_watchdog(timeout=0.6):
+    global _SHUTDOWN_WATCHDOG_THREAD
+    try:
+        _SHUTDOWN_WATCHDOG_STOP.set()
+        th = _SHUTDOWN_WATCHDOG_THREAD
+        if th and th.is_alive() and th is not threading.current_thread():
+            th.join(timeout=timeout)
+        _SHUTDOWN_WATCHDOG_THREAD = None
+    except Exception:
+        pass
 
 import urllib
 import urllib.parse as uparse
@@ -171,7 +193,6 @@ if not hasattr(xbmc, 'translatePath'):
 
 _bridge_addon = xbmcaddon.Addon('plugin.video.bridge.multi')
 ADDON_PATH = xbmcvfs.translatePath(_bridge_addon.getAddonInfo('path'))
-_ensure_shutdown_watchdog()
 
 def _get_addon_white_texture():
     """Retorna una textura blanca sólida garantizada para fondos y bordes."""
@@ -1905,6 +1926,10 @@ def _get_balandro_modules():
             _b_tmdb.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
             _b_tmdb.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
             _b_tmdb.set_infoLabels_item = lambda *args, **kwargs: 0
+            if 'core.tmdb' in sys.modules:
+                sys.modules['core.tmdb'].set_infoLabels = _b_tmdb.set_infoLabels
+                sys.modules['core.tmdb'].set_infoLabels_itemlist = _b_tmdb.set_infoLabels_itemlist
+                sys.modules['core.tmdb'].set_infoLabels_item = _b_tmdb.set_infoLabels_item
         except Exception: pass
 
         orig_set_infolabels = platformtools.set_infolabels
@@ -5620,7 +5645,7 @@ def _extract_web_actors(html):
             actors.append(c)
     # 2. Bloque etiquetado de reparto (Actors, Actores, Reparto, Elenco, Cast)
     if not actors:
-        lbl_block = _re.search(r'(?:<strong>|<span>|<p>|<div[^>]*>)\s*(?:Actors|Actores|Reparto|Cast|Elenco)\s*[:<](.*?)</(?:p|div|ul|li|section)>', html, _re.I | _re.DOTALL)
+        lbl_block = _re.search(r'(?:<strong>|<span>|<p[^>]*>|<div[^>]*>|<li[^>]*>|<b>)\s*(?:Actors|Actores|Reparto|Cast|Elenco)\s*[:<](.*?)(?:</(?:p|div|ul|li|section)>|<br\s*/?>|\n)', html, _re.I | _re.DOTALL)
         if lbl_block:
             content = lbl_block.group(1)
             sub_as = _re.findall(r'<a[^>]*>([^<]+)</a>', content)
@@ -5678,7 +5703,7 @@ def _fetch_tmdb_cast(tmdb_id, is_series=False):
     _tmdb_cast_cache[cache_key] = cast
     return cast
 
-def _detail_year_consistent(url, target_year, channel_id='', item=None, target_imdb=None, target_tmdb=None, is_series=False):
+def _detail_year_consistent(url, target_year, channel_id='', item=None, target_imdb=None, target_tmdb=None, is_series=False, require_positive=False):
     # Comprueba si el candidato coincide con el año objetivo, IMDb ID o reparto.
     # True = mantener (coherente o no concluyente). False = descartar.
     # Ante cualquier duda o fallo devuelve True: nunca quita por error.
@@ -5693,11 +5718,11 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
         year_t = None
 
     if not year_t and not target_imdb and not target_tmdb:
-        return True
+        return not require_positive
 
     _u = _safe_str(url or '').strip()
     if not _u.startswith('http'):
-        return True
+        return not require_positive
 
     def _mark_confirmed():
         if item is not None:
@@ -5746,16 +5771,16 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             # Si el servidor redirige a una URL genérica de login (/login), no es la ficha del contenido
             final_url = resp.geturl() or ''
             if final_url.rstrip('/').endswith('/login'):
-                return True
+                return not require_positive
             # 80KB es suficiente para capturar head, h1, metadatos y JSON-LD sin descargar megabytes
             html = resp.read(80000).decode('utf-8', errors='ignore')
     except Exception as _e:
         try:
             xbmc.log('Multi Bridge: page-check sin red (%s): %s' % (channel_id, _e), xbmc.LOGINFO)
         except: pass
-        return True
+        return not require_positive
     if not html or len(html) < 200:
-        return True
+        return not require_positive
     try:
         import re as _re2
         years_re = r'\b(19\d\d|20[0-3]\d)\b'
@@ -5901,10 +5926,14 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
                 return True
             return False
 
-        # 6. Campos etiquetados explícitos (ej. >Año:</span> 2013 o <span>Estreno</span>: 2013 o <span>A&ntilde;o: </span>)
-        lbl_m = _re2.search(r'>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*[:<](?:<[^>]+>|\s)*\b(19\d\d|20[0-3]\d)\b|>\s*(?:A(?:ñ|&ntilde;|&#241;)o|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*:\s*(?:<[^>]+>\s*)*\b(19\d\d|20[0-3]\d)\b', html, _re2.IGNORECASE)
+        # 6. Campos etiquetados explícitos (ej. >Año:</span> 2013, Año de estreno: 2018, <span>Estreno</span>: 2013)
+        lbl_m = _re2.search(
+            r'(?:>|\n|\s)(?:A(?:ñ|&ntilde;|&#241;)o(?:\s+de\s+estreno)?|Estreno|Fecha\s+de\s+estreno|Year|Release(?:\s+date)?)\s*(?:<[^>]+>\s*)*[:<](?:<[^>]+>|\s)*\b(19\d\d|20[0-3]\d)\b',
+            html,
+            _re2.IGNORECASE
+        )
         if lbl_m:
-            ly = int(lbl_m.group(1) or lbl_m.group(2))
+            ly = int(lbl_m.group(1))
             if ly == year_t:
                 _mark_confirmed()
                 return True
@@ -5983,9 +6012,11 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             except: pass
             return False
 
+        if require_positive:
+            return bool(item is not None and getattr(item, '_web_year_confirmed', False))
         return True
     except Exception:
-        return True
+        return not require_positive
 
 def _verify_candidate_tmdb(title_check, target_year, target_tmdb, is_series=False):
     """Confirma contra la API de TMDb que un candidato debil (match solo por
@@ -6376,6 +6407,47 @@ def _search_planb(target_title, target_year, is_series, s_num, e_num, all_names,
         xbmc.log(traceback.format_exc(), xbmc.LOGINFO)
     return None, None
 
+def _rescue_conflicting_candidates(results, target_year, all_names, channel_id, target_tmdb=None, target_imdb=None, is_series=False, max_checks=3):
+    """Rescate universal contra metadatos corruptos de Balandro/Alfa (ej. tmdb.set_infoLabels
+    o tarjetas de búsqueda con año/TMDb equivocado cuando la ficha web real sí es la obra buscada).
+    Solo corre cuando no hubo ningún candidato normal en el canal y exige confirmación positiva
+    en la página HTML real (año exacto, IMDb o coincidencia de reparto TMDb)."""
+    if not results or not (target_year or target_imdb or target_tmdb):
+        return []
+    rescued = []
+    checked = 0
+    for it in results:
+        if checked >= max_checks:
+            break
+        title_check = getattr(it, 'title', '') or getattr(it, 'contentTitle', '') or getattr(it, 'contentSerieName', '')
+        if not title_check:
+            continue
+        _low_title = _safe_str(title_check).lower().strip()
+        if any(p in _low_title for p in ['siguiente', 'siguientes', 'next page', 'pagina siguiente', 'página siguiente', 'anterior', 'anteriores']) or _low_title.startswith('>>') or _low_title.startswith('<<') or _low_title.endswith('>>') or _low_title.endswith('<<'):
+            continue
+        title_score = score_match(title_check, None, all_names, target_tmdb=None, item=it, target_imdb=None, is_series=is_series)
+        if title_score < 850:
+            continue
+        it_url = getattr(it, 'url', '') or ''
+        if not str(it_url).startswith('http'):
+            continue
+        if target_year:
+            try:
+                _uy = extract_year_from_url(it_url)
+                if _uy and int(_uy) != int(str(target_year).strip()):
+                    continue
+            except Exception:
+                pass
+        checked += 1
+        try:
+            if _detail_year_consistent(it_url, target_year, channel_id, item=it, target_imdb=target_imdb, target_tmdb=target_tmdb, is_series=is_series, require_positive=True):
+                xbmc.log("Multi Bridge: %s '%s' rescatado por ficha web real (evadiendo año/ID erróneo de tarjeta)" % (channel_id, title_check), xbmc.LOGINFO)
+                rescued.append((title_score + 3000, it, title_check))
+        except Exception:
+            pass
+    return rescued
+
+
 def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num, e_num, all_names, base_item=None, alt_terms=None, target_tmdb=None, target_imdb=None):
     if str(channel_id).lower() in ('planb', 'plan_b'):
         return _search_planb(target_title, target_year, is_series, s_num, e_num, all_names, target_tmdb=target_tmdb, target_imdb=target_imdb)
@@ -6417,6 +6489,18 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                     canal.tmdb.set_infoLabels_item = lambda *args, **kwargs: 0
                 except:
                     pass
+            try:
+                if hasattr(canal, 'set_infoLabels'):
+                    canal.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                if hasattr(canal, 'set_infoLabels_itemlist'):
+                    canal.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                if 'core.tmdb' in sys.modules:
+                    _ct = sys.modules['core.tmdb']
+                    _ct.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    _ct.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    _ct.set_infoLabels_item = lambda *args, **kwargs: 0
+            except Exception:
+                pass
             if hasattr(canal, 'httptools') and getattr(canal, 'httptools', None):
                 try:
                     _ht = canal.httptools
@@ -6657,6 +6741,12 @@ def _search_channel_alfa(channel_id, target_title, target_year, is_series, s_num
                 continue
             candidates.append((score, it, title_check))
 
+        if not candidates:
+            candidates = _rescue_conflicting_candidates(
+                results, target_year, all_names, channel_id,
+                target_tmdb=target_tmdb, target_imdb=target_imdb, is_series=is_series
+            )
+
         candidates.sort(key=lambda c: c[0], reverse=True)
 
         for score, it, title_check in candidates:
@@ -6797,6 +6887,7 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
     mods = _get_balandro_modules()
     if not mods:
         return None, None
+    Item = mods['Item']
     terms_to_try = _build_bridge_terms(target_title, alt_terms, all_names)
     if not terms_to_try:
         cleaned = _clean_search_term(target_title)
@@ -6831,6 +6922,18 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                     canal.tmdb.set_infoLabels_item = lambda *args, **kwargs: 0
                 except:
                     pass
+            try:
+                if hasattr(canal, 'set_infoLabels'):
+                    canal.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                if hasattr(canal, 'set_infoLabels_itemlist'):
+                    canal.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                if 'core.tmdb' in sys.modules:
+                    _ct = sys.modules['core.tmdb']
+                    _ct.set_infoLabels = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    _ct.set_infoLabels_itemlist = lambda source=None, *args, **kwargs: (source if isinstance(source, list) else [])
+                    _ct.set_infoLabels_item = lambda *args, **kwargs: 0
+            except Exception:
+                pass
             if hasattr(canal, 'httptools') and getattr(canal, 'httptools', None):
                 try:
                     _ht = canal.httptools
@@ -7044,6 +7147,12 @@ def _search_channel_balandro(channel_id, target_title, target_year, is_series, s
                     _debug_nomatch_count += 1
                 continue
             candidates.append((score, it, title_check))
+
+        if not candidates:
+            candidates = _rescue_conflicting_candidates(
+                results, target_year, all_names, channel_id,
+                target_tmdb=target_tmdb, target_imdb=target_imdb, is_series=is_series
+            )
 
         candidates.sort(key=lambda c: c[0], reverse=True)
 
@@ -8437,6 +8546,7 @@ def _spawn_late_collector(engine, target_tmdb, season, episode):
 
 def run_parallel_search(engine='alfa'):
     global _search_in_progress, _PIPELINE_VERIFIED_SEARCH
+    _ensure_shutdown_watchdog()
     _search_in_progress = True
     _PIPELINE_VERIFIED_SEARCH = False
     _apply_silence_all()
@@ -17561,5 +17671,42 @@ def main():
 
 
 
+def _cleanup_on_invoker_exit():
+    """Garantiza que ningún hilo secundario ni watchdog quede bloqueando a CPythonInvoker al finalizar."""
+    global _bridge_addon
+    try:
+        _stop_shutdown_watchdog(timeout=0.5)
+    except Exception:
+        pass
+    try:
+        has_playback = bool(_active_playback_monitor_thread and _active_playback_monitor_thread.is_alive())
+        if not has_playback:
+            try:
+                has_late = any(t.is_alive() and getattr(t, 'name', '') == 'LateCollector' for t in threading.enumerate())
+            except Exception:
+                has_late = False
+            if not has_late:
+                _BG_TASK_ABORT_EVENT.set()
+                abort_all_network_sockets()
+            with _ACTIVE_BG_THREADS_LOCK:
+                pending = [t for t in _ACTIVE_BG_THREADS if t.is_alive()]
+                _ACTIVE_BG_THREADS.clear()
+            for t in pending:
+                try:
+                    t.join(timeout=0.4)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        if xbmc.Monitor().abortRequested():
+            _bridge_addon = None
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    finally:
+        _cleanup_on_invoker_exit()
