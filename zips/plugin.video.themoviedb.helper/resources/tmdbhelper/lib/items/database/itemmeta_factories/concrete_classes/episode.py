@@ -15,10 +15,11 @@ class Episode(MediaItem):
 
     @property
     def art_dbclist_routes(self):
+        has_ua = self._has_user_art
         return (
-            MediaItemArtworkRoutes().configured_routes
-            + MediaItemArtworkRoutes('season').configured_routes
-            + MediaItemArtworkRoutes('tvshow').configured_routes
+            MediaItemArtworkRoutes(allow_user=has_ua).configured_routes
+            + MediaItemArtworkRoutes('season', allow_user=has_ua).configured_routes
+            + MediaItemArtworkRoutes('tvshow', allow_user=has_ua).configured_routes
         )
 
     infoproperties_dbclist_routes = (

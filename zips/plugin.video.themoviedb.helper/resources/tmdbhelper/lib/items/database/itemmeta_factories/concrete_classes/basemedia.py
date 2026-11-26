@@ -7,8 +7,9 @@ from tmdbhelper.lib.addon.plugin import get_setting
 
 class MediaItemArtworkRoutes:
 
-    def __init__(self, parent_type=None):
+    def __init__(self, parent_type=None, allow_user=True):
         self.parent_type = parent_type
+        self.allow_user = allow_user
 
     routes = {
         'fanart_tv_poster': {
@@ -233,6 +234,8 @@ class MediaItemArtworkRoutes:
 
     @property
     def user_configured_routes(self):
+        if not self.allow_user:
+            return []
         return self.get_art_list(allow_user=True)
 
     @property
@@ -243,8 +246,29 @@ class MediaItemArtworkRoutes:
 class MediaItem(BaseItem):
 
     @property
+    def _has_user_art(self):
+        if get_setting('ratingposterdb_apikey', 'str'):
+            return True
+        conn = getattr(self.parent_db_cache, 'connection', None)
+        if conn is not None and hasattr(conn, '_has_user_art_cache'):
+            return conn._has_user_art_cache
+        has_rows = True
+        try:
+            cur = conn.open_connection if conn else None
+            if cur is not None:
+                has_rows = bool(cur.execute('SELECT 1 FROM user_art LIMIT 1').fetchone())
+            else:
+                res = self.parent_db_cache.cache.execute_sql('SELECT 1 FROM user_art LIMIT 1', read_only=True)
+                has_rows = bool(res.fetchone()) if res else False
+        except Exception:
+            has_rows = True
+        if conn is not None:
+            conn._has_user_art_cache = has_rows
+        return has_rows
+
+    @property
     def art_dbclist_routes(self):
-        return MediaItemArtworkRoutes().configured_routes
+        return MediaItemArtworkRoutes(allow_user=self._has_user_art).configured_routes
 
     infolabels_dbclist_routes = (
         MediaItemInfoLabelItemRoutes.genre,
