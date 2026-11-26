@@ -23,10 +23,10 @@ class CommonContainerAPIs():
 
     @cached_property
     def ftv_api(self):
-        from tmdbhelper.lib.api.fanarttv.api import FanartTV
         from tmdbhelper.lib.addon.plugin import get_setting
         if not get_setting('fanarttv_lookup'):
             return
+        from tmdbhelper.lib.api.fanarttv.api import FanartTV
         return FanartTV()
 
     @cached_property

@@ -61,6 +61,13 @@ def preload_batch(connection, listitem_configs):
         'simplecache_ids': set(),
         'tables': {},
         'table_ids': {},
+        'art': {},
+        'art_ids': set(),
+        'default_art': set(),
+        'fanart_tv': {},
+        'fanart_tv_ids': set(),
+        'art_ctx': (common_apis := dbs[0].common_apis).tmdb_api.iso_country,
+        'art_lang': common_apis.tmdb_api.iso_language,
         'cert_ctx': None,
         'video_ctx': None,
         'crew_widget_only': False,
@@ -126,9 +133,8 @@ def preload_batch(connection, listitem_configs):
         batch['simplecache'][row['id']] = row
 
     # 3. Subtables queried per item in ItemMetaFactory
-    common_apis = dbs[0].common_apis
-    iso_country = common_apis.tmdb_api.iso_country
-    iso_language = common_apis.tmdb_api.iso_language
+    iso_country = batch['art_ctx']
+    iso_language = batch['art_lang']
     batch['cert_ctx'] = iso_country
     batch['video_ctx'] = ('Trailer', iso_language)
 
@@ -136,8 +142,59 @@ def preload_batch(connection, listitem_configs):
     all_iid_set = set(all_item_ids)
     has_movie = any(getattr(d, 'mediatype', None) == 'movie' for d in dbs)
     has_tv = any(getattr(d, 'mediatype', None) in ('tvshow', 'season', 'episode') for d in dbs)
+    has_ftv = any(getattr(d, 'fanart_tv', 0) for d in dbs)
     is_extended = any(getattr(d, 'extendedinfo', False) for d in dbs)
     batch['crew_widget_only'] = not is_extended
+
+    # Preload user_art existence check once per batch connection
+    if not hasattr(connection, '_has_user_art_cache'):
+        try:
+            connection._has_user_art_cache = bool(cursor.execute('SELECT 1 FROM user_art LIMIT 1').fetchone())
+        except Exception:
+            connection._has_user_art_cache = False
+
+    # Preload art (forced parent_id index scan) and default_art separately (avoids per-row correlated subquery & MULTI-INDEX OR)
+    art_rows = _exec_in_chunks(
+        cursor,
+        'SELECT aspect_ratio, quality, iso_language, iso_country, icon, type, extension, rating, votes, parent_id '
+        'FROM art WHERE parent_id IN ({ph}) '
+        'AND CASE WHEN iso_country=? OR iso_language=? OR iso_language IN ("en", "xx") OR iso_language IS NULL THEN 1 ELSE 0 END = 1',
+        all_item_ids,
+        suffix_params=(iso_country, iso_language),
+    )
+    def_rows = _exec_in_chunks(
+        cursor,
+        'SELECT parent_id, type, icon FROM default_art WHERE parent_id IN ({ph})',
+        all_item_ids,
+    )
+    batch['art_ids'] = all_iid_set
+    batch['art'] = _group_by(art_rows, 'parent_id', limit_per_key=None)
+    batch['default_art'] = {(r['parent_id'], r['type'], r['icon']) for r in def_rows}
+
+    if has_ftv:
+        ftv_rows = _exec_in_chunks(
+            cursor,
+            'SELECT icon, iso_language, likes, quality, type, extension, parent_id '
+            'FROM fanart_tv WHERE parent_id IN ({ph}) '
+            'AND CASE WHEN iso_language=? OR iso_language IN ("en", "xx") OR iso_language IS NULL THEN 1 ELSE 0 END = 1',
+            all_item_ids,
+            suffix_params=(iso_language,),
+        )
+        batch['fanart_tv_ids'] = all_iid_set
+        batch['fanart_tv'] = _group_by(ftv_rows, 'parent_id', limit_per_key=None)
+
+    # Collect unique collection_ids from preloaded movie rows
+    collection_ids = []
+    seen_coll = set()
+    for (cls, _), bi_rows in batch['baseitem'].items():
+        for r in bi_rows:
+            try:
+                cid = r['collection_id']
+            except (IndexError, KeyError):
+                cid = None
+            if cid and cid not in seen_coll:
+                seen_coll.add(cid)
+                collection_ids.append(cid)
 
     crew_sql = (
         'SELECT crewmember.parent_id AS parent_id, crewmember.tmdb_id, role, department, appearances, '
@@ -157,6 +214,8 @@ def preload_batch(connection, listitem_configs):
          'SELECT key, value, parent_id FROM unique_id WHERE parent_id IN ({ph})', (), (), None),
         ('custom', all_item_ids, all_iid_set,
          'SELECT key, value, parent_id FROM custom WHERE parent_id IN ({ph})', (), (), None),
+        ('translation', all_item_ids, all_iid_set,
+         'SELECT iso_country, iso_language, plot, title, tagline, parent_id FROM translation WHERE parent_id IN ({ph})', (), (), None),
         ('certification', all_parent_ids, all_pid_set,
          'SELECT name, iso_country, iso_language, release_date, release_type, parent_id '
          'FROM certification WHERE parent_id IN ({ph}) AND iso_country=? AND name IS NOT NULL AND name != ""',
@@ -179,6 +238,28 @@ def preload_batch(connection, listitem_configs):
          'ORDER BY IFNULL(ordering, 9999) ASC', (), (), 100),
         ('crewmember', all_item_ids, all_iid_set, crew_sql, (), (), None),
     ]
+    if getattr(connection, '_has_user_art_cache', False):
+        queries.append(
+            ('user_art', all_item_ids, all_iid_set,
+             'SELECT type, icon, parent_id FROM user_art WHERE parent_id IN ({ph}) AND icon IS NOT NULL', (), (), None)
+        )
+    if collection_ids:
+        coll_set = set(collection_ids)
+        queries.append(
+            ('series_stats', collection_ids, coll_set,
+             'SELECT belongs.parent_id AS parent_id, '
+             'ROUND(AVG(CASE WHEN rating > 0 THEN rating ELSE NULL END), 1) as rating, '
+             'SUM(votes) as votes, COUNT(movie.tmdb_id) as numitems, '
+             'MAX(year) as year_last, MIN(year) as year_first '
+             'FROM movie INNER JOIN belongs ON movie.id = belongs.id '
+             'WHERE belongs.parent_id IN ({ph}) GROUP BY belongs.parent_id', (), (), 1)
+        )
+        queries.append(
+            ('series_genre', collection_ids, coll_set,
+             'SELECT DISTINCT belongs.parent_id AS parent_id, name, tmdb_id '
+             'FROM genre INNER JOIN belongs ON genre.parent_id = belongs.id '
+             'WHERE belongs.parent_id IN ({ph}) ORDER BY name', (), (), None)
+        )
     if has_movie:
         queries.append(
             ('studio', all_parent_ids, all_pid_set,
@@ -235,6 +316,21 @@ def batch_lookup_list(meta_obj):
             return [{'lastplayed': lw if lw >= pp else pp}]
         return [row]
 
+    # Series collection joins
+    if table == 'movie INNER JOIN belongs ON movie.id = belongs.id' and 'GROUP BY belongs.parent_id' in getattr(meta_obj, 'conditions', ''):
+        tids = batch['table_ids'].get('series_stats')
+        if not tids:
+            return None
+        pid = meta_obj.values[0] if meta_obj.values else None
+        return batch['tables'].get('series_stats', {}).get(pid, []) if pid in tids else None
+
+    if table == 'genre INNER JOIN belongs ON genre.parent_id = belongs.id':
+        tids = batch['table_ids'].get('series_genre')
+        if not tids:
+            return None
+        pid = meta_obj.values[0] if meta_obj.values else None
+        return batch['tables'].get('series_genre', {}).get(pid, []) if pid in tids else None
+
     # Simple / joined parent_id tables
     tids = batch['table_ids'].get(table)
     if not tids:
@@ -245,6 +341,26 @@ def batch_lookup_list(meta_obj):
         return None
 
     rows = batch['tables'].get(table, {}).get(pid, [])
+
+    if table == 'translation':
+        if meta_obj.conditions == 'parent_id=? AND iso_language="en" LIMIT 1':
+            for r in rows:
+                if r['iso_language'] == 'en':
+                    return [r]
+            return []
+        if meta_obj.conditions == 'parent_id=?':
+            return rows
+        return None
+
+    if table == 'user_art':
+        vals = meta_obj.values
+        if len(vals) >= 2 and meta_obj.conditions == 'parent_id=? AND type=? AND icon IS NOT NULL LIMIT 1':
+            t = vals[1]
+            for r in rows:
+                if r['type'] == t:
+                    return [r]
+            return []
+        return None
 
     if table == 'unique_id':
         if meta_obj.conditions == 'parent_id=? AND key="imdb"':
@@ -291,4 +407,95 @@ def batch_lookup_list(meta_obj):
 
 
 def batch_lookup_art(art_obj, mode='unified', include_null=True):
-    return None
+    batch = _get_batch(getattr(art_obj, 'connection', None))
+    if not batch:
+        return None
+    table = getattr(art_obj, 'table', None)
+    if table not in ('art', 'fanart_tv'):
+        return None
+    vals = art_obj.values
+    if not vals:
+        return None
+    pid = vals[0]
+    id_set = batch['art_ids'] if table == 'art' else batch['fanart_tv_ids']
+    if pid not in id_set:
+        return None
+    rows = (batch['art'] if table == 'art' else batch['fanart_tv']).get(pid)
+    if not rows:
+        return []
+
+    cond = art_obj.conditions or ''
+    if 'type=? AND extension=?' in cond and len(vals) >= 3:
+        t1, ext = vals[1], vals[2]
+        type_rows = [r for r in rows if r['type'] == t1 and r['extension'] == ext]
+    elif '(type=? OR type=?)' in cond and len(vals) >= 3:
+        t1, t2 = vals[1], vals[2]
+        type_rows = [r for r in rows if r['type'] == t1 or r['type'] == t2]
+    elif 'type=?' in cond and len(vals) >= 2:
+        t1 = vals[1]
+        type_rows = [r for r in rows if r['type'] == t1]
+    else:
+        return None
+
+    if not type_rows:
+        return []
+
+    iso_c = batch['art_ctx']
+    iso_l = batch['art_lang']
+    has_c = bool(getattr(art_obj, 'has_iso_country', False)) and table == 'art'
+
+    if mode == 'iso_country':
+        if not has_c:
+            return []
+        matched = [(0, r) for r in type_rows if r['iso_country'] == iso_c]
+    elif mode == 'iso_language':
+        matched = [(0, r) for r in type_rows if r['iso_language'] == iso_l]
+    elif mode == 'english':
+        matched = [(0, r) for r in type_rows if r['iso_language'] == 'en']
+    elif mode == 'null':
+        matched = [(0, r) for r in type_rows if r['iso_language'] is None or r['iso_language'] == 'xx']
+    elif mode == 'unified':
+        matched = []
+        if has_c:
+            for r in type_rows:
+                rc = r['iso_country']
+                rl = r['iso_language']
+                if rc == iso_c:
+                    matched.append((0, r))
+                elif rl == iso_l:
+                    matched.append((1, r))
+                elif rl == 'en':
+                    matched.append((2, r))
+                elif include_null and (rl is None or rl == 'xx'):
+                    matched.append((3, r))
+        else:
+            for r in type_rows:
+                rl = r['iso_language']
+                if rl == iso_l:
+                    matched.append((0, r))
+                elif rl == 'en':
+                    matched.append((1, r))
+                elif include_null and (rl is None or rl == 'xx'):
+                    matched.append((2, r))
+    else:
+        return None
+
+    if not matched:
+        return []
+
+    if table == 'art':
+        if 'isdefault DESC' in cond:
+            def_set = batch['default_art']
+            keyfn = lambda item: (item[0], 0 if (pid, item[1]['type'], item[1]['icon']) in def_set else 1, item[1]['rating'] is None, -(item[1]['rating'] or 0))
+        else:
+            keyfn = lambda item: (item[0], item[1]['rating'] is None, -(item[1]['rating'] or 0))
+    else:
+        keyfn = lambda item: (item[0], item[1]['likes'] is None, -(item[1]['likes'] or 0))
+
+    if 'LIMIT 10 OFFSET 1' in cond:
+        matched.sort(key=keyfn)
+        return [item[1] for item in matched[1:11]]
+    if 'LIMIT 1' in cond:
+        return [min(matched, key=keyfn)[1]]
+    matched.sort(key=keyfn)
+    return [item[1] for item in matched]

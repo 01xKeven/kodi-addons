@@ -605,5 +605,11 @@ FACTORY_ROUTES = {
 }
 
 
+_CLASS_CACHE = {}
+
+
 def BaseMetaFactory(route):
-    return FACTORY_ROUTES[route]()()
+    cls = _CLASS_CACHE.get(route)
+    if cls is None:
+        cls = _CLASS_CACHE[route] = FACTORY_ROUTES[route]()
+    return cls()

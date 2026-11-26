@@ -83,6 +83,15 @@ class ListProperties:
     dbid_sorted = False
     pagination = False
     is_cacheonly = True
+    _container = None
+
+    @cached_property
+    def tmdb_api(self):
+        return self._container.tmdb_api if self._container is not None else None
+
+    @cached_property
+    def trakt_api(self):
+        return self._container.trakt_api if self._container is not None else None
 
     @cached_property
     def query_database(self):
@@ -238,8 +247,7 @@ class ListDefault(ContainerDefaultCacheDirectory):
         list_properties.results_key = 'results'  # KEY in RESPONSE from PATH holding ITEMS
         list_properties.filters = self.filters
         list_properties.pagination = self.pagination
-        list_properties.tmdb_api = self.tmdb_api
-        list_properties.trakt_api = self.trakt_api
+        list_properties._container = self
         list_properties.is_cacheonly = self.is_cacheonly
         list_properties.class_name = f'{self.__class__.__name__}'
         return list_properties

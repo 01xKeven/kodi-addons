@@ -1,4 +1,4 @@
-from timeit import default_timer as timer
+from time import perf_counter as timer
 from tmdbhelper.lib.addon.plugin import get_setting, format_name, get_localized
 import jurialmunkey.logger as jurialmunkey_logger
 

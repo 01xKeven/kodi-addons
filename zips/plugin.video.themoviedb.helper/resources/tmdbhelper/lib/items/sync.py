@@ -3,20 +3,31 @@ from tmdbhelper.lib.sync.auth import SyncAuthorisation
 
 
 class SyncPlayData(SyncAuthorisation):
-    def __init__(self, pauseplayprogress=False, watchedindicators=False, **kwargs):
+    def __init__(self, pauseplayprogress=False, watchedindicators=False, container=None, **kwargs):
         super().__init__('sync_source_watched', **kwargs)
         self._pauseplayprogress = pauseplayprogress  # Set play progress using paused at position
         self._watchedindicators = watchedindicators  # Set watched status and playcount
+        self._container = container
+
+    @cached_property
+    def trakt_api(self):
+        if self._container is not None:
+            return self._container.trakt_api
+        return super().trakt_api
+
+    @cached_property
+    def mdblist_api(self):
+        if self._container is not None:
+            return self._container.mdblist_api
+        return super().mdblist_api
 
     @property
     def is_enabled(self):
+        if not self._watchedindicators and not self._pauseplayprogress:
+            return False
         if not self.is_authorized:
             return False
-        if self._watchedindicators:
-            return bool(self.syncdata)
-        if self._pauseplayprogress:
-            return bool(self.syncdata)
-        return False
+        return bool(self.syncdata)
 
     def is_sync(func):
         def wrapper(self, *args, **kwargs):
@@ -54,8 +65,9 @@ class SyncPlayData(SyncAuthorisation):
         'dir_multisearch',
     ))
 
-    @is_sync
     def pre_sync_start(self, info=None, tmdb_type=None, **kwargs):
+        if not self._watchedindicators and not self._pauseplayprogress:
+            return
         if info in self._NON_MEDIA_INFOS:
             return
         from jurialmunkey.window import get_property
@@ -69,13 +81,14 @@ class SyncPlayData(SyncAuthorisation):
         needs_show = (tmdb_type in ('tv', 'season', 'both',) or info in info_tvshow)
         if not needs_movie and not needs_show:
             return
+        if not self.is_enabled:
+            return
         from tmdbhelper.lib.addon.thread import SafeThread
         self._pre_sync = SafeThread(target=self.pre_sync, kwargs={'info': info, 'tmdb_type': tmdb_type, **kwargs})
         self._pre_sync.start()
 
-    @is_sync
     def pre_sync_join(self):
-        try:
-            self._pre_sync.join()
-        except AttributeError:
+        thread = getattr(self, '_pre_sync', None)
+        if thread is None:
             return
+        thread.join()

@@ -55,11 +55,19 @@ class ArtworkDetailsMixin:
         return v
 
     def get_cached_data_by_iso_country(self):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_art
+        batched = batch_lookup_art(self, mode='iso_country')
+        if batched is not None:
+            return batched
         conditions = f'iso_country=? AND {self.conditions}'
         values = (self.common_apis.tmdb_api.iso_country, *self.values)
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, values, conditions)
 
     def get_cached_data_by_iso_language(self):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_art
+        batched = batch_lookup_art(self, mode='iso_language')
+        if batched is not None:
+            return batched
         conditions = f'iso_language=? AND {self.conditions}'
         values = (self.common_apis.tmdb_api.iso_language, *self.values)
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, values, conditions)
@@ -68,15 +76,27 @@ class ArtworkDetailsMixin:
         return self.get_cached_data_by_iso_country() or self.get_cached_data_by_iso_language()
 
     def get_cached_data_by_english(self):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_art
+        batched = batch_lookup_art(self, mode='english')
+        if batched is not None:
+            return batched
         conditions = f'iso_language=? AND {self.conditions}'
         values = ('en', *self.values)
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, values, conditions)
 
     def get_cached_data_by_null(self):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_art
+        batched = batch_lookup_art(self, mode='null')
+        if batched is not None:
+            return batched
         conditions = f'(iso_language IS NULL OR iso_language="xx") AND {self.conditions}'
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, self.values, conditions)
 
     def _get_cached_data_unified(self, include_null=True):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_art
+        batched = batch_lookup_art(self, mode='unified', include_null=include_null)
+        if batched is not None:
+            return batched
         base_cond, _, tail = self.conditions.partition(' ORDER BY ')
         order_part, _, limit_part = tail.partition(' LIMIT ')
         iso_l = self.common_apis.tmdb_api.iso_language

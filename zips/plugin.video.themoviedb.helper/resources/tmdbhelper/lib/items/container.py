@@ -90,11 +90,11 @@ class ContainerDirectoryCommon(CommonContainerAPIs):
     @cached_property
     def sync_playdata(self):
         from tmdbhelper.lib.items.sync import SyncPlayData
+        watchedindicators = get_setting('trakt_watchedindicators')
         return SyncPlayData(
-            trakt_api=self.trakt_api,
-            mdblist_api=self.mdblist_api,
-            watchedindicators=get_setting('trakt_watchedindicators'),
-            pauseplayprogress=get_setting('trakt_watchedindicators'))
+            container=self,
+            watchedindicators=watchedindicators,
+            pauseplayprogress=watchedindicators)
 
     @cached_property
     def pagination(self):
@@ -230,6 +230,13 @@ class ContainerDirectoryCommon(CommonContainerAPIs):
             return
 
         if self.params.get('tmdb_id'):
+            return
+
+        if not self.params.get('use_multisearch') and not (
+            self.params.get('tmdb_type') is not None and (
+                self.params.get('imdb_id') or self.params.get('tvdb_id') or self.params.get('query')
+            )
+        ):
             return
 
         self.params['tmdb_id'] = self.query_database.get_tmdb_id(**self.params)

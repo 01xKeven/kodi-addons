@@ -270,7 +270,17 @@ class MediaItem(BaseItem):
 
     @property
     def art_dbclist_routes(self):
-        return MediaItemArtworkRoutes(allow_user=self._has_user_art).configured_routes
+        allow_user = self._has_user_art
+        conn = getattr(self.parent_db_cache, 'connection', None)
+        if conn is not None:
+            cache = getattr(conn, '_art_routes_cache', None)
+            if cache is None:
+                cache = conn._art_routes_cache = {}
+            routes = cache.get(allow_user)
+            if routes is None:
+                routes = cache[allow_user] = MediaItemArtworkRoutes(allow_user=allow_user).configured_routes
+            return routes
+        return MediaItemArtworkRoutes(allow_user=allow_user).configured_routes
 
     infolabels_dbclist_routes = (
         MediaItemInfoLabelItemRoutes.genre,

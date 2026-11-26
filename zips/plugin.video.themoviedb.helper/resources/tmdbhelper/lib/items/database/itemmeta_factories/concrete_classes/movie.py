@@ -48,8 +48,7 @@ class Movie(MediaItem):
         if self.collection_id:
 
             try:
-                from tmdbhelper.lib.api.tmdb.images import TMDbImagePath
-                tmdb_imagepath = TMDbImagePath()
+                tmdb_imagepath = self.parent_db_cache.common_apis.tmdb_imagepath
                 infoproperties['set.title'] = infoproperties['set.name'] = self.data[0]['collection_title']
                 infoproperties['set.tmdb_id'] = self.data[0]['collection_tmdb_id']
                 infoproperties['set.poster'] = tmdb_imagepath.get_imagepath_poster(self.data[0]['collection_poster'])
