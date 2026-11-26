@@ -4566,7 +4566,7 @@ def _get_filter_prefs():
     def _bcsv(key, def_val):
         try:
             val = _bridge_addon.getSetting(key)
-            if not val: return def_val
+            if val is None: return def_val
             return [s.strip().lower() for s in str(val).split(',') if s.strip()]
         except:
             return def_val
@@ -4601,6 +4601,9 @@ def _get_filter_prefs():
         'servers_discarded': _bcsv('servers_discarded', ['rapidgator', 'directo', 'waaw']) if srv_on else [],
         'sort_hierarchy': tuple(resolved_order),
         'force_torrents_bottom': force_torrents_bottom,
+        'filter_lang_enabled': lang_on,
+        'filter_quality_enabled': qual_on,
+        'filter_servers_enabled': srv_on,
     }
 
 _get_balandro_preferences = _get_filter_prefs
@@ -4642,8 +4645,11 @@ def _get_hierarchical_sort_key(it, b_prefs=None, sort_q=0):
         srv_key = 50
 
     # 3. CALIDAD:
-    q_score = _get_link_quality_score(it, pref_quality=sort_q)
-    q_key = -q_score
+    if b_prefs.get('filter_quality_enabled', True):
+        q_score = _get_link_quality_score(it, pref_quality=sort_q)
+        q_key = -q_score
+    else:
+        q_key = 0
 
     # Mapeo de criterios según la jerarquía elegida:
     criteria_map = {
@@ -4699,15 +4705,17 @@ def _filter_and_sort_links(links):
         safe_links = sorted(safe_links, key=lambda it: -int(getattr(it, 'bridge_score', 0) or 0))
     except: pass
 
-    # PASO 1: filter_and_sort_by_quality
-    # 0: 1080p, 1: 720p, 2: 480p (para enlaces directos; torrents conservan su prioridad máxima)
+    # PASO 1: filter_and_sort_by_quality (solo si Calidad esta activado en ajustes)
     sort_q = b_prefs.get('servers_sort_quality', 0)
-    safe_links = sorted(safe_links, key=lambda it: _get_link_quality_score(it, pref_quality=sort_q), reverse=True)
+    if b_prefs.get('filter_quality_enabled', True):
+        safe_links = sorted(safe_links, key=lambda it: _get_link_quality_score(it, pref_quality=sort_q), reverse=True)
 
     # PASO 2 de Balandro: filter_and_sort_by_server
-    # 2a. Descartar servidores descartados por el usuario
+    # 2a. Descartar servidores descartados por el usuario y captchas si hide_captcha_links esta activo
     disc_list = b_prefs.get('servers_discarded', [])
     safe_links = _filter_discarded_links(safe_links, disc_list=disc_list)
+    if _bridge_addon.getSetting('hide_captcha_links') == 'true':
+        safe_links = [it for it in safe_links if _is_torrent_link(it) or not _is_web_captcha_server(_get_link_server_name(it), it)]
 
         # PASO 3 de Balandro: filter_and_sort_by_language
     # 3a. Quitar idiomas con valor 0 (Descartar)
@@ -5150,10 +5158,15 @@ class _PipelineLinkVerifier:
                 return all_v
         return fallback_links or []
 
-def _verify_links_headless(links, engine='alfa', p_dialog=None):
+def _verify_links_headless(links, engine='alfa', p_dialog=None, force=False):
     if not links: return []
     links = _filter_discarded_links(links)
     if not links: return []
+    if not force and _bridge_addon.getSetting('auto_verify_links') != 'true':
+        xbmc.log("Multi Bridge: verificación automática desactivada en ajustes -> omitiendo _verify_links_headless (%d enlaces)" % len(links), xbmc.LOGINFO)
+        if _bridge_addon.getSetting('hide_captcha_links') == 'true':
+            return [l for l in links if _is_torrent_link(l) or not _is_web_captcha_server(_get_link_server_name(l), l)]
+        return list(links)
 
     # Separar enlaces torrent y captcha de enlaces directos.
     # Torrents y Captchas se envían directamente sin verificar como funcionales
@@ -5189,7 +5202,7 @@ def _verify_links_headless(links, engine='alfa', p_dialog=None):
     lock = threading.Lock()
     stop_event = threading.Event()
 
-    max_workers = min(20, max(2, _get_int_setting('verify_threads_max', 16)))
+    max_workers = min(25, max(1, _get_int_setting('verify_threads_max', 16)))
     verify_timeout = _get_int_setting('verify_timeout', 10)
     verify_max_functional = _get_int_setting('verify_max_functional', 12)
     if verify_max_functional < 0: verify_max_functional = 0
@@ -8372,9 +8385,9 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
         if epi_s and _norm_id_str(_meta.get('episode')) and _norm_id_str(_meta.get('episode')) != epi_s:
             return 0
 
-        # Si la búsqueda principal tenía activada la verificación automática de enlaces,
+        # Si la búsqueda principal tenía activada la verificación automática de enlaces en ajustes,
         # verificar también en segundo plano los enlaces tardíos antes de añadirlos
-        if _bridge_addon.getSetting('auto_verify_links') == 'true' or _meta.get('verified_only'):
+        if _bridge_addon.getSetting('auto_verify_links') == 'true':
             try:
                 xbmc.log("Multi Bridge: verificando %d enlaces tardíos en segundo plano..." % len(new_links), xbmc.LOGINFO)
                 v_late = _verify_links_headless(new_links, engine=engine, p_dialog=None)
@@ -9698,7 +9711,7 @@ def _verify_remaining_preloaded_impl():
 
     p_diag = xbmcgui.DialogProgress()
     p_diag.create('Multi Bridge', 'Comprobando disponibilidad de servidores restantes...')
-    newly_verified = _verify_links_headless(unverified_items, engine=engine, p_dialog=p_diag)
+    newly_verified = _verify_links_headless(unverified_items, engine=engine, p_dialog=p_diag, force=True)
     try: p_diag.close()
     except Exception: pass
 
@@ -11176,7 +11189,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     completed_indices = set()
     thread_start_times = {}
     start_time = time.time()
-    timeout_secs = min(60, max(10, _get_int_setting('search_timeout', 40)))
+    timeout_secs = min(120, max(10, _get_int_setting('search_timeout', 40)))
 
     tested_urls = set(cached_failed_urls)
     fast_link = None
@@ -12453,7 +12466,7 @@ def verify_and_filter_links():
     if not links: return
     p_dialog = xbmcgui.DialogProgress()
     p_dialog.create('Multi Bridge', 'Verificando disponibilidad de enlaces...')
-    verified_links = _verify_links_headless(links, engine=engine, p_dialog=p_dialog)
+    verified_links = _verify_links_headless(links, engine=engine, p_dialog=p_dialog, force=True)
     try: p_dialog.close()
     except: pass
 
@@ -13900,6 +13913,8 @@ def _run_phase1_current_episode_verification(meta, my_token, p, mon):
     del capítulo actual en segundo plano, reclasificando y ordenando estrictamente según las
     preferencias del usuario (Idioma, Calidad, Servidores) para nutrir el OSD y el menú de pausa."""
     global _BG_COLLECTOR_RUNNING
+    if _bridge_addon.getSetting('auto_verify_links') != 'true':
+        return
 
     # Si hay un recolector de Fast Autoplay activo para este capítulo, esperar a que culmine
     while _BG_COLLECTOR_RUNNING:
@@ -14405,6 +14420,26 @@ def _run_phase2_next_episode_preloader(meta, my_token, p, mon):
         c for c in sorted_links
         if not _is_torrent_link(c) and not _is_web_captcha_server(_get_link_server_name(c), c)
     ]
+
+    _auto_v_p2 = (_bridge_addon.getSetting('auto_verify_links') == 'true')
+    if not _auto_v_p2:
+        next_meta['verified_only'] = False
+        _PRELOADED_NEXT_EPISODE_CACHE[cache_key] = {
+            'links': list(sorted_links),
+            'all_links': sorted_links,
+            'matched_item': matched_item,
+            'meta': next_meta,
+            'engine': 'balandro',
+            'next_ep': next_ep,
+            'time': time.time()
+        }
+        try:
+            xbmcgui.Window(10000).setProperty('BridgeMulti.PreloadedNextEpKey', str(cache_key))
+        except Exception:
+            pass
+        xbmc.log("Multi Bridge Pipeline [Fase 2]: %d enlace(s) precargados sin verificar (auto_verify_links=false) para %s" % (
+            len(sorted_links), cache_key), xbmc.LOGINFO)
+        return
 
     # Verificar en segundo plano hasta encontrar 3 enlaces funcionales
     verified_top3 = []
