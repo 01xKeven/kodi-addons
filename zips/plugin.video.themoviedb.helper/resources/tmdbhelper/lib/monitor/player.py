@@ -425,7 +425,11 @@ class PlayerMonitor(Player, CommonMonitorFunctions):
 
     def get_playingitem(self):
         # Check that video other than dummy splash video is playing
-        if self.getPlayingFile() and self.getPlayingFile().endswith('dummy.mp4'):
+        try:
+            playing_file = self.getPlayingFile() if self.isPlaying() else ''
+        except Exception:
+            playing_file = ''
+        if not playing_file or playing_file.endswith('dummy.mp4'):
             self.reset_properties()
             return
 
