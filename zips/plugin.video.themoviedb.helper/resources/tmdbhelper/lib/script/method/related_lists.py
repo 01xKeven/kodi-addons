@@ -49,9 +49,9 @@ class RelatedLists:
         return format_folderpath(path, content=RelatedLists.format_content(info), info=info, play='RunPlugin')  # Use RunPlugin to avoid window manager info dialog crash with Browse method
 
     def select(self):
-        from xbmcgui import Dialog
-        from tmdbhelper.lib.addon.plugin import executebuiltin
-        x = Dialog().contextmenu(self.choices)
+        from tmdbhelper.lib.addon.dialog import select_dialog_safe
+        from tmdbhelper.lib.addon.plugin import executebuiltin, get_localized
+        x = select_dialog_safe(get_localized(32235), self.choices)
         if x == -1:
             return
         executebuiltin('Dialog.Close(busydialog)')  # Kill modals because prevents ActivateWindow

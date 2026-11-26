@@ -30,8 +30,11 @@ class Menu:
             return -1
         if len(self.choices) == 1:
             return 0
-        from xbmcgui import Dialog
-        return Dialog().contextmenu([i.name for i in self.choices])
+        from tmdbhelper.lib.addon.dialog import select_dialog_safe
+        from tmdbhelper.lib.addon.plugin import get_localized, get_setting
+        use_mdblist = any(get_setting(f'sync_source_{s}', 'str') == 'MDbList' for s in ('watched', 'watchlist', 'collection'))
+        heading = get_localized(32546 if use_mdblist else 32295)
+        return select_dialog_safe(heading, [i.name for i in self.choices])
 
     def select(self, sync_type=None):
         if sync_type:

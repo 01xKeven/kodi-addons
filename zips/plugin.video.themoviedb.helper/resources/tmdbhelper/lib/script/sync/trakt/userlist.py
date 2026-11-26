@@ -85,7 +85,8 @@ class ItemUserList(ItemSync):
             return (
                 get_infolabel("ListItem.Property(param.list_slug)"),
                 get_infolabel("ListItem.Property(param.user_slug)"))
-        x = Dialog().contextmenu(self.users_lists_choices)
+        from tmdbhelper.lib.addon.dialog import select_dialog_safe
+        x = select_dialog_safe(get_localized(32298) or 'Trakt', self.users_lists_choices)
         if x == -1:
             return
         if self.users_lists[x].get('label') == get_localized(32299):

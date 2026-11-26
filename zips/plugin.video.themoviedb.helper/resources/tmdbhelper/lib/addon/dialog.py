@@ -8,6 +8,24 @@ BusyDialog = jurialmunkey_dialog.BusyDialog
 busy_decorator = jurialmunkey_dialog.busy_decorator
 
 
+def select_dialog_safe(heading, choices):
+    """Ensure busy/contextmenu dialogs finish closing before opening Dialog().select()
+    so skins with fullscreen fade overlays never get stuck dimmed."""
+    from xbmc import executebuiltin, getCondVisibility, sleep
+    from xbmcgui import Dialog
+    executebuiltin('Dialog.Close(busydialognocancel,true)')
+    executebuiltin('Dialog.Close(busydialog,true)')
+    executebuiltin('Dialog.Close(contextmenu,true)')
+    for _ in range(15):
+        if not getCondVisibility(
+            'Window.IsVisible(busydialognocancel) | Window.IsVisible(busydialog) | Window.IsVisible(contextmenu)'
+        ):
+            break
+        sleep(30)
+    sleep(60)
+    return Dialog().select(heading, choices)
+
+
 def progress_bg(func):
     def wrapper(self, *args, **kwargs):
         self.dialog_progress_bg = DialogProgressSyncBG()
