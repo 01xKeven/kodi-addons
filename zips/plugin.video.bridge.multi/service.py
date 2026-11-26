@@ -321,6 +321,148 @@ def _inject_active_playback_metadata(player, properties_only=False):
         xbmc.log("Multi Bridge PlayerService: error configurando Window properties: " + str(_e_win), xbmc.LOGINFO)
 
 
+def _is_addon_installed_and_enabled(addon_id):
+    """Comprueba de forma pasiva si un complemento existe y está habilitado en Kodi."""
+    try:
+        if xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+            return True, True
+    except Exception:
+        pass
+    try:
+        req = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Addons.GetAddonDetails",
+            "params": {"addonid": addon_id, "properties": ["enabled"]},
+            "id": 1
+        })
+        raw = xbmc.executeJSONRPC(req)
+        data = json.loads(raw) if raw else {}
+        addon_info = (data.get('result') or {}).get('addon')
+        if isinstance(addon_info, dict) and addon_info:
+            return True, bool(addon_info.get('enabled', True))
+    except Exception:
+        pass
+    return False, False
+
+
+def _enable_installed_addon(addon_id):
+    """Habilita silenciosamente un complemento ya instalado que estuviera desactivado."""
+    try:
+        req = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Addons.SetAddonEnabled",
+            "params": {"addonid": addon_id, "enabled": True},
+            "id": 1
+        })
+        raw = xbmc.executeJSONRPC(req)
+        data = json.loads(raw) if raw else {}
+        return 'result' in data
+    except Exception:
+        return False
+
+
+def _wait_native_install_cycle(addon_id, monitor, max_wait=45.0):
+    """Espera de forma pasiva hasta que termine la instalación nativa o el usuario cierre el diálogo."""
+    # Dar margen inicial para que aparezca la ventana nativa de confirmación/progreso de Kodi
+    if monitor.waitForAbort(2.5):
+        return False
+    elapsed = 2.5
+    modal_cond = (
+        "Window.IsVisible(yesnodialog) | Window.IsVisible(progressdialog) | "
+        "Window.IsVisible(addoninformation) | Window.IsVisible(extendedprogressdialog)"
+    )
+    while elapsed < max_wait and not monitor.abortRequested():
+        try:
+            if xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+                return True
+            if not xbmc.getCondVisibility(modal_cond):
+                break
+        except Exception:
+            break
+        if monitor.waitForAbort(0.5):
+            return False
+        elapsed += 0.5
+    try:
+        return bool(xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id))
+    except Exception:
+        return False
+
+
+def _check_inputstream_addons_startup(monitor):
+    """Revisa pasiva y calmadamente al iniciar Kodi (tras esperar a que cargue todo)
+    si inputstream.adaptive e inputstream.ffmpegdirect están instalados. Si falta alguno,
+    abre directamente la ventana nativa de instalación de Kodi para ese complemento."""
+    # Esperar ~15s tras arrancar Kodi para no competir con la carga de skin, widgets y servicios
+    if monitor.waitForAbort(15):
+        return
+
+    # Si Kodi sigue en pantalla de arranque o cargando ocupadamente, esperar con calma unos segundos extra
+    for _ in range(10):
+        if monitor.abortRequested():
+            return
+        try:
+            if not xbmc.getCondVisibility('Window.IsVisible(startup) | Window.IsActive(startup)'):
+                break
+        except Exception:
+            break
+        if monitor.waitForAbort(1.5):
+            return
+
+    required_addons = (
+        'inputstream.adaptive',
+        'inputstream.ffmpegdirect',
+    )
+    missing_addons = []
+
+    for addon_id in required_addons:
+        if monitor.abortRequested():
+            return
+        installed, enabled = _is_addon_installed_and_enabled(addon_id)
+        if installed and enabled:
+            continue
+        if installed and not enabled:
+            xbmc.log("Multi Bridge Service: %s estaba deshabilitado -> habilitando..." % addon_id, xbmc.LOGINFO)
+            if _enable_installed_addon(addon_id):
+                if monitor.waitForAbort(0.5):
+                    return
+                if xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+                    continue
+        missing_addons.append(addon_id)
+        if monitor.waitForAbort(0.25):
+            return
+
+    if not missing_addons:
+        xbmc.log("Multi Bridge Service: InputStream Adaptive y FFmpeg Direct verificados OK.", xbmc.LOGINFO)
+        return
+
+    for idx, addon_id in enumerate(missing_addons):
+        if monitor.abortRequested():
+            return
+        if idx > 0:
+            if monitor.waitForAbort(1.5):
+                return
+        # Esperar calmadamente si el usuario está reproduciendo vídeo o con otro diálogo modal abierto
+        for _ in range(20):
+            if monitor.abortRequested():
+                return
+            try:
+                if not xbmc.getCondVisibility('Player.HasMedia | Window.IsVisible(yesnodialog) | Window.IsVisible(okdialog)'):
+                    break
+            except Exception:
+                break
+            if monitor.waitForAbort(1.5):
+                return
+        if monitor.abortRequested():
+            return
+        try:
+            xbmc.log("Multi Bridge Service: falta '%s' -> abriendo ventana nativa InstallAddon(%s)" % (addon_id, addon_id), xbmc.LOGINFO)
+            xbmc.executebuiltin('InstallAddon(%s)' % addon_id)
+        except Exception as e:
+            xbmc.log("Multi Bridge Service: error lanzando InstallAddon(%s): %s" % (addon_id, e), xbmc.LOGWARNING)
+            continue
+        _wait_native_install_cycle(addon_id, monitor, max_wait=45.0)
+
+
 def check_first_run_device_service(monitor=None):
     try:
         if monitor and monitor.abortRequested():
@@ -390,6 +532,11 @@ def run_service():
     t_dev.name = "BridgeMultiFirstRunDevice"
     t_dev.start()
 
+    # Iniciar verificacion pasiva y retardada de InputStream Adaptive y FFmpeg Direct
+    t_inp = threading.Thread(target=_check_inputstream_addons_startup, args=(monitor,), daemon=True)
+    t_inp.name = "BridgeMultiInputStreamCheck"
+    t_inp.start()
+
     _sync_timer = 0
     while not monitor.abortRequested():
         if monitor.waitForAbort(0.25):
@@ -421,7 +568,7 @@ def run_service():
     except Exception:
         pass
     try:
-        for _th, _tmo in ((t_net, 0.6), (t_dev, 0.3), (t_init, 0.6)):
+        for _th, _tmo in ((t_net, 0.6), (t_dev, 0.3), (t_inp, 0.3), (t_init, 0.6)):
             if _th and _th.is_alive():
                 _th.join(timeout=_tmo)
     except Exception:
