@@ -12,6 +12,14 @@ class DatabaseConnection:
         self._local = threading.local()
 
     @property
+    def open_db(self):
+        return getattr(self._local, 'open_db', None)
+
+    @open_db.setter
+    def open_db(self, value):
+        self._local.open_db = value
+
+    @property
     def open_connection(self):
         return getattr(self._local, 'open_connection', None)
 
@@ -21,20 +29,27 @@ class DatabaseConnection:
 
     def close(self):
         conn = self.open_connection
-        if not conn:
-            return
-        try:
-            conn.close()
-        except Exception:
-            pass
-        self.open_connection = None
+        db = self.open_db
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self.open_connection = None
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
+            self.open_db = None
 
     @contextmanager
-    def open(self):
+    def open(self, read_only=False):
         existing_connection = bool(self.open_connection)
 
         if not existing_connection:
-            db = self.cache.get_database()
+            db = self.cache.get_database(read_only=read_only)
+            self.open_db = db
             self.open_connection = db.cursor() if db else None
 
         yield self.open_connection

@@ -73,9 +73,29 @@ class ServiceMonitor(Poller):
             self.images_monitor.exit = True
         except AttributeError:
             pass
+        for th_attr in ('cron_job', 'images_monitor'):
+            try:
+                th = getattr(self, th_attr, None)
+                if th and th.is_alive():
+                    th.join(timeout=0.5)
+            except Exception:
+                pass
         if not self.update_monitor.abortRequested():
             get_property('ServiceStarted', clear_property=True)
             get_property('ServiceStop', clear_property=True)
+        else:
+            try:
+                import tmdbhelper.lib.addon.plugin as _p_mod
+                _p_mod.ADDON = None
+                if hasattr(_p_mod, 'KODIPLUGIN') and _p_mod.KODIPLUGIN is not None:
+                    _p_mod.KODIPLUGIN._addon = None
+            except Exception:
+                pass
+            for attr in ('listitem_funcs', 'player_monitor', 'update_monitor', 'cron_job', 'images_monitor'):
+                try:
+                    setattr(self, attr, None)
+                except Exception:
+                    pass
 
 
 def restart_service_monitor():

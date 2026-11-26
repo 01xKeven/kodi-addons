@@ -57,8 +57,13 @@ class SimpleCache(jurialmunkey.scache.SimpleCache):
         return connection
 
     def _init_database(self):
-        from jurialmunkey.locker import MutexPropLock
+        import os
         from jurialmunkey.tmdate import set_timestamp
+        if os.path.exists(self._db_file) and os.path.getsize(self._db_file) > 100:
+            cur_time = set_timestamp(0, True)
+            self.set_window_property(f'{self._sc_name}.clean.lastexecuted', str(cur_time - self._auto_clean_interval + 600))
+            return
+        from jurialmunkey.locker import MutexPropLock
         with MutexPropLock(f'{self._db_file}.lockfile', kodi_log=self.kodi_log):
             if self.get_window_property(f'{self._sc_name}.clean.lastexecuted'):
                 return

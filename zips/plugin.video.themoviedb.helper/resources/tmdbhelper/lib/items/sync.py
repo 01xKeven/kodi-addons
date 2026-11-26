@@ -47,9 +47,15 @@ class SyncPlayData(SyncAuthorisation):
                 self.syncdata.sync('show', ('playback_progress', ))
 
     @is_sync
-    def pre_sync_start(self, **kwargs):
+    def pre_sync_start(self, info=None, tmdb_type=None, **kwargs):
+        info_movies = ('stars_in_movies', 'crew_in_movies', 'trakt_userlist', 'stars_in_both', 'crew_in_both',)
+        info_tvshow = ('stars_in_tvshows', 'crew_in_tvshows', 'trakt_userlist', 'trakt_calendar', 'stars_in_both', 'crew_in_both', 'specified_episodes')
+        needs_movie = (tmdb_type in ('movie', 'both',) or info in info_movies)
+        needs_show = (tmdb_type in ('tv', 'season', 'both',) or info in info_tvshow)
+        if not needs_movie and not needs_show:
+            return
         from tmdbhelper.lib.addon.thread import SafeThread
-        self._pre_sync = SafeThread(target=self.pre_sync, kwargs=kwargs)
+        self._pre_sync = SafeThread(target=self.pre_sync, kwargs={'info': info, 'tmdb_type': tmdb_type, **kwargs})
         self._pre_sync.start()
 
     @is_sync

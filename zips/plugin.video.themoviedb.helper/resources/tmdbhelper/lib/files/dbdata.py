@@ -85,6 +85,18 @@ class DatabaseCore:
         return connection
 
     def init_database(self):
+        import os, struct
+        try:
+            if os.path.exists(self._db_file) and os.path.getsize(self._db_file) >= 100:
+                with open(self._db_file, 'rb') as f:
+                    hdr = f.read(64)
+                if len(hdr) == 64 and hdr[:16] == b'SQLite format 3\x00':
+                    hdr_ver = struct.unpack('>I', hdr[60:64])[0]
+                    if hdr_ver and hdr_ver >= self.database_version:
+                        self.set_database_init()
+                        return False
+        except Exception:
+            pass
         from jurialmunkey.locker import MutexPropLock
         with MutexPropLock(f'{self._db_file}.lockfile', kodi_log=self.kodi_log):
             if self.database_initialized:

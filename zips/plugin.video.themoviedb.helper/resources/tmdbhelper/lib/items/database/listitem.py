@@ -206,7 +206,7 @@ class ListItemThread:
     @cached_property
     def cached_data(self):
         with TimerList(self.timer_lists, ' - cached', log_threshold=0.001, logging=self.log_timers):
-            with self.connection.open():
+            with self.connection.open(read_only=True):
                 return self.get_cached_data()
 
     def get_cached_data(self):
@@ -258,7 +258,11 @@ class ListItemThread:
         with TimerList(self.timer_lists, ' - commit', log_threshold=0.001, logging=self.log_timers):
             self.connection.open_connection.execute('COMMIT')
         with TimerList(self.timer_lists, ' - return', log_threshold=0.001, logging=self.log_timers):
-            self.cached_data = self.get_cached_data()
+            cached = list(self.cached_data)
+            for idx, item_val in enumerate(cached):
+                if item_val is None and self.items[idx].is_cacheable:
+                    cached[idx] = self.items[idx].get_cached_item(self.connection)
+            self.cached_data = cached
 
     @cached_property
     def configured_items(self):
