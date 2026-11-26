@@ -5658,7 +5658,7 @@ def _extract_web_actors(html):
             actors.append(c)
     # 2. Bloque etiquetado de reparto (Actors, Actores, Reparto, Elenco, Cast)
     if not actors:
-        lbl_block = _re.search(r'(?:<strong>|<span>|<p[^>]*>|<div[^>]*>|<li[^>]*>|<b>)\s*(?:Actors|Actores|Reparto|Cast|Elenco)\s*[:<](.*?)(?:</(?:p|div|ul|li|section)>|<br\s*/?>|\n)', html, _re.I | _re.DOTALL)
+        lbl_block = _re.search(r'(?:<strong>|<span>|<p[^>]*>|<div[^>]*>|<li[^>]*>|<b>)\s*(?:Actors|Actores|Reparto|Cast|Elenco)\s*[:<](.*?)</(?:p|div|ul|li|section|dd|td)>', html, _re.I | _re.DOTALL)
         if lbl_block:
             content = lbl_block.group(1)
             sub_as = _re.findall(r'<a[^>]*>([^<]+)</a>', content)
@@ -5908,8 +5908,8 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             return False
 
         # 3. Meta release_date estricto (ignora fechas de subida como uploadDate)
-        meta_dates = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date)["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
-        meta_dates += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date)["\']', html, _re2.I)
+        meta_dates = _re2.findall(r'<meta[^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date["\'][^>]+content=["\']([^"\']+)["\']', html, _re2.I)
+        meta_dates += _re2.findall(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:(?:video:)?video:)?release_date["\']', html, _re2.I)
         all_md = []
         for md in meta_dates:
             all_md.extend([int(y) for y in _re2.findall(years_re, md)])
