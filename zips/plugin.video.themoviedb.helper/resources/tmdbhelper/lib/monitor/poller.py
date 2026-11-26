@@ -200,8 +200,30 @@ class Poller(WindowChecker):
     def is_on_infodialog(self):
         return any((get_condvisibility(f'Window.IsVisible({i})') for i in WINDOW_XML_INFODIALOG))
 
+    def _check_suppress_play_fail(self):
+        until_raw = self.get_window_property('SuppressPlayFail', is_home=True)
+        if not until_raw:
+            return False
+        import time
+        from jurialmunkey.window import get_property
+        try:
+            until_ts = float(until_raw)
+        except Exception:
+            get_property('SuppressPlayFail', clear_property=True)
+            return False
+        if time.time() > until_ts:
+            get_property('SuppressPlayFail', clear_property=True)
+            return False
+        if get_condvisibility('Window.IsVisible(okdialog) + !Window.IsVisible(yesnodialog)'):
+            from xbmc import executebuiltin
+            executebuiltin('Dialog.Close(okdialog,true)')
+            get_property('SuppressPlayFail', clear_property=True)
+            return False
+        return True
+
     def poller(self):
         while not self.update_monitor.abortRequested() and not self.exit:
+            suppress_active = self._check_suppress_play_fail()
             self.get_current_base_window()
             self.get_current_window()
 
@@ -219,7 +241,7 @@ class Poller(WindowChecker):
                 if not self._cleared_property:
                     self._on_clear()
                     self._cleared_property = True
-                self._on_idle(5)
+                self._on_idle(0.15 if suppress_active else 5)
                 continue
 
             # Sit idle in a holding pattern if screen saver is active

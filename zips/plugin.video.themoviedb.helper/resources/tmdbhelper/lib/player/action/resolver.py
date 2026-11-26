@@ -71,6 +71,22 @@ class PlayerResolverBase:
     """
 
     def execute_action(self):
+        if self.handle is not None and not self.dummy.success:
+            import time
+            import xbmcgui
+            import xbmcplugin
+            try:
+                xbmcgui.Window(10000).setProperty('TMDbHelper.SuppressPlayFail', str(time.time() + 2.5))
+            except Exception:
+                pass
+            try:
+                xbmcplugin.setResolvedUrl(int(self.handle), False, xbmcgui.ListItem())
+            except Exception:
+                pass
+            try:
+                executebuiltin('Dialog.Close(okdialog,true)')
+            except Exception:
+                pass
         kodi_log(['lib.player - executing action:\n', self.action], 1)
         executebuiltin(self.action)
 
