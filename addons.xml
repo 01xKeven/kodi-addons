@@ -353,7 +353,7 @@
   </extension>
 </addon>
 <addon id="plugin.video.themoviedb.helper"
-version="6.18.18"
+version="6.18.19"
 name="TMDb Helper"
 provider-name="jurialmunkey">
 <requires>
@@ -372,7 +372,7 @@ provider-name="jurialmunkey">
 <extension point="xbmc.service" library="resources/service.py" />
 <extension point="xbmc.python.module" library="resources/modules"/>
 <extension point="xbmc.addon.metadata">
-  <reuselanguageinvoker>false</reuselanguageinvoker>
+  <reuselanguageinvoker>true</reuselanguageinvoker>
   <summary lang="de_DE">TMDb Helfer</summary>
   <summary lang="en_GB">TMDb Helper</summary>
   <summary lang="es_ES">Asistente TMDb</summary>

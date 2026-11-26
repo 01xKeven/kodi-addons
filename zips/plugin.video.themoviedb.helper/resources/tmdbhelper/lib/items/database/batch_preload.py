@@ -159,8 +159,8 @@ def preload_batch(connection, listitem_configs):
          'SELECT key, value, parent_id FROM custom WHERE parent_id IN ({ph})', (), (), None),
         ('certification', all_parent_ids, all_pid_set,
          'SELECT name, iso_country, iso_language, release_date, release_type, parent_id '
-         'FROM certification WHERE parent_id IN ({ph}) AND iso_country=? AND name IS NOT NULL AND name != "" '
-         'ORDER BY IFNULL(release_date, "9999-99-99") ASC', (), (iso_country,), 1),
+         'FROM certification WHERE parent_id IN ({ph}) AND iso_country=? AND name IS NOT NULL AND name != ""',
+         (), (iso_country,), 1),
         ('video', all_parent_ids, all_pid_set,
          'SELECT name, iso_country, iso_language, release_date, key, path, content, parent_id '
          'FROM video WHERE parent_id IN ({ph}) AND content=? ORDER BY iso_language=? DESC, release_date DESC',
@@ -196,6 +196,8 @@ def preload_batch(connection, listitem_configs):
 
     for tname, id_list, id_set, sql_tpl, prefix_p, suffix_p, lim in queries:
         rows = _exec_in_chunks(cursor, sql_tpl, id_list, prefix_p, suffix_p)
+        if tname == 'certification' and rows:
+            rows.sort(key=lambda r: r['release_date'] or '9999-99-99')
         batch['table_ids'][tname] = id_set
         batch['tables'][tname] = _group_by(rows, 'parent_id', limit_per_key=lim)
 

@@ -26,6 +26,14 @@ class Router():
         return container.get_directory(items_only, build_items)
 
     def run(self):
+        try:
+            from tmdbhelper.lib.items.listitem import global_setting
+            from tmdbhelper.lib.addon.plugin import KODIPLUGIN
+            import xbmcaddon
+            global_setting.clear()
+            KODIPLUGIN._addon = xbmcaddon.Addon('plugin.video.themoviedb.helper')
+        except Exception:
+            pass
         if self.params.get('info') == 'play':
             return self.play_player()
         self.get_directory()
