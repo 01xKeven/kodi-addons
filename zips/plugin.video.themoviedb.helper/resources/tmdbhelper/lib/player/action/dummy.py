@@ -50,6 +50,10 @@ class PlayerDummy:
         return self.check_strm()
 
     def check_strm(self):
+        # If Kodi invoked playback with a resolve handle for an action player (e.g. RunPlugin),
+        # skipping dummy leaves the handle unresolved and triggers Kodi's Playback Failed dialog.
+        if self.is_handle and self.is_action:
+            return True
         if not self.resolver.is_strm and get_setting('only_resolve_strm'):
             kodi_log(['lib.player - skipped dummy no strm setting\n', self.filename], 1)
             return False
