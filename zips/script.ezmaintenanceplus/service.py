@@ -38,15 +38,23 @@ def folderStats(path):
     """Devuelve (tamaño en bytes, número de archivos .zip) de una carpeta."""
     total = 0
     zips = 0
-    for dirpath, dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            try:
-                total += os.path.getsize(fp)
-            except (OSError, IOError):
-                pass
-            if f.lower().endswith('.zip'):
-                zips += 1
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                            if entry.name.lower().endswith('.zip'):
+                                zips += 1
+                    except (OSError, IOError):
+                        pass
+        except (OSError, IOError):
+            pass
     return total, zips
 
 
@@ -79,6 +87,7 @@ def startupMaintenance():
         freed = maintenance.purgePackages(mode='silent')
         if not freed:
             freed = toMB(pkgSize)
+        pkgSize = max(0, pkgSize - freed * 1024 * 1024)
         actions.append('Paquetes: %.0f MB liberados' % freed)
         log('limpieza automática de paquetes: %.2f MB liberados' % freed)
 
@@ -87,6 +96,7 @@ def startupMaintenance():
         freed = maintenance.deleteThumbnails(mode='silent')
         if not freed:
             freed = toMB(thumbSize)
+        thumbSize = max(0, thumbSize - freed * 1024 * 1024)
         actions.append('Miniaturas: %.0f MB liberadas' % freed)
         log('limpieza automática de miniaturas: %.2f MB liberadas' % freed)
 
@@ -97,14 +107,11 @@ def startupMaintenance():
             actions.append('Caché: %.0f MB liberados' % freed)
             log('limpieza automática de caché: %.2f MB liberados' % freed)
 
-    pkgSize, _ = folderStats(packagesdir)
-    thumbSize, _ = folderStats(thumbnails)
-    stats = 'Paquetes: %.0f MB - Miniaturas: %.0f MB' % (toMB(pkgSize), toMB(thumbSize))
-
     # Solo se notifica si de verdad se ha limpiado algo.
     if actions:
         notify('Limpieza automática: ' + ' | '.join(actions))
     elif notifyMode:
+        stats = 'Paquetes: %.0f MB - Miniaturas: %.0f MB' % (toMB(pkgSize), toMB(thumbSize))
         notify(stats)
 
 
@@ -127,8 +134,8 @@ if __name__ == '__main__':
 
     monitor = Monitor()
 
-    # Se espera un poco a que Kodi termine de arrancar antes de tocar archivos.
-    if not monitor.waitForAbort(5):
+    # Se espera a que Kodi termine de cargar Home y sus widgets antes de escanear disco.
+    if not monitor.waitForAbort(30):
         startupMaintenance()
 
     while not monitor.abortRequested():

@@ -297,7 +297,7 @@
     </assets> 
   </extension>
 </addon>
-<addon id="script.ezmaintenanceplus" name="EZ Maintenance+" version="2026.04.05.1" provider-name="aenema, peno">
+<addon id="script.ezmaintenanceplus" name="EZ Maintenance+" version="2026.04.05.2" provider-name="aenema, peno">
   <requires>
     <import addon="script.module.requests" version="1.0.0" />
   </requires>
