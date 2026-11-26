@@ -1785,7 +1785,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                                     _set_dialog_active_global(False)
                                                     with _floating_dialog_lock:
                                                         _floating_dialog_active = False
-                                                    show_floating_links_dialog()
+                                                    show_floating_links_dialog(resume_time=cur_time)
                                                 return
                                             elif switched in ('cancel', 'no_client'):
                                                 return
@@ -1804,7 +1804,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                                 _set_dialog_active_global(False)
                                                 with _floating_dialog_lock:
                                                     _floating_dialog_active = False
-                                                show_floating_links_dialog()
+                                                show_floating_links_dialog(resume_time=cur_time)
                                                 return
                                         finally:
                                             _end_playback_transition()
@@ -16435,15 +16435,15 @@ def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alf
     return False
 
 
-def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
+def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0):
     _begin_playback_transition()
     try:
-        return _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, global_idx=global_idx, chosen_link=chosen_link)
+        return _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, global_idx=global_idx, chosen_link=chosen_link, force_resume_time=force_resume_time)
     finally:
         _end_playback_transition()
 
 
-def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
+def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0):
     _android_stop_playback_if_active()
     if chosen_link is not None:
         chosen = chosen_link
@@ -16456,23 +16456,26 @@ def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engi
 
     media_key = _get_media_key(meta, chosen)
     is_s = bool(meta.get('season') and meta.get('episode'))
-    bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
     seek_to_time = 0
     start_beginning = False
-    if bm:
-        r_time = float(bm.get('resume_time', 0))
-        if r_time > 10:
-            mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
-            time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-            _rsel = show_resume_dialog(time_str, meta.get('title', ''))
-            if _rsel == 0:
-                seek_to_time = r_time
-            elif _rsel == 1:
-                seek_to_time = 0
-                start_beginning = True
-                save_bookmark(media_key, 0, 0, title=meta.get('title', ''))
-            elif _rsel is None or _rsel < 0:
-                return 'cancel'
+    if force_resume_time and float(force_resume_time) > 0:
+        seek_to_time = float(force_resume_time)
+    else:
+        bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
+        if bm:
+            r_time = float(bm.get('resume_time', 0))
+            if r_time > 10:
+                mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
+                time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                _rsel = show_resume_dialog(time_str, meta.get('title', ''))
+                if _rsel == 0:
+                    seek_to_time = r_time
+                elif _rsel == 1:
+                    seek_to_time = 0
+                    start_beginning = True
+                    save_bookmark(media_key, 0, 0, title=meta.get('title', ''))
+                elif _rsel is None or _rsel < 0:
+                    return 'cancel'
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
     played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=seek_to_time, start_beginning=start_beginning)
@@ -16526,7 +16529,7 @@ def _verify_playback_started(is_torrent=False, timeout=None, ignore_file=None):
     if timeout is None:
         timeout = 40.0 if is_torrent else 25.0
     return _wait_for_playback_progress(player=p, mon=mon, timeout=timeout, server_name="ManualSwitch", ignore_file=ignore_file)
-def show_floating_links_dialog(offset=0):
+def show_floating_links_dialog(offset=0, resume_time=0.0):
     global _search_in_progress, _links_view_active
     _search_in_progress = False
     _links_view_active = True
@@ -16536,13 +16539,13 @@ def show_floating_links_dialog(offset=0):
         return False
     _set_dialog_active_global(True)
     try:
-        return _show_floating_links_dialog_impl(offset=offset)
+        return _show_floating_links_dialog_impl(offset=offset, resume_time=resume_time)
     finally:
         _set_dialog_active_global(False)
         _links_view_active = False
         _restore_silence_all()
 
-def _show_floating_links_dialog_impl(offset=0):
+def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
     p = xbmc.Player()
     is_playing = False
     cur_playback_time = 0.0
@@ -16552,6 +16555,8 @@ def _show_floating_links_dialog_impl(offset=0):
             cur_playback_time = float(p.getTime())
     except Exception:
         pass
+    if cur_playback_time <= 0.0 and resume_time and float(resume_time) > 0.0:
+        cur_playback_time = float(resume_time)
 
     if is_playing and not xbmc.getCondVisibility("Player.Paused"):
         try: p.pause()
@@ -16686,15 +16691,19 @@ def _show_floating_links_dialog_impl(offset=0):
         srv_name = _get_link_server_name(chosen_link) or 'Servidor'
         is_tor = (srv_name.lower() == 'torrent' or _is_torrent_link(chosen_link))
 
-        if was_playback:
+        if was_playback and p.isPlayingVideo():
             try:
-                _prev_sw_file = p.getPlayingFile() if p.isPlayingVideo() else ''
+                _prev_sw_file = p.getPlayingFile()
             except Exception:
                 _prev_sw_file = ''
             played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time, chosen_link=chosen_link)
         else:
             _prev_sw_file = ''
-            played = _play_link_from_dialog(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, global_idx=(chosen_idx + offset), chosen_link=chosen_link)
+            played = _play_link_from_dialog(
+                chosen_idx, c_links, c_meta, c_matched, engine=c_eng,
+                global_idx=(chosen_idx + offset), chosen_link=chosen_link,
+                force_resume_time=cur_playback_time if (was_playback or (resume_time and float(resume_time) > 0)) else 0.0,
+            )
 
         if played in ('cancel', 'no_client'):
             continue
