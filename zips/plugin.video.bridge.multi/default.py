@@ -10034,25 +10034,7 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
         return False
 
     # ── Dismiss handle early (suppress Kodi error dialog via guardian) ─────
-    _guard_stop = [False]
-    def _suppress():
-        for _ in range(30):
-            if _guard_stop[0]: break
-            try:
-                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                xbmc.executebuiltin('Dialog.Close(error,true)')
-            except: pass
-            time.sleep(0.1)
-    _gt = threading.Thread(target=_suppress, daemon=True)
-    _gt.start()
-
-    _absorb = xbmcgui.ListItem()
-    try:    xbmcplugin.setResolvedUrl(handle, False, _absorb)
-    except: pass
-    xbmc.sleep(300)
-    _guard_stop[0] = True
-    try: _gt.join(timeout=0.5)
-    except: pass
+    _absorb_plugin_handle(handle, wait_ms=300)
 
     # ── Abrir list_links en segundo plano ──────────────────────────────────
     # Se carga detrás del reproductor; cuando el usuario detiene el video
@@ -10489,6 +10471,38 @@ def _stop_player_cleanly(player=None):
     xbmc.sleep(250)
 
 
+def _absorb_plugin_handle(handle, wait_ms=250):
+    """Descarta el handle de plugin cuando se reproduce vía player.play(), suprimiendo okdialog espurio."""
+    try:
+        h_int = int(handle)
+    except Exception:
+        h_int = -1
+    if h_int < 0:
+        return
+    _guard_stop = [False]
+    def _suppress():
+        for _ in range(30):
+            if _guard_stop[0]:
+                break
+            try:
+                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+            except Exception:
+                pass
+            time.sleep(0.1)
+    _gt = threading.Thread(target=_suppress, daemon=True)
+    _gt.start()
+    try:
+        xbmcplugin.setResolvedUrl(h_int, False, xbmcgui.ListItem())
+    except Exception:
+        pass
+    xbmc.sleep(int(wait_ms))
+    _guard_stop[0] = True
+    try:
+        _gt.join(timeout=0.5)
+    except Exception:
+        pass
+
+
 def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name="", ignore_file=None):
     """Espera a que Kodi inicie la reproducción y verifica PROGRESIÓN REAL de reloj/fotogramas.
 
@@ -10540,8 +10554,11 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
             t_first_playing = time.time()
             t_chk_start = t_first_playing
             initial_t = -1.0
-            max_stall_time = 6.5 if is_manual_switch else 3.5     # límite sin buffering
-            max_abs_stall_time = 16.0 if is_manual_switch else 5.5 # límite absoluto con buffering/seek
+            _has_seek = bool(seek_to_time and float(seek_to_time) > 10)
+            # Streams HLS/DASH (inputstream.adaptive) + init DXVA necesitan margen suficiente
+            # antes de abortar con player.stop(); cortar a los ~3.5s provoca AppHang en CloseFile().
+            max_stall_time = 12.0 if (is_manual_switch or _has_seek) else 10.0
+            max_abs_stall_time = 24.0 if (is_manual_switch or _has_seek) else 20.0
             cur_t = -1.0
 
             while (time.time() - t_chk_start) < max_stall_time and (time.time() - t_first_playing) < max_abs_stall_time:
@@ -10577,9 +10594,9 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
                             pass
                     return True
 
-                # Si Kodi está buffereando activamente, extender margen hasta max_abs_stall_time (nunca infinito)
+                # Si Kodi está buffereando/cacheando activamente, extender margen hasta max_abs_stall_time (nunca infinito)
                 try:
-                    if xbmc.getCondVisibility("Player.Buffering"):
+                    if xbmc.getCondVisibility("Player.Buffering") or xbmc.getCondVisibility("Player.Caching"):
                         t_chk_start = time.time()
                 except Exception:
                     pass
@@ -11072,25 +11089,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
                 if not handle_absorbed:
                     handle_absorbed = True
-                    _guard_stop = [False]
-                    def _suppress():
-                        for _ in range(30):
-                            if _guard_stop[0]: break
-                            try:
-                                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                                xbmc.executebuiltin('Dialog.Close(error,true)')
-                            except: pass
-                            time.sleep(0.1)
-                    _gt = threading.Thread(target=_suppress, daemon=True)
-                    _gt.start()
-
-                    _absorb = xbmcgui.ListItem()
-                    try: xbmcplugin.setResolvedUrl(int(handle), False, _absorb)
-                    except: pass
-                    xbmc.sleep(250)
-                    _guard_stop[0] = True
-                    try: _gt.join(timeout=0.5)
-                    except: pass
+                    _absorb_plugin_handle(handle, wait_ms=250)
 
                 if cached_item:
                     _enrich_link_metadata(cand, meta, cached_item)
@@ -11510,25 +11509,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         return False
 
     # Descartar handle de plugin con guardian para suprimir cualquier dialogo de error espurio de Kodi
-    _guard_stop = [False]
-    def _suppress():
-        for _ in range(30):
-            if _guard_stop[0]: break
-            try:
-                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                xbmc.executebuiltin('Dialog.Close(error,true)')
-            except: pass
-            time.sleep(0.1)
-    _gt = threading.Thread(target=_suppress, daemon=True)
-    _gt.start()
-
-    _absorb = xbmcgui.ListItem()
-    try: xbmcplugin.setResolvedUrl(int(handle), False, _absorb)
-    except: pass
-    xbmc.sleep(250)
-    _guard_stop[0] = True
-    try: _gt.join(timeout=0.5)
-    except: pass
+    _absorb_plugin_handle(handle, wait_ms=250)
 
     # Comprobar punto de reanudacion
     if matched_item_holder[0]:
