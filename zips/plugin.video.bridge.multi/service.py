@@ -138,9 +138,14 @@ class BridgePlayerService(xbmc.Player):
                 xbmc.executebuiltin('Dialog.Close(seekbar,true)')
                 xbmc.executebuiltin('Dialog.Close(videoosd,true)')
                 xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
-            xbmc.sleep(250)
+            xbmc.sleep(150)
             if self.isPlayingVideo():
                 _inject_active_playback_metadata(self)
+            # Re-asegurar script.trakt.ids antes de que script.trakt termine su sleep(1000)
+            # (por si onPlayBackStopped asincrono del enlace previo limpio la propiedad tarde)
+            xbmc.sleep(500)
+            if self.isPlayingVideo():
+                _inject_active_playback_metadata(self, properties_only=True)
         except Exception as e:
             xbmc.log("Multi Bridge PlayerService: error en onAVStarted: " + str(e), xbmc.LOGWARNING)
 
@@ -163,13 +168,13 @@ class BridgePlayerService(xbmc.Player):
             pass
 
 
-def _inject_active_playback_metadata(player):
+def _inject_active_playback_metadata(player, properties_only=False):
     raw_meta = xbmcgui.Window(10000).getProperty('MultiBridge.ActivePlaybackMeta')
     if not raw_meta:
         return
     try:
         t_str = xbmcgui.Window(10000).getProperty('MultiBridge.ActivePlaybackTime') or '0'
-        if time.time() - float(t_str) > 300: # Más de 5 minutos
+        if time.time() - float(t_str) > 86400:
             return
     except Exception:
         pass
@@ -201,57 +206,58 @@ def _inject_active_playback_metadata(player):
     director_val = str(meta.get('director') or '')
 
     # 1. Inyectar directamente en el VideoInfoTag del Player de Kodi (Nexus/Omega 20/21)
-    try:
-        vt = player.getVideoInfoTag()
-        if vt:
-            uids = {}
-            if tmdb_id:
-                uids['tmdb'] = str(tmdb_id)
-                if is_series: uids['tvshow.tmdb'] = str(tmdb_id)
-            if imdb_id:
-                uids['imdb'] = str(imdb_id)
-                if is_series: uids['tvshow.imdb'] = str(imdb_id)
-            if tvdb_id:
-                uids['tvdb'] = str(tvdb_id)
-                if is_series: uids['tvshow.tvdb'] = str(tvdb_id)
-            if trakt_id:
-                uids['trakt'] = str(trakt_id)
-            if uids:
-                try: vt.setUniqueIDs(uids, 'tmdb' if tmdb_id else ('imdb' if imdb_id else ''))
-                except: pass
-            if imdb_id:
-                try: vt.setIMDbNumber(imdb_id)
-                except: pass
-            vt.setMediaType('episode' if is_series else 'movie')
-            if is_series:
-                if showname_val: vt.setTvShowTitle(showname_val)
-                if title_val: vt.setTitle(title_val)
-                elif showname_val and s_val and e_val:
-                    try: vt.setTitle(f"{showname_val} {int(s_val)}x{int(e_val):02d}")
-                    except: vt.setTitle(f"{showname_val} {s_val}x{e_val}")
-                if s_val:
-                    try: vt.setSeason(int(s_val))
+    if not properties_only:
+        try:
+            vt = player.getVideoInfoTag()
+            if vt:
+                uids = {}
+                if tmdb_id:
+                    uids['tmdb'] = str(tmdb_id)
+                    if is_series: uids['tvshow.tmdb'] = str(tmdb_id)
+                if imdb_id:
+                    uids['imdb'] = str(imdb_id)
+                    if is_series: uids['tvshow.imdb'] = str(imdb_id)
+                if tvdb_id:
+                    uids['tvdb'] = str(tvdb_id)
+                    if is_series: uids['tvshow.tvdb'] = str(tvdb_id)
+                if trakt_id:
+                    uids['trakt'] = str(trakt_id)
+                if uids:
+                    try: vt.setUniqueIDs(uids, 'tmdb' if tmdb_id else ('imdb' if imdb_id else ''))
                     except: pass
-                if e_val:
-                    try: vt.setEpisode(int(e_val))
+                if imdb_id:
+                    try: vt.setIMDbNumber(imdb_id)
                     except: pass
-            else:
-                if title_val: vt.setTitle(title_val)
-            if year_val:
-                try: vt.setYear(int(year_val))
-                except: pass
-            if plot_val: vt.setPlot(plot_val)
-            if genre_val:
-                g_list = [g.strip() for g in genre_val.split('/') if g.strip()]
-                try: vt.setGenres(g_list)
-                except: pass
-            if director_val:
-                d_list = [d.strip() for d in director_val.split('/') if d.strip()]
-                try: vt.setDirectors(d_list)
-                except: pass
-            xbmc.log("Multi Bridge PlayerService: VideoInfoTag de Kodi inyectado con exito", xbmc.LOGINFO)
-    except Exception as _e_vt:
-        xbmc.log("Multi Bridge PlayerService: error inyectando VideoInfoTag: " + str(_e_vt), xbmc.LOGINFO)
+                vt.setMediaType('episode' if is_series else 'movie')
+                if is_series:
+                    if showname_val: vt.setTvShowTitle(showname_val)
+                    if title_val: vt.setTitle(title_val)
+                    elif showname_val and s_val and e_val:
+                        try: vt.setTitle(f"{showname_val} {int(s_val)}x{int(e_val):02d}")
+                        except: vt.setTitle(f"{showname_val} {s_val}x{e_val}")
+                    if s_val:
+                        try: vt.setSeason(int(s_val))
+                        except: pass
+                    if e_val:
+                        try: vt.setEpisode(int(e_val))
+                        except: pass
+                else:
+                    if title_val: vt.setTitle(title_val)
+                if year_val:
+                    try: vt.setYear(int(year_val))
+                    except: pass
+                if plot_val: vt.setPlot(plot_val)
+                if genre_val:
+                    g_list = [g.strip() for g in genre_val.split('/') if g.strip()]
+                    try: vt.setGenres(g_list)
+                    except: pass
+                if director_val:
+                    d_list = [d.strip() for d in director_val.split('/') if d.strip()]
+                    try: vt.setDirectors(d_list)
+                    except: pass
+                xbmc.log("Multi Bridge PlayerService: VideoInfoTag de Kodi inyectado con exito", xbmc.LOGINFO)
+        except Exception as _e_vt:
+            xbmc.log("Multi Bridge PlayerService: error inyectando VideoInfoTag: " + str(_e_vt), xbmc.LOGINFO)
 
     # 2. Sincronizar Window(10000) para script.trakt, TMDb Helper y skins
     try:

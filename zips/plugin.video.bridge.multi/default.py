@@ -1041,13 +1041,30 @@ def _set_global_monitor_token(token):
 
 def _is_dialog_active_global():
     try:
-        return xbmcgui.Window(10000).getProperty('BridgeMulti.DialogActive') == 'true'
+        w = xbmcgui.Window(10000)
+        if w.getProperty('BridgeMulti.DialogActive') != 'true':
+            return False
+        ts_str = w.getProperty('BridgeMulti.DialogActiveTs') or '0'
+        try:
+            ts = float(ts_str)
+            if ts > 0 and (time.time() - ts) > 120.0 and not _floating_dialog_active:
+                w.setProperty('BridgeMulti.DialogActive', 'false')
+                w.clearProperty('BridgeMulti.DialogActiveTs')
+                return False
+        except Exception:
+            pass
+        return True
     except Exception:
         return False
 
 def _set_dialog_active_global(active):
     try:
-        xbmcgui.Window(10000).setProperty('BridgeMulti.DialogActive', 'true' if active else 'false')
+        w = xbmcgui.Window(10000)
+        w.setProperty('BridgeMulti.DialogActive', 'true' if active else 'false')
+        if active:
+            w.setProperty('BridgeMulti.DialogActiveTs', str(time.time()))
+        else:
+            w.clearProperty('BridgeMulti.DialogActiveTs')
     except Exception:
         pass
 
@@ -1178,8 +1195,32 @@ def _release_search_lock_atomic():
         pass
 
 _active_playback_monitor_thread = None
+_ACTIVE_MONITOR_THREADS = []
+_ACTIVE_MONITOR_LOCK = threading.Lock()
+_ACTIVE_TRANSITIONS = 0
+_ACTIVE_TRANSITIONS_LOCK = threading.Lock()
 _ACTIVE_BG_THREADS = []
 _ACTIVE_BG_THREADS_LOCK = threading.Lock()
+
+def _begin_playback_transition():
+    global _ACTIVE_TRANSITIONS
+    with _ACTIVE_TRANSITIONS_LOCK:
+        _ACTIVE_TRANSITIONS += 1
+
+def _end_playback_transition():
+    global _ACTIVE_TRANSITIONS
+    with _ACTIVE_TRANSITIONS_LOCK:
+        _ACTIVE_TRANSITIONS = max(0, _ACTIVE_TRANSITIONS - 1)
+
+def _has_live_playback_activity():
+    with _ACTIVE_TRANSITIONS_LOCK:
+        if _ACTIVE_TRANSITIONS > 0:
+            return True
+    if _active_playback_monitor_thread and _active_playback_monitor_thread.is_alive():
+        return True
+    with _ACTIVE_MONITOR_LOCK:
+        _ACTIVE_MONITOR_THREADS[:] = [t for t in _ACTIVE_MONITOR_THREADS if t.is_alive()]
+        return bool(_ACTIVE_MONITOR_THREADS)
 
 def _register_bg_thread(th):
     if not th:
@@ -1192,16 +1233,14 @@ def _register_bg_thread(th):
         pass
 
 def wait_for_playback_monitor():
-    """Mantiene vivo el hilo principal del invoker de Python mientras dure la reproducción.
+    """Mantiene vivo el hilo principal del invoker de Python mientras dure la reproducción
+    o cualquier transición/cambio de enlace en curso.
     Esto evita que Kodi entre en 'CPythonInvoker: waiting on thread ...' y finalice Python
-    por la fuerza tras 5 segundos (lo cual provoca crasheos con cambios de refresco de pantalla
-    o salidas intempestivas)."""
-    global _active_playback_monitor_thread
-    if _active_playback_monitor_thread and _active_playback_monitor_thread.is_alive():
-        mon = xbmc.Monitor()
-        while _active_playback_monitor_thread.is_alive() and not mon.abortRequested():
-            if mon.waitForAbort(0.25):
-                break
+    por la fuerza tras 5 segundos (lo cual provoca crasheos y pérdida de monitor/Trakt)."""
+    mon = xbmc.Monitor()
+    while _has_live_playback_activity() and not mon.abortRequested():
+        if mon.waitForAbort(0.25):
+            break
     # Asegurar cierre limpio de recolectores/pipeline secundarios antes de salir del invoker
     _BG_TASK_ABORT_EVENT.set()
     try:
@@ -1293,7 +1332,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         # para que los subtítulos aparezcan abajo desde el primer instante
         try:
             xbmc.executebuiltin('Dialog.Close(busydialog,true)')
-            xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
+            xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
             xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
             if old_playing_file:
                 xbmc.executebuiltin('Dialog.Close(seekbar,true)')
@@ -1549,7 +1588,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         pause_cooldown = time.time() + 5.0
         active_idx = current_link_index
 
-        _trakt_reassert_deadline = time.time() + 15.0
+        _trakt_reassert_deadline = time.time() + 30.0
+        _last_meta_refresh_ts = time.time()
         while p.isPlayingVideo() and not mon.abortRequested():
             if _get_global_monitor_token() != my_token:
                 xbmc.log("Multi Bridge: monitor finalizado (un nuevo monitor tomó el control)", xbmc.LOGINFO)
@@ -1563,10 +1603,17 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 except Exception:
                     pass
 
-                # Mantener IDs de Trakt activos durante el arranque para evitar que eventos stop asíncronos los borren
-                if time.time() < _trakt_reassert_deadline:
+                # Mantener IDs de Trakt y timestamp de reproducción activos
+                _now_loop = time.time()
+                if _now_loop < _trakt_reassert_deadline:
                     if not xbmcgui.Window(10000).getProperty('script.trakt.ids'):
                         sync_tmdbhelper_playerstring(_m_dict)
+                if (_now_loop - _last_meta_refresh_ts) >= 30.0:
+                    _last_meta_refresh_ts = _now_loop
+                    try:
+                        xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackTime', str(_now_loop))
+                    except Exception:
+                        pass
 
                 cur_time = p.getTime()
                 tot = p.getTotalTime()
@@ -1594,7 +1641,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
                 if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
                     now = time.time()
-                    if now > pause_cooldown and cur_time >= 2.0 and not _floating_dialog_active and not _is_dialog_active_global():
+                    if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active and not _is_dialog_active_global():
                         xbmc.log("Multi Bridge: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
                         with _floating_dialog_lock:
                             _floating_dialog_active = True
@@ -1617,12 +1664,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         open_links = True
                                     elif ans == 2 and next_ep_info:
                                         # Usuario seleccionó reproducir siguiente capítulo
+                                        _begin_playback_transition()
                                         try:
-                                            if p.isPlayingVideo():
-                                                p.stop()
-                                        except Exception:
-                                            pass
-                                        _play_next_episode(c_meta, next_ep_info)
+                                            _prepare_clean_switch_transition()
+                                            _play_next_episode(c_meta, next_ep_info)
+                                        finally:
+                                            _end_playback_transition()
                                         return
                                     else:
                                         if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
@@ -1688,26 +1735,36 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
                                         if chosen_link is None and 0 <= chosen_idx < len(c_links):
                                             chosen_link = c_links[chosen_idx]
-                                        switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
-                                        if switched:
-                                            chosen_l = chosen_link or c_links[chosen_idx]
-                                            srv_n = _get_link_server_name(chosen_l) or 'Servidor'
-                                            is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
-                                            switch_ok = _verify_playback_started(is_torrent=is_t)
-                                            if not switch_ok and not p.isPlayingVideo():
-                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                if _is_kodi_modal_dialog_open():
-                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
-                                                show_floating_links_dialog()
-                                            return
-                                        else:
-                                            if not p.isPlayingVideo():
+                                        _begin_playback_transition()
+                                        try:
+                                            switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
+                                            if switched:
                                                 chosen_l = chosen_link or c_links[chosen_idx]
-                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                if _is_kodi_modal_dialog_open():
-                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
-                                                show_floating_links_dialog()
-                                            return
+                                                srv_n = _get_link_server_name(chosen_l) or 'Servidor'
+                                                is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
+                                                switch_ok = _verify_playback_started(is_torrent=is_t)
+                                                if not switch_ok and not p.isPlayingVideo():
+                                                    _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                    if _is_kodi_modal_dialog_open():
+                                                        _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                                    _set_dialog_active_global(False)
+                                                    with _floating_dialog_lock:
+                                                        _floating_dialog_active = False
+                                                    show_floating_links_dialog()
+                                                return
+                                            else:
+                                                if not p.isPlayingVideo():
+                                                    chosen_l = chosen_link or c_links[chosen_idx]
+                                                    _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                    if _is_kodi_modal_dialog_open():
+                                                        _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                                    _set_dialog_active_global(False)
+                                                    with _floating_dialog_lock:
+                                                        _floating_dialog_active = False
+                                                    show_floating_links_dialog()
+                                                return
+                                        finally:
+                                            _end_playback_transition()
                                     else:
                                         _clear_session_failed_links(cur_mk)
                                         for _l in c_links:
@@ -1733,12 +1790,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
             if mon.waitForAbort(0.25): break
 
-        _BG_TASK_ABORT_EVENT.set()
-        if mon.abortRequested() or _SHUTDOWN_REQUESTED:
-            abort_all_network_sockets()
         if _get_global_monitor_token() != my_token:
             xbmc.log("Multi Bridge: monitor anterior finalizado limpiamente (control transferido al nuevo servidor)", xbmc.LOGINFO)
             return
+
+        _BG_TASK_ABORT_EVENT.set()
+        if mon.abortRequested() or _SHUTDOWN_REQUESTED:
+            abort_all_network_sockets()
 
         if _get_global_monitor_token() == my_token:
             _set_global_monitor_token('')
@@ -1783,6 +1841,9 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
     global _active_playback_monitor_thread
     _th = threading.Thread(target=_monitor_loop, daemon=True)
     _th.name = "BridgeMultiPlaybackMonitor"
+    with _ACTIVE_MONITOR_LOCK:
+        _ACTIVE_MONITOR_THREADS[:] = [t for t in _ACTIVE_MONITOR_THREADS if t.is_alive()]
+        _ACTIVE_MONITOR_THREADS.append(_th)
     _active_playback_monitor_thread = _th
     _th.start()
 
@@ -11556,7 +11617,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
             try:
                 xbmc.executebuiltin('Dialog.Close(busydialog,true)')
-                xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
+                xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
                 xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
             except Exception: pass
             # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
@@ -12088,10 +12149,13 @@ def _prepare_clean_switch_transition():
     try:
         if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
             p.stop()
-            for _ in range(40):
+            for _ in range(50):
                 if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
                     break
                 xbmc.sleep(30)
+            # Breve respiro para que DXVA e InputStream Adaptive terminen de destruir
+            # decodificadores antes de abrir el siguiente stream
+            xbmc.sleep(150)
     except Exception:
         pass
 
@@ -16236,6 +16300,14 @@ def _android_stop_playback_if_active():
 
 
 def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0, chosen_link=None):
+    _begin_playback_transition()
+    try:
+        return _switch_to_link_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, force_cur_time=force_cur_time, chosen_link=chosen_link)
+    finally:
+        _end_playback_transition()
+
+
+def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', force_cur_time=0.0, chosen_link=None):
     if chosen_link is not None:
         chosen = chosen_link
     elif links and 0 <= chosen_idx < len(links):
@@ -16314,6 +16386,14 @@ def _switch_to_link(chosen_idx, links, meta, matched_item=None, engine='alfa', f
 
 
 def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
+    _begin_playback_transition()
+    try:
+        return _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, global_idx=global_idx, chosen_link=chosen_link)
+    finally:
+        _end_playback_transition()
+
+
+def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None):
     _android_stop_playback_if_active()
     if chosen_link is not None:
         chosen = chosen_link
@@ -16362,8 +16442,6 @@ def _is_kodi_modal_dialog_open():
         "Window.IsActive(10100)",
         "Window.IsVisible(okdialog)",
         "Window.IsActive(okdialog)",
-        "Window.IsVisible(dialogok)",
-        "Window.IsActive(dialogok)",
     ):
         try:
             if xbmc.getCondVisibility(cond):
