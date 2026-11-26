@@ -59,7 +59,9 @@ class SyncPlayData(SyncAuthorisation):
         if info in self._NON_MEDIA_INFOS:
             return
         from jurialmunkey.window import get_property
-        if get_property('TMDbHelper.StartupSyncInProgress') == 'True' and not get_property('TMDbHelper.StartupSyncDone'):
+        if not get_property('TMDbHelper.StartupSyncDone') and get_property('ServiceStop') != 'True' and (
+            get_property('TMDbHelper.StartupSyncInProgress') == 'True' or not get_property('ServiceStarted')
+        ):
             return
         info_movies = ('stars_in_movies', 'crew_in_movies', 'trakt_userlist', 'stars_in_both', 'crew_in_both',)
         info_tvshow = ('stars_in_tvshows', 'crew_in_tvshows', 'trakt_userlist', 'trakt_calendar', 'stars_in_both', 'crew_in_both', 'specified_episodes')
