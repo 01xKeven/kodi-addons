@@ -429,7 +429,9 @@ class PlayerMonitor(Player, CommonMonitorFunctions):
             playing_file = self.getPlayingFile() if self.isPlaying() else ''
         except Exception:
             playing_file = ''
-        if not playing_file or playing_file.endswith('dummy.mp4'):
+        if not playing_file:
+            return
+        if playing_file.endswith('dummy.mp4'):
             self.reset_properties()
             return
 
