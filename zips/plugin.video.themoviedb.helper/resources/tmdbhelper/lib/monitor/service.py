@@ -21,6 +21,8 @@ class ServiceMonitor(Poller):
         self.update_monitor = UpdateMonitor()
         self.player_monitor = PlayerMonitor()
 
+        get_property('TMDbHelper.StartupSyncDone', clear_property=True)
+        get_property('TMDbHelper.StartupSyncInProgress', 'True')
         self.run_cron_job()
         self.run_images_monitor()
 

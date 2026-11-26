@@ -17,12 +17,17 @@ class CronJobMonitor(SafeThread):
         self.update_monitor = parent.update_monitor
 
     def _on_startup(self):
+        from jurialmunkey.window import get_property
+        try:
+            if self.update_monitor.abortRequested() or self.exit:
+                return
+            self._do_trakt_authorization()
+        finally:
+            get_property('TMDbHelper.StartupSyncDone', 'True')
+            get_property('TMDbHelper.StartupSyncInProgress', clear_property=True)
         if self.update_monitor.abortRequested() or self.exit:
             return
         self._do_recache_kodidb()
-        if self.update_monitor.abortRequested() or self.exit:
-            return
-        self._do_trakt_authorization()
 
     def _on_poll(self):
         if self.update_monitor.abortRequested() or self.exit:
@@ -102,15 +107,20 @@ class CronJobMonitor(SafeThread):
             return
         from jurialmunkey.window import get_property
         self.trakt_api.authorize()
-        self.update_monitor.waitForAbort(1)
         if self.update_monitor.abortRequested() or self.exit:
             return
         if not get_property('TraktIsAuth', is_type=float):
             return
         try:
+            from tmdbhelper.lib.addon.plugin import get_setting
             from tmdbhelper.lib.sync.datasync import SyncData
-            from tmdbhelper.lib.sync.activity import SyncLastActivities
-            _ = SyncLastActivities(SyncData(trakt_api=self.trakt_api)).json
+            sd = SyncData(trakt_api=self.trakt_api)
+            if get_setting('trakt_watchedindicators'):
+                sd.sync('movie', ('plays', 'playback_progress'))
+                sd.sync('show', ('plays', 'watched_episodes', 'aired_episodes', 'playback_progress'))
+            else:
+                from tmdbhelper.lib.sync.activity import SyncLastActivities
+                _ = SyncLastActivities(sd).json
         except Exception:
             pass
         if self.update_monitor.abortRequested() or self.exit:

@@ -58,6 +58,9 @@ class SyncPlayData(SyncAuthorisation):
     def pre_sync_start(self, info=None, tmdb_type=None, **kwargs):
         if info in self._NON_MEDIA_INFOS:
             return
+        from jurialmunkey.window import get_property
+        if get_property('TMDbHelper.StartupSyncInProgress') == 'True' and not get_property('TMDbHelper.StartupSyncDone'):
+            return
         info_movies = ('stars_in_movies', 'crew_in_movies', 'trakt_userlist', 'stars_in_both', 'crew_in_both',)
         info_tvshow = ('stars_in_tvshows', 'crew_in_tvshows', 'trakt_userlist', 'trakt_calendar', 'stars_in_both', 'crew_in_both', 'specified_episodes')
         needs_movie = (tmdb_type in ('movie', 'both',) or info in info_movies)
