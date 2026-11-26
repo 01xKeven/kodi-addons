@@ -210,6 +210,8 @@ class ListItemThread:
                 return self.get_cached_data()
 
     def get_cached_data(self):
+        from tmdbhelper.lib.items.database.batch_preload import preload_batch
+        preload_batch(self.connection, self.items)
         return [
             listitem_config.get_cached_item(self.connection)
             for listitem_config in self.items

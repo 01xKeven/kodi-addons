@@ -27,7 +27,16 @@ class DatabaseConnection:
     def open_connection(self, value):
         self._local.open_connection = value
 
+    @property
+    def _batch(self):
+        return getattr(self._local, '_batch', None)
+
+    @_batch.setter
+    def _batch(self, value):
+        self._local._batch = value
+
     def close(self):
+        self._batch = None
         conn = self.open_connection
         db = self.open_db
         if conn:

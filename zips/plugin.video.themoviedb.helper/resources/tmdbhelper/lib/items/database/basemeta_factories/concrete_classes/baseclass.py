@@ -20,6 +20,10 @@ class ItemDetailsList(ItemDetailsDatabaseAccess):
         return self.keys
 
     def get_cached_data(self):
+        from tmdbhelper.lib.items.database.batch_preload import batch_lookup_list
+        data = batch_lookup_list(self)
+        if data is not None:
+            return data
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, self.values, self.conditions)
 
     @cached_property

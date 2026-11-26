@@ -124,6 +124,11 @@
                     <default>false</default>
                     <control type="toggle"/>
                 </setting>
+                <setting id="art_extrafanart" type="boolean" label="32554" help="32555" parent="artwork_quality">
+                    <level>0</level>
+                    <default>false</default>
+                    <control type="toggle"/>
+                </setting>
             </group>
             <group id="3" label="32367">
                 <setting id="use_kodi_local_db" type="integer" label="32038" help="">

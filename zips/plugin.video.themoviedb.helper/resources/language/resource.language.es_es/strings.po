@@ -2675,3 +2675,13 @@ msgstr "Precargar biblioteca de Kodi al iniciar"
 msgctxt "#32553"
 msgid "Scan Kodi's library eagerly during Kodi startup. Keep disabled for faster Kodi boot."
 msgstr "Escanear la biblioteca de Kodi en el arranque. Mantener desactivado para un arranque más rápido."
+
+#: /resources/settings.xml
+msgctxt "#32554"
+msgid "Extra fanart"
+msgstr "Extra fanart"
+
+#: /resources/settings.xml
+msgctxt "#32555"
+msgid "Load extra rotating fanart images (fanart1..10) on items. Keep disabled for faster widget loading."
+msgstr "Cargar imágenes adicionales de fanart rotativo (fanart1..10). Mantener desactivado para cargar los widgets más rápido."

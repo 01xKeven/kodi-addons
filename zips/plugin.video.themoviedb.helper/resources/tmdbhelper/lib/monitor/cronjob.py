@@ -114,13 +114,12 @@ class CronJobMonitor(SafeThread):
         try:
             from tmdbhelper.lib.addon.plugin import get_setting
             from tmdbhelper.lib.sync.datasync import SyncData
+            from tmdbhelper.lib.sync.activity import SyncLastActivities
             sd = SyncData(trakt_api=self.trakt_api)
-            if get_setting('trakt_watchedindicators'):
+            _ = SyncLastActivities(sd).json
+            if get_setting('trakt_watchedindicators') and not self.update_monitor.waitForAbort(4):
                 sd.sync('movie', ('plays', 'playback_progress'))
                 sd.sync('show', ('plays', 'watched_episodes', 'aired_episodes', 'playback_progress'))
-            else:
-                from tmdbhelper.lib.sync.activity import SyncLastActivities
-                _ = SyncLastActivities(sd).json
         except Exception:
             pass
         if self.update_monitor.abortRequested() or self.exit:

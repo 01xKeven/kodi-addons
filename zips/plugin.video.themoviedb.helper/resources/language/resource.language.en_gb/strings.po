@@ -2662,3 +2662,13 @@ msgstr ""
 msgctxt "#32553"
 msgid "Scan Kodi's library eagerly during Kodi startup. Keep disabled for faster Kodi boot."
 msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32554"
+msgid "Extra fanart"
+msgstr ""
+
+#: /resources/settings.xml
+msgctxt "#32555"
+msgid "Load extra rotating fanart images (fanart1..10) on items. Keep disabled for faster widget loading."
+msgstr ""

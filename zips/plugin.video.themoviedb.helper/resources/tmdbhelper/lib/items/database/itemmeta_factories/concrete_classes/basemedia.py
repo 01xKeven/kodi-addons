@@ -143,6 +143,8 @@ class MediaItemArtworkRoutes:
     def get_art_list(self, affix=None, allow_ftv=False, allow_tmdb=False, allow_user=False, allow_default=False, no_affix=False):
 
         def get_art_tuple(route):
+            if route == 'art_extrafanart' and not get_setting('art_extrafanart'):
+                return
             definition = self.routes[route]
             if not allow_ftv and definition['art_api'] == 'ftv':
                 return
