@@ -10102,20 +10102,8 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
             continue
 
-        xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, verificando duración y monitoreando 3 min reales...' % (
+        xbmc.log('Multi Bridge autoplay [%d/%d] %s arrancó, monitoreando reproducción...' % (
             idx+1, total_att, server), xbmc.LOGINFO)
-
-        _is_s_fb = bool((meta or {}).get('season') and (meta or {}).get('episode'))
-        _rt_bad, _exp_m, _act_m = _is_playing_wrong_runtime(player, (meta or {}).get('tmdb'), is_series=_is_s_fb)
-        if _rt_bad:
-            xbmc.log('Multi Bridge autoplay [%d/%d] %s descartado por duración incompatible (TMDb %d min vs archivo %d min)' % (
-                idx+1, total_att, server, _exp_m, _act_m), xbmc.LOGWARNING)
-            _record_session_failed_link(link, media_key=resume_media_key, meta=meta)
-            _stop_player_cleanly(player)
-            _restore_dialog_noblock()
-            if total_att - (idx + 1) > 0:
-                _show_bridge_notification('Multi Bridge · Autoplay', 'Película incorrecta (%d min vs %d min) · Probando siguiente...' % (_act_m, _exp_m), 3000)
-            continue
 
 
 
@@ -11046,13 +11034,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     return True
 
                 if video_started and player.isPlayingVideo() and not _is_kodi_modal_dialog_open():
-                    _rt_bad_c, _exp_c, _act_c = _is_playing_wrong_runtime(player, p_tmdb, is_series=is_series)
-                    if _rt_bad_c:
-                        xbmc.log("Multi Bridge Fast Autoplay: candidato en caché [%s] descartado por duración incompatible (TMDb %d min vs archivo %d min)" % (srv_name, _exp_c, _act_c), xbmc.LOGWARNING)
-                        cached_failed_urls.add(cand_u_key)
-                        _record_session_failed_link(cand, media_key=media_key, meta=meta)
-                        _stop_player_cleanly(player)
-                        continue
                     xbmc.log("Multi Bridge Fast Autoplay: ¡Reproducción desde caché confirmada [%s]!" % srv_name, xbmc.LOGINFO)
                     try: setattr(cand, '_bridge_verified', True)
                     except Exception: pass
@@ -11572,21 +11553,16 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             return True
 
         if video_started and not _is_kodi_modal_dialog_open():
-            _rt_bad_w, _exp_w, _act_w = _is_playing_wrong_runtime(player, p_tmdb, is_series=is_series)
-            if _rt_bad_w:
-                xbmc.log("Multi Bridge Fast Autoplay Watchdog: [%s] descartado por duración incompatible (TMDb %d min vs archivo %d min)" % (
-                    _get_link_server_name(active_link), _exp_w, _act_w), xbmc.LOGWARNING)
-            else:
-                xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
-                try:
-                    xbmc.executebuiltin('Dialog.Close(busydialog,true)')
-                    xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
-                    xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
-                except Exception: pass
-                # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
-                start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
-                wait_for_playback_monitor()
-                return True
+            xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
+            try:
+                xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+                xbmc.executebuiltin('Dialog.Close(extendedbusydialog,true)')
+                xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+            except Exception: pass
+            # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
+            start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
+            wait_for_playback_monitor()
+            return True
 
         # C) Si llegó aquí, transcurrió el timeout o falló la decodificación (servidor caído / freeze)
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: enlace [%s] no inició (timeout/servidor caído). Intento %d de %d..." % (
