@@ -73,7 +73,7 @@ class ArtworkDetailsMixin:
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, self.values, conditions)
 
     def _get_cached_data_unified(self, include_null=True):
-        base_cond, _, tail = self.cached_data_conditions.partition(' ORDER BY ')
+        base_cond, _, tail = self.conditions.partition(' ORDER BY ')
         order_part, _, limit_part = tail.partition(' LIMIT ')
         iso_l = self.common_apis.tmdb_api.iso_language
         null_clause = ' OR iso_language IS NULL OR iso_language="xx"' if include_null else ''
@@ -106,6 +106,6 @@ class ArtworkDetailsMixin:
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, values, conditions)
 
     def get_cached_data(self):
-        if 'OFFSET' in self.cached_data_conditions.upper():
+        if 'OFFSET' in self.conditions.upper():
             return self.get_cached_data_by_language() or self.get_cached_data_by_english() or self.get_cached_data_by_null()
         return self._get_cached_data_unified(include_null=True)
