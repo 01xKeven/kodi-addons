@@ -1342,27 +1342,36 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
             pass
 
         # Período de gracia para permitir que el ajuste de refresco de pantalla de Kodi
-        # (Display resolution ADJUST / OnLostDisplay / OnResetDisplay) y la inicialización
-        # de decodificadores de audio/video se asienten antes de realizar llamadas C++ al Player.
-        # Detecta también freeze de códec Android MediaCodec: si getTime() se queda en 0.0s
-        # durante mucho tiempo pese a que isPlayingVideo()=True, el monitor se cierra para que
-        # el watchdog externo detecte el fallo y cambie de servidor.
-        _grace_codec_timeout = 8.0  # máx tiempo esperando que el reloj supere 0.5s
+        # y la inicialización de decodificadores / buffering HLS se asienten.
+        # Si getTime() aún tarda en avanzar mientras bufferea o tras un seek de cambio en caliente,
+        # NO matamos el monitor en falso (de lo contrario el popup de pausa dejaría de aparecer).
+        is_android_codec = bool(xbmc.getCondVisibility('System.Platform.Android'))
+        _grace_codec_timeout = 24.0 if (old_playing_file or seek_to_time > 0) else 15.0
         _grace_start = time.time()
-        for _s in range(80):
+        for _s in range(int(_grace_codec_timeout * 10)):
             if mon.abortRequested() or not p.isPlayingVideo() or _get_global_monitor_token() != my_token:
                 break
             try:
-                if p.getTime() >= 0.5:
+                _gt = float(p.getTime() or 0.0)
+                if _gt >= 0.5 and not xbmc.getCondVisibility("Player.Buffering"):
+                    break
+                if _gt >= 0.5 and (time.time() - _grace_start) >= 2.0:
                     break
             except Exception:
                 pass
-            if (time.time() - _grace_start) > _grace_codec_timeout:
-                # El reloj no ha avanzado en 8 segundos con isPlayingVideo()=True: fallo de códec
-                xbmc.log("Multi Bridge: monitor de reproducción - getTime() estancado en 0s durante %.1fs -> posible freeze de códec, cancelando monitor [%s]" % (
-                    _grace_codec_timeout, title_str or media_key), xbmc.LOGWARNING)
-                return
             if mon.waitForAbort(0.1): return
+        else:
+            if is_android_codec:
+                try:
+                    if float(p.getTime() or 0.0) < 0.5 and not xbmc.getCondVisibility("Player.Buffering"):
+                        xbmc.log("Multi Bridge: monitor de reproducción - getTime() estancado en 0s tras %.1fs en Android -> cancelando monitor [%s]" % (
+                            _grace_codec_timeout, title_str or media_key), xbmc.LOGWARNING)
+                        return
+                except Exception:
+                    pass
+            else:
+                xbmc.log("Multi Bridge: inicio de reloj lento tras %.1fs (buffering/seek activo) -> manteniendo monitor activo [%s]" % (
+                    _grace_codec_timeout, title_str or media_key), xbmc.LOGINFO)
 
         # Registrar sesión activa en Continuar viendo con estado inicial 'playing'
         _m_dict = dict(meta or {})
@@ -1744,16 +1753,35 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                         _begin_playback_transition()
                                         try:
                                             switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
+                                            chosen_l = chosen_link or c_links[chosen_idx]
+                                            srv_n = _get_link_server_name(chosen_l) or 'Servidor'
                                             if switched is True:
-                                                chosen_l = chosen_link or c_links[chosen_idx]
-                                                srv_n = _get_link_server_name(chosen_l) or 'Servidor'
                                                 is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
                                                 switch_ok = _verify_playback_started(is_torrent=is_t, ignore_file=prev_pf_switch or None)
-                                                if not switch_ok and not p.isPlayingVideo():
+                                                # Comprobación paciente antes de declarar fallo: dar 1s extra por si arrancó justo al borde del timeout
+                                                if not switch_ok:
+                                                    xbmc.sleep(1000)
+                                                    try:
+                                                        if p.isPlayingVideo() and float(p.getTime() or 0.0) >= 0.35:
+                                                            switch_ok = True
+                                                    except Exception:
+                                                        pass
+                                                if not switch_ok:
+                                                    xbmc.log("Multi Bridge: cambio en caliente fallido/timeout para %s -> limpiando y reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
                                                     _set_global_monitor_token('')
+                                                    if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+                                                        _prepare_clean_switch_transition()
                                                     _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                    if _is_kodi_modal_dialog_open():
-                                                        _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                                    try:
+                                                        xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+                                                        xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
+                                                        xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                                                    except Exception:
+                                                        pass
+                                                    try:
+                                                        xbmcgui.Dialog().notification('Multi Bridge', '%s no inició. Elige otro enlace.' % srv_n, '', 3000)
+                                                    except Exception:
+                                                        pass
                                                     _set_dialog_active_global(False)
                                                     with _floating_dialog_lock:
                                                         _floating_dialog_active = False
@@ -1762,16 +1790,21 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                             elif switched in ('cancel', 'no_client'):
                                                 return
                                             else:
-                                                if not p.isPlayingVideo():
-                                                    chosen_l = chosen_link or c_links[chosen_idx]
-                                                    _set_global_monitor_token('')
-                                                    _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                    if _is_kodi_modal_dialog_open():
-                                                        _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
-                                                    _set_dialog_active_global(False)
-                                                    with _floating_dialog_lock:
-                                                        _floating_dialog_active = False
-                                                    show_floating_links_dialog()
+                                                xbmc.log("Multi Bridge: enlace %s no pudo resolverse en cambio en caliente -> reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
+                                                _set_global_monitor_token('')
+                                                if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+                                                    _prepare_clean_switch_transition()
+                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
+                                                if _is_kodi_modal_dialog_open():
+                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                                                try:
+                                                    xbmcgui.Dialog().notification('Multi Bridge', '%s falló. Elige otro enlace.' % srv_n, '', 3000)
+                                                except Exception:
+                                                    pass
+                                                _set_dialog_active_global(False)
+                                                with _floating_dialog_lock:
+                                                    _floating_dialog_active = False
+                                                show_floating_links_dialog()
                                                 return
                                         finally:
                                             _end_playback_transition()
@@ -10471,7 +10504,9 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
         mon = xbmc.Monitor()
 
     t_start = time.time()
-    effective_timeout = max(10.0, min(float(timeout or 14.0), 22.0))
+    is_manual_switch = (server_name == "ManualSwitch")
+    effective_timeout = max(10.0, min(float(timeout or 14.0), 45.0 if is_manual_switch else 22.0))
+    max_loading_timeout = 45.0 if is_manual_switch else 26.0
     had_loading = False
     idle_count = 0
 
@@ -10503,8 +10538,8 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
             t_first_playing = time.time()
             t_chk_start = t_first_playing
             initial_t = -1.0
-            max_stall_time = 3.5     # límite sin buffering
-            max_abs_stall_time = 5.5 # límite absoluto incluso si Player.Buffering parpadea
+            max_stall_time = 6.5 if is_manual_switch else 3.5     # límite sin buffering
+            max_abs_stall_time = 16.0 if is_manual_switch else 5.5 # límite absoluto con buffering/seek
             cur_t = -1.0
 
             while (time.time() - t_chk_start) < max_stall_time and (time.time() - t_first_playing) < max_abs_stall_time:
@@ -10572,12 +10607,13 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
         if is_loading:
             had_loading = True
             idle_count = 0
-            # Si Kodi está cargando activamente, dar margen extra (hasta 26s máx)
+            # Si Kodi está cargando activamente, dar margen extra (hasta max_loading_timeout)
             if time.time() - t_start > (effective_timeout - 4):
-                effective_timeout = min(effective_timeout + 2.0, 26.0)
+                effective_timeout = min(effective_timeout + 2.0, max_loading_timeout)
         elif had_loading:
             idle_count += 1
-            if idle_count >= 5 and (time.time() - t_start > 2.0):
+            idle_limit = 8 if is_manual_switch else 5
+            if idle_count >= idle_limit and (time.time() - t_start > 2.0):
                 xbmc.log("Multi Bridge Watchdog: stream se detuvo prematuramente (EOF/fallo demuxer) [%s]" % server_name, xbmc.LOGINFO)
                 return False
 
@@ -12407,13 +12443,14 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
 
         if _result[0] is None:
             xbmc.log(f"Multi Bridge: timeout conectando a {server_name} tras 15s", xbmc.LOGINFO)
-            dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
-            dlg.ok(
-                'Multi Bridge — Tiempo de Espera Agotado',
-                f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] no respondió a tiempo (15 segundos).\n\n'
-                f'[COLOR red][B]Causa:[/B][/COLOR] Tiempo de espera agotado.\n'
-                f'El servidor puede estar caído, saturado o bloqueando la conexión.'
-            )
+            if not is_switch:
+                dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+                dlg.ok(
+                    'Multi Bridge — Tiempo de Espera Agotado',
+                    f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] no respondió a tiempo (15 segundos).\n\n'
+                    f'[COLOR red][B]Causa:[/B][/COLOR] Tiempo de espera agotado.\n'
+                    f'El servidor puede estar caído, saturado o bloqueando la conexión.'
+                )
             return False
 
         raw_reason = _fail_reason[0].strip()
@@ -12422,12 +12459,13 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             clean_reason = 'El vídeo ya no existe, el enlace está caído o el servidor no responde.'
 
         xbmc.log(f"Multi Bridge: fallo reproduciendo {server_name}: {clean_reason}", xbmc.LOGINFO)
-        dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
-        dlg.ok(
-            'Multi Bridge — Fallo del Servidor',
-            f'No se pudo reproducir en el servidor [B][COLOR gold]{server_name}[/COLOR][/B].\n\n'
-            f'[COLOR red][B]Motivo:[/B][/COLOR] {clean_reason}'
-        )
+        if not is_switch:
+            dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+            dlg.ok(
+                'Multi Bridge — Fallo del Servidor',
+                f'No se pudo reproducir en el servidor [B][COLOR gold]{server_name}[/COLOR][/B].\n\n'
+                f'[COLOR red][B]Motivo:[/B][/COLOR] {clean_reason}'
+            )
         return False
 
     # ── Alfa: reproducción 100% nativa sin ventanas personalizadas ────────
