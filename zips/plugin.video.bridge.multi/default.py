@@ -1735,15 +1735,22 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                     elif isinstance(chosen_idx, int) and chosen_idx >= 0:
                                         if chosen_link is None and 0 <= chosen_idx < len(c_links):
                                             chosen_link = c_links[chosen_idx]
+                                        prev_pf_switch = ''
+                                        try:
+                                            if p.isPlaying():
+                                                prev_pf_switch = p.getPlayingFile() or ''
+                                        except Exception:
+                                            prev_pf_switch = ''
                                         _begin_playback_transition()
                                         try:
                                             switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
-                                            if switched:
+                                            if switched is True:
                                                 chosen_l = chosen_link or c_links[chosen_idx]
                                                 srv_n = _get_link_server_name(chosen_l) or 'Servidor'
                                                 is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
-                                                switch_ok = _verify_playback_started(is_torrent=is_t)
+                                                switch_ok = _verify_playback_started(is_torrent=is_t, ignore_file=prev_pf_switch or None)
                                                 if not switch_ok and not p.isPlayingVideo():
+                                                    _set_global_monitor_token('')
                                                     _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
                                                     if _is_kodi_modal_dialog_open():
                                                         _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
@@ -1752,9 +1759,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                                                         _floating_dialog_active = False
                                                     show_floating_links_dialog()
                                                 return
+                                            elif switched in ('cancel', 'no_client'):
+                                                return
                                             else:
                                                 if not p.isPlayingVideo():
                                                     chosen_l = chosen_link or c_links[chosen_idx]
+                                                    _set_global_monitor_token('')
                                                     _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
                                                     if _is_kodi_modal_dialog_open():
                                                         _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
@@ -1820,15 +1830,18 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         if last_saved_time > 0 or tot_time > 0:
             save_bookmark(media_key, last_saved_time, tot_time, title=title_str)
 
-        # Distinción exacta: Parada normal voluntaria vs Interrupción anormal (corte de luz / crash)
+        # Distinción exacta: Parada normal voluntaria vs Interrupción anormal / corte tras cambio
         normal_exit = not mon.abortRequested()
         video_finished = bool(tot_time > 0 and (last_saved_time / float(tot_time) >= 0.80))
+        early_switch_drop = bool(old_playing_file and (last_saved_time - float(seek_to_time or 0.0)) < 45.0)
 
         if video_finished:
             xbmc.log("Multi Bridge: vídeo alcanzado al 80% o más. Marcando como COMPLETO y purgando Continuar viendo.", xbmc.LOGINFO)
             mark_item_as_completed(media_key, meta=_m_dict, title=title_str, total_time=tot_time)
             remove_continue_watching_record(media_key)
             _clear_session_failed_links(media_key)
+        elif early_switch_drop:
+            xbmc.log("Multi Bridge: reproducción detenida poco después de cambio en caliente (<45s avanzados). Preservando Continuar viendo.", xbmc.LOGINFO)
         elif normal_exit:
             # El usuario pulsó Stop, volvió atrás o vio el final: parada limpia
             xbmc.log("Multi Bridge: parada normal voluntaria. Limpiando registro de Continuar viendo.", xbmc.LOGINFO)
@@ -12149,13 +12162,17 @@ def _prepare_clean_switch_transition():
     try:
         if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
             p.stop()
-            for _ in range(50):
+            for _ in range(70):
                 if not p.isPlaying() and not xbmc.getCondVisibility("Player.HasMedia"):
                     break
-                xbmc.sleep(30)
-            # Breve respiro para que DXVA e InputStream Adaptive terminen de destruir
-            # decodificadores antes de abrir el siguiente stream
-            xbmc.sleep(150)
+                xbmc.sleep(35)
+            try:
+                xbmc.PlayList(xbmc.PLAYLIST_VIDEO).clear()
+            except Exception:
+                pass
+            # Respiro seguro para que CloseFile / DXVA / InputStream Adaptive terminen de cerrar
+            # antes de lanzar el siguiente Player().play() y evitar cancelación del arranque
+            xbmc.sleep(350)
     except Exception:
         pass
 
@@ -15173,8 +15190,8 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
         srv = (self.server_name or "Actual").strip()
         if srv.lower() in ('torrent', 'magnet'):
             srv = 'Torrent'
-        elif len(srv) > 18:
-            srv = srv[:17] + '..'
+        elif len(srv) > 26:
+            srv = srv[:24] + '..'
 
         qual_active = getattr(self, 'current_quality', '') or ''
         if not qual_active and hasattr(self, 'current_link') and self.current_link:
@@ -15206,13 +15223,13 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
             plain_hdr = '¿Cambiar enlace? | %s %s' % (srv, qual_active)
         else:
             plain_hdr = '¿Cambiar enlace? | %s' % srv
-        char_px = 12.6 * scale_ui
-        min_hdr_dw = int(round(len(plain_hdr) * char_px)) + pad_x * 2 + max(16, int(round(18 * scale_ui)))
+        char_px = 14.8 * scale_ui
+        min_hdr_dw = int(round(len(plain_hdr) * char_px)) + pad_x * 2 + max(24, int(round(26 * scale_ui)))
         if min_hdr_dw > dw:
             dw = min(max_dw, min_hdr_dw)
         pad_x = max(14, int(round(dw * 0.036)))
 
-        # En pantallas extremadamente estrechas (ej. móvil vertical), compactar prefijo si aún excediera el 94%
+        # En pantallas extremadamente estrechas, compactar prefijo si excediera el ancho de tarjeta (la etiqueta además tiene scroll=true)
         max_label_chars = max(18, int((dw - pad_x * 2) / max(8.0, char_px)))
         prefix_txt = '¿Cambiar enlace?'
         if len(plain_hdr) > max_label_chars:
@@ -15220,16 +15237,16 @@ class _PausePromptDialog(xbmcgui.WindowXMLDialog):
         if has_qual:
             plain_hdr_2 = '%s | %s %s' % (prefix_txt, srv, qual_active)
             if len(plain_hdr_2) > max_label_chars:
-                avail_srv = max(6, max_label_chars - len(prefix_txt) - len(qual_active) - 5)
+                avail_srv = max(10, max_label_chars - len(prefix_txt) - len(qual_active) - 5)
                 if len(srv) > avail_srv:
-                    srv = srv[:max(4, avail_srv - 2)] + '..'
+                    srv = srv[:max(8, avail_srv - 2)] + '..'
             header_text = '[B][COLOR FFCFA82C]%s[/COLOR][/B] [COLOR FF666666]|[/COLOR] [COLOR FFDDDDDD]%s[/COLOR] [B][COLOR FFCFA82C]%s[/COLOR][/B]' % (prefix_txt, srv, qual_active)
         else:
             plain_hdr_2 = '%s | %s' % (prefix_txt, srv)
             if len(plain_hdr_2) > max_label_chars:
-                avail_srv = max(6, max_label_chars - len(prefix_txt) - 4)
+                avail_srv = max(10, max_label_chars - len(prefix_txt) - 4)
                 if len(srv) > avail_srv:
-                    srv = srv[:max(4, avail_srv - 2)] + '..'
+                    srv = srv[:max(8, avail_srv - 2)] + '..'
             header_text = '[B][COLOR FFCFA82C]%s[/COLOR][/B] [COLOR FF666666]|[/COLOR] [COLOR FFDDDDDD]%s[/COLOR]' % (prefix_txt, srv)
 
         avail_w = max(200, dw - pad_x * 2)

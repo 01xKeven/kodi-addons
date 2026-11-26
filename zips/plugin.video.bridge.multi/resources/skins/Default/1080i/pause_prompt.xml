@@ -56,7 +56,9 @@
                 <font>font12</font>
                 <textcolor>FFFFFFFF</textcolor>
                 <align>left</align><aligny>center</aligny>
-                <scroll>false</scroll>
+                <scroll>true</scroll>
+                <scrollspeed>45</scrollspeed>
+                <scrollout>false</scrollout>
                 <label></label>
             </control>
 
