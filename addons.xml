@@ -353,7 +353,7 @@
   </extension>
 </addon>
 <addon id="plugin.video.themoviedb.helper"
-version="6.18.10"
+version="6.18.11"
 name="TMDb Helper"
 provider-name="jurialmunkey">
 <requires>

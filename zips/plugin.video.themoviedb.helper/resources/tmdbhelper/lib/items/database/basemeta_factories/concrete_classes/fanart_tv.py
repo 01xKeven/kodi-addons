@@ -13,6 +13,7 @@ class FanartTV(ItemDetailsList):
 
 
 class FanartTVType(ArtworkDetailsMixin, FanartTV):
+    has_iso_country = False
     conditions = 'parent_id=? AND type=? ORDER BY likes DESC LIMIT 1'  # WHERE conditions
 
     def get_cached_data_by_language(self):

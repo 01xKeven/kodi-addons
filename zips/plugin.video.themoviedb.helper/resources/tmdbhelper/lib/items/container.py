@@ -251,6 +251,7 @@ class ContainerDirectoryCommon(CommonContainerAPIs):
             items = self.get_directory_items()
 
             if not items:
+                self.sync_playdata.pre_sync_join()
                 from xbmcplugin import endOfDirectory
                 endOfDirectory(self.handle, succeeded=False)
                 return

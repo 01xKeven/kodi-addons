@@ -109,7 +109,7 @@ class ArtLandscape(ArtFanart):
         return (self.item_id, 'backdrops', 'stills')
 
     def get_cached_data(self):
-        return self.get_cached_data_by_language() or self.get_cached_data_by_english()
+        return self._get_cached_data_unified(include_null=False)
 
 
 class ArtLandscapeCountry(ArtLandscape):

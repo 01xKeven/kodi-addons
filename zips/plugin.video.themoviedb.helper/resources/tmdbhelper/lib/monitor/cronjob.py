@@ -107,6 +107,14 @@ class CronJobMonitor(SafeThread):
             return
         if not get_property('TraktIsAuth', is_type=float):
             return
+        try:
+            from tmdbhelper.lib.sync.datasync import SyncData
+            from tmdbhelper.lib.sync.activity import SyncLastActivities
+            _ = SyncLastActivities(SyncData(trakt_api=self.trakt_api)).json
+        except Exception:
+            pass
+        if self.update_monitor.abortRequested() or self.exit:
+            return
         from tmdbhelper.lib.script.method.trakt import get_stats
         get_stats()
 

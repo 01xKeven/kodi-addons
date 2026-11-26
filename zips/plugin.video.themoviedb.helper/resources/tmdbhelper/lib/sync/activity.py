@@ -65,15 +65,26 @@ class SyncLastActivities(SyncDataParentProperties):
     def get_json_sync(self):
         kodi_log('Sync: last_activities', 2)
 
-        try:
-            data = self.trakt_api.get_response_json('sync/last_activities') or {}
-        except AttributeError:
-            data = {}
+        sync_sources = tuple(
+            get_setting(s, 'str') or 'Trakt'
+            for s in ('sync_source_watchlist', 'sync_source_collection', 'sync_source_watched')
+        )
+        uses_trakt = 'Trakt' in sync_sources
+        uses_mdblist = 'MDbList' in sync_sources
 
-        try:
-            mdblist_data = self.mdblist_api.get_response_json('sync/last_activities') or {}
-        except AttributeError:
-            mdblist_data = {}
+        data = {}
+        if uses_trakt:
+            try:
+                data = self.trakt_api.get_response_json('sync/last_activities') or {}
+            except AttributeError:
+                data = {}
+
+        mdblist_data = {}
+        if uses_mdblist:
+            try:
+                mdblist_data = self.mdblist_api.get_response_json('sync/last_activities') or {}
+            except AttributeError:
+                mdblist_data = {}
 
         if not data and not mdblist_data:
             return

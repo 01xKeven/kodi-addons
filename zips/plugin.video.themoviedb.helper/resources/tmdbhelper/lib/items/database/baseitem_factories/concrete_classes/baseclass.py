@@ -181,7 +181,7 @@ class BaseItem(ItemDetailsDatabaseAccess):
         self.expiry_time = ((days_to_air // 2) + 1) * DAY_IN_SECONDS  # Refresh in half number of days (rounded + 1)
 
     def get_cached_data(self):
-        with self.connection.open():
+        with self.connection.open(read_only=True):
             data = self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, self.cached_data_values, self.cached_data_conditions)
             if not data or not data[0] or not data[0][self.cached_data_check_key]:
                 return

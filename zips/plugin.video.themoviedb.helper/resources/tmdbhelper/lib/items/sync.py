@@ -46,8 +46,18 @@ class SyncPlayData(SyncAuthorisation):
             if self._pauseplayprogress:
                 self.syncdata.sync('show', ('playback_progress', ))
 
+    _NON_MEDIA_INFOS = frozenset((
+        'genres', 'years', 'countries', 'networks', 'studios',
+        'trakt_genres', 'trakt_years', 'dir_search', 'dir_tvdb_genres',
+        'random_genres', 'random_providers', 'random_networks',
+        'random_studios', 'random_keywords', 'all_items', 'search',
+        'dir_multisearch',
+    ))
+
     @is_sync
     def pre_sync_start(self, info=None, tmdb_type=None, **kwargs):
+        if info in self._NON_MEDIA_INFOS:
+            return
         info_movies = ('stars_in_movies', 'crew_in_movies', 'trakt_userlist', 'stars_in_both', 'crew_in_both',)
         info_tvshow = ('stars_in_tvshows', 'crew_in_tvshows', 'trakt_userlist', 'trakt_calendar', 'stars_in_both', 'crew_in_both', 'specified_episodes')
         needs_movie = (tmdb_type in ('movie', 'both',) or info in info_movies)

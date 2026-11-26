@@ -44,6 +44,8 @@ class ItemDetailsList(ItemDetailsDatabaseAccess):
 
 
 class ArtworkDetailsMixin:
+    has_iso_country = True
+
     @staticmethod
     def image_path_func(v):
         return v
@@ -70,5 +72,40 @@ class ArtworkDetailsMixin:
         conditions = f'(iso_language IS NULL OR iso_language="xx") AND {self.conditions}'
         return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, self.values, conditions)
 
+    def _get_cached_data_unified(self, include_null=True):
+        base_cond, _, tail = self.cached_data_conditions.partition(' ORDER BY ')
+        order_part, _, limit_part = tail.partition(' LIMIT ')
+        iso_l = self.common_apis.tmdb_api.iso_language
+        null_clause = ' OR iso_language IS NULL OR iso_language="xx"' if include_null else ''
+        if self.has_iso_country:
+            iso_c = self.common_apis.tmdb_api.iso_country
+            conditions = f'(iso_country=? OR iso_language=? OR iso_language="en"{null_clause}) AND ({base_cond})'
+            priority_expr = (
+                'CASE '
+                'WHEN iso_country=? THEN 0 '
+                'WHEN iso_language=? THEN 1 '
+                'WHEN iso_language="en" THEN 2 '
+                'ELSE 3 END'
+            )
+            values = (iso_c, iso_l, *self.values, iso_c, iso_l)
+        else:
+            conditions = f'(iso_language=? OR iso_language="en"{null_clause}) AND ({base_cond})'
+            priority_expr = (
+                'CASE '
+                'WHEN iso_language=? THEN 0 '
+                'WHEN iso_language="en" THEN 1 '
+                'ELSE 2 END'
+            )
+            values = (iso_l, *self.values, iso_l)
+        if order_part:
+            conditions += f' ORDER BY {priority_expr}, {order_part}'
+        else:
+            conditions += f' ORDER BY {priority_expr}'
+        if limit_part and 'OFFSET' not in limit_part.upper():
+            conditions += f' LIMIT {limit_part}'
+        return self.get_cached_list_values(self.cached_data_table, self.cached_data_keys, values, conditions)
+
     def get_cached_data(self):
-        return self.get_cached_data_by_language() or self.get_cached_data_by_english() or self.get_cached_data_by_null()
+        if 'OFFSET' in self.cached_data_conditions.upper():
+            return self.get_cached_data_by_language() or self.get_cached_data_by_english() or self.get_cached_data_by_null()
+        return self._get_cached_data_unified(include_null=True)

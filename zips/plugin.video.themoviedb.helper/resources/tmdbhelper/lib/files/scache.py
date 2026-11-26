@@ -75,6 +75,17 @@ class SimpleCache(jurialmunkey.scache.SimpleCache):
             cur_time = set_timestamp(0, True)
             self.set_window_property(f'{self._sc_name}.clean.lastexecuted', str(cur_time - self._auto_clean_interval + 600))
 
+    def _do_cleanup(self):
+        import threading
+        from jurialmunkey.tmdate import set_timestamp
+        cur_time = set_timestamp(0, True)
+        self.set_window_property(f'{self._sc_name}.clean.lastexecuted', str(cur_time))
+        threading.Thread(
+            target=super()._do_cleanup,
+            daemon=True,
+            name='TMDbHelperCacheCleanup'
+        ).start()
+
     def check_cleanup(self):
         from jurialmunkey.tmdate import set_timestamp
         lastexecuted = self.get_window_property(f'{self._sc_name}.clean.lastexecuted')
