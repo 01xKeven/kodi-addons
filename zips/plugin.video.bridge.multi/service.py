@@ -708,6 +708,11 @@ def run_service():
         l_file = os.path.join(b_path, 'bridge_search.lock')
         if os.path.exists(l_file):
             os.remove(l_file)
+        import shutil
+        for _prof in ('test_profile', 'web_profile'):
+            _p_dir = os.path.join(b_path, _prof)
+            if os.path.isdir(_p_dir):
+                shutil.rmtree(_p_dir, ignore_errors=True)
     except Exception:
         pass
 

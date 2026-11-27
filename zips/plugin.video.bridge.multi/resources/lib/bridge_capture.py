@@ -270,10 +270,28 @@ def sync_cookies_from_main_browser(dest_profile):
                 dest_state = os.path.join(dest_profile, "Local State")
                 dest_cookies = os.path.join(dest_net, "Cookies")
                 shutil.copy2(src_state, dest_state)
-                shutil.copy2(dest_cookies, dest_cookies)
+                shutil.copy2(src_cookies, dest_cookies)
                 break
             except Exception:
                 pass
+
+def _cleanup_profile_dir(path, retries=4, delay=0.1):
+    """Elimina de forma segura perfiles temporales del navegador capturador."""
+    if not path or not os.path.exists(path):
+        return
+    for _ in range(max(1, int(retries))):
+        try:
+            shutil.rmtree(path, ignore_errors=False)
+        except Exception:
+            pass
+        if not os.path.exists(path):
+            return
+        time.sleep(delay)
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
 
 def fix_chrome_crash_state(dest_profile):
     if not dest_profile:
@@ -1867,7 +1885,11 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
     if not browser_path:
         return {"status": "error", "message": "No se encontró ningún navegador Chromium (Chrome o Edge) en el sistema."}
 
-    user_data_dir = os.path.expandvars(r"%APPDATA%\Kodi\userdata\addon_data\plugin.video.bridge.multi\web_profile")
+    addon_data_dir = os.path.expandvars(r"%APPDATA%\Kodi\userdata\addon_data\plugin.video.bridge.multi")
+    user_data_dir = os.path.join(addon_data_dir, "web_profile")
+    legacy_test_dir = os.path.join(addon_data_dir, "test_profile")
+    _cleanup_profile_dir(legacy_test_dir)
+    _cleanup_profile_dir(user_data_dir)
     os.makedirs(user_data_dir, exist_ok=True)
     sync_cookies_from_main_browser(user_data_dir)
     fix_chrome_crash_state(user_data_dir)
@@ -1899,6 +1921,7 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
         "--disable-session-crashed-bubble",
         "--hide-crash-restore-bubble",
         "--disable-infobars",
+        "--disable-component-update",
         f"--remote-debugging-port={cdp_port}",
         f"--window-size={width},{height}",
         f"--window-position={pos_x},{pos_y}",
@@ -2191,7 +2214,7 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
         if b_ws:
             try:
                 b_ws.send_msg(json.dumps({"id": 99999, "method": "Browser.close"}))
-                for _ in range(8):
+                for _ in range(25):
                     if proc.poll() is not None:
                         break
                     time.sleep(0.04)
@@ -2206,9 +2229,11 @@ def capture_stream(target_url, timeout=180, custom_browser=None, app_mode=True, 
         try:
             if proc.poll() is None:
                 proc.kill()
+                proc.wait(timeout=2)
         except Exception:
             pass
-        fix_chrome_crash_state(user_data_dir)
+        _cleanup_profile_dir(user_data_dir, retries=6, delay=0.15)
+        _cleanup_profile_dir(legacy_test_dir, retries=1, delay=0.05)
 
     if captured_data and captured_data.get("status") == "ok":
         return captured_data
