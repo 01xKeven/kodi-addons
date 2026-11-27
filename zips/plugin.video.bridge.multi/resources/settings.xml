@@ -13,7 +13,6 @@
         <setting id="on_link_fail" type="enum" label="Al fallar la conexión con un enlace" values="Reabrir ventana con enlace marcado (Recomendado)|Desactivado (Cerrar)" default="0" />
         <setting id="search_timeout" type="slider" label="Tiempo límite de búsqueda (segundos)" default="40" range="10,5,120" option="int" />
         <setting id="cache_links_timeout" type="slider" label="Tiempo de reutilización de enlaces cacheados (minutos, 0 = buscar siempre)" default="60" range="0,1,60" option="int" />
-        <setting id="elementum_fallback" type="bool" label="Buscar en Elementum si no hay enlaces" default="true" />
         <setting id="startup_orphan_check" type="bool" label="Avisar al arrancar si hay players sin canal" default="false" />
         <setting id="notify_network_status" type="bool" label="Avisar cuando no haya internet o se restablezca la conexión" default="true" />
         

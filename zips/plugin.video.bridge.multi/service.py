@@ -130,24 +130,197 @@ import json
 import time
 
 class BridgePlayerService(xbmc.Player):
-    def onAVStarted(self):
+    def __init__(self, *args, default_mod_ref=None, **kwargs):
+        super(BridgePlayerService, self).__init__(*args, **kwargs)
+        self._torrent_start_ts = 0.0
+        self._default_mod = default_mod_ref
+
+    def _get_default_mod(self):
+        ref = getattr(self, '_default_mod', None)
+        if isinstance(ref, list) and ref and ref[0] is not None:
+            return ref[0]
+        return None
+
+    def _prewarm_torrent_pause_cache(self):
         try:
-            w = xbmcgui.Window(10000)
-            if w.getProperty('BridgeMulti.HotSwitching') == 'true':
-                w.clearProperty('BridgeMulti.HotSwitching')
+            _def = self._get_default_mod()
+            if _def and hasattr(_def, '_load_cached_links_for_dialog'):
+                _, _, _cm, _ = _def._load_cached_links_for_dialog()
+                if isinstance(_cm, dict) and _cm.get('season') and _cm.get('episode') and hasattr(_def, '_get_next_episode_info'):
+                    _def._get_next_episode_info(_cm)
+        except Exception:
+            pass
+
+    def _close_startup_overlays(self, include_seekbar=True):
+        try:
+            xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+            xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
+            xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+            if include_seekbar:
                 xbmc.executebuiltin('Dialog.Close(seekbar,true)')
                 xbmc.executebuiltin('Dialog.Close(videoosd,true)')
                 xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
-            xbmc.sleep(150)
-            if self.isPlayingVideo():
+        except Exception:
+            pass
+
+    def onPlayBackStarted(self):
+        try:
+            now_ts = time.time()
+            self._torrent_start_ts = now_ts
+            self._last_start_ts = now_ts
+            w = xbmcgui.Window(10000)
+            if w.getProperty('BridgeMulti.HotSwitching') == 'true':
+                self._hot_switch_ts = now_ts
+            # Invalidar cache en RAM del modulo residente antes de pre-calentar nueva pelicula/episodio
+            _def = self._get_default_mod()
+            if _def is not None:
+                try:
+                    _def._RAM_SEARCH_CACHE = None
+                    _def._LAST_SEARCH_CACHE_DATA = None
+                    _def._LAST_SEARCH_CACHE_MTIME = 0
+                except Exception:
+                    pass
+            if self.isPlaying():
                 _inject_active_playback_metadata(self)
-            # Re-asegurar script.trakt.ids antes de que script.trakt termine su sleep(1000)
-            # (por si onPlayBackStopped asincrono del enlace previo limpio la propiedad tarde)
+        except Exception as e:
+            xbmc.log("Multi Bridge PlayerService: error en onPlayBackStarted: " + str(e), xbmc.LOGWARNING)
+
+    def onAVStarted(self):
+        try:
+            now_ts = time.time()
+            self._torrent_start_ts = now_ts
+            w = xbmcgui.Window(10000)
+            is_hot = (w.getProperty('BridgeMulti.HotSwitching') == 'true') or ((now_ts - getattr(self, '_hot_switch_ts', 0.0)) < 12.0)
+            is_tor = (w.getProperty('MultiBridge.IsTorrentPlayback') == 'true')
+            if w.getProperty('BridgeMulti.HotSwitching') == 'true':
+                self._hot_switch_ts = now_ts
+                w.clearProperty('BridgeMulti.HotSwitching')
+            if is_hot or is_tor:
+                self._close_startup_overlays(include_seekbar=True)
+            if self.isPlayingVideo() or self.isPlaying():
+                _has_ids = False
+                try:
+                    _cur_vt = self.getVideoInfoTag()
+                    if _cur_vt and (_cur_vt.getUniqueID('tmdb') or _cur_vt.getUniqueID('imdb') or _cur_vt.getIMDBNumber()):
+                        _has_ids = True
+                except Exception:
+                    pass
+                # Evitar re-llamar updateInfoTag si onPlayBackStarted ya inyecto IDs (previene parpadeo de SeekBar/subtitulos arriba)
+                _inject_active_playback_metadata(self, properties_only=_has_ids)
+            if is_tor and self._get_default_mod() is not None:
+                import threading
+                threading.Thread(target=self._prewarm_torrent_pause_cache, daemon=True, name="BridgeTorrentPauseWarm").start()
+            # Re-asegurar script.trakt.ids y TagVideo antes de que script.trakt / monitores lean tarde
             xbmc.sleep(500)
             if self.isPlayingVideo():
-                _inject_active_playback_metadata(self, properties_only=True)
+                _need_tag = False
+                try:
+                    _cur_vt = self.getVideoInfoTag()
+                    if _cur_vt and not (_cur_vt.getUniqueID('tmdb') or _cur_vt.getUniqueID('imdb') or _cur_vt.getIMDBNumber()):
+                        _need_tag = True
+                except Exception:
+                    pass
+                _inject_active_playback_metadata(self, properties_only=(not _need_tag))
+                if (is_hot or is_tor) and not xbmc.getCondVisibility("Player.Paused"):
+                    self._close_startup_overlays(include_seekbar=True)
         except Exception as e:
             xbmc.log("Multi Bridge PlayerService: error en onAVStarted: " + str(e), xbmc.LOGWARNING)
+
+    def onPlayBackSeek(self, seek_time=0, seekOffset=0):
+        try:
+            now_ts = time.time()
+            is_startup_or_hot = ((now_ts - getattr(self, '_last_start_ts', 0.0)) < 10.0) or ((now_ts - getattr(self, '_hot_switch_ts', 0.0)) < 12.0)
+            if not is_startup_or_hot:
+                return
+            if not xbmc.getCondVisibility("Player.Paused"):
+                self._close_startup_overlays(include_seekbar=True)
+                import threading
+                def _clear_seekbar_later():
+                    try:
+                        for delay in (0.35, 1.0, 2.0):
+                            xbmc.sleep(int(delay * 1000))
+                            if not self.isPlayingVideo() or xbmc.getCondVisibility("Player.Paused"):
+                                break
+                            if not xbmc.getCondVisibility("Player.HasPerformedSeek(3)"):
+                                self._close_startup_overlays(include_seekbar=True)
+                                break
+                            self._close_startup_overlays(include_seekbar=True)
+                    except Exception:
+                        pass
+                threading.Thread(target=_clear_seekbar_later, daemon=True, name="BridgeSeekOverlayClear").start()
+        except Exception:
+            pass
+
+    def onPlayBackResumed(self):
+        try:
+            w = xbmcgui.Window(10000)
+            res_ts = 0.0
+            try:
+                res_ts = float(w.getProperty('BridgeMulti.JustResumedFromPrompt') or '0')
+            except Exception:
+                res_ts = 0.0
+            is_recent = ((time.time() - res_ts) < 3.5) or ((time.time() - getattr(self, '_hot_switch_ts', 0.0)) < 12.0)
+            if is_recent and not xbmc.getCondVisibility("Player.Paused"):
+                xbmc.sleep(60)
+                self._close_startup_overlays(include_seekbar=True)
+        except Exception:
+            pass
+
+    def onPlayBackPaused(self):
+        try:
+            w = xbmcgui.Window(10000)
+            if w.getProperty('MultiBridge.IsTorrentPlayback') != 'true':
+                return
+            if not self.isPlayingVideo():
+                return
+            if (time.time() - getattr(self, '_torrent_start_ts', 0.0)) < 1.5:
+                return
+            if xbmc.getCondVisibility("Player.Buffering"):
+                return
+            try:
+                if (self.getTime() or 0.0) < 0.5:
+                    return
+            except Exception:
+                return
+            if w.getProperty('BridgeMulti.DialogActive') == 'true':
+                return
+            try:
+                if time.time() < float(w.getProperty('BridgeMulti.PauseCooldownTs') or '0'):
+                    return
+            except Exception:
+                pass
+            pause_setting = str(xbmcaddon.Addon('plugin.video.bridge.multi').getSetting('live_switch_on_pause') or '').strip().lower()
+            if pause_setting in ('false', '2'):
+                return
+            w.setProperty('BridgeMulti.PauseCooldownTs', str(time.time() + 2.0))
+            _def = self._get_default_mod()
+            if _def is not None and hasattr(_def, '_run_pause_prompt_flow'):
+                try:
+                    _cur_t = float(self.getTime() or 0.0)
+                except Exception:
+                    _cur_t = 0.0
+                _m_key = w.getProperty('BridgeMulti.CurrentMediaKey') or ''
+                try:
+                    _a_idx_s = w.getProperty('BridgeMulti.CurrentPlayingIndex')
+                    _a_idx = int(_a_idx_s) if (_a_idx_s and _a_idx_s.lstrip('-').isdigit()) else -1
+                except Exception:
+                    _a_idx = -1
+                import threading
+                def _run_instant_pause(d_mod=_def, mk=_m_key, idx_v=_a_idx, ct=_cur_t):
+                    try:
+                        # SOLO UI en memoria dentro de service.py: cualquier reproducción o monitor
+                        # posterior se despacha al CPythonInvoker propio de default.py vía RunPlugin
+                        # para evitar colisiones PyContext / crashes en Player::play al cambiar en caliente.
+                        d_mod._run_pause_prompt_flow(media_key=mk, active_idx=idx_v, cur_time=ct, monitor_token=None, ui_only=True)
+                    except Exception as _pe:
+                        xbmc.log("Multi Bridge PlayerService: error en pause instantaneo: " + str(_pe), xbmc.LOGWARNING)
+                xbmc.log("Multi Bridge PlayerService: pausa detectada en torrent -> popup instantaneo en memoria", xbmc.LOGINFO)
+                threading.Thread(target=_run_instant_pause, daemon=True, name="BridgeInstantPause").start()
+            else:
+                xbmc.log("Multi Bridge PlayerService: pausa detectada en torrent -> abriendo popup via RunPlugin", xbmc.LOGINFO)
+                xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=pause_prompt)')
+        except Exception as e:
+            xbmc.log("Multi Bridge PlayerService: error en onPlayBackPaused: " + str(e), xbmc.LOGWARNING)
 
     def onPlayBackStopped(self):
         try:
@@ -199,16 +372,57 @@ def _inject_active_playback_metadata(player, properties_only=False):
     showname_val = str(meta.get('showname') or '')
     year_val = meta.get('showyear' if is_series else 'year') or meta.get('year')
     plot_val = str(meta.get('plot') or '')
+    tagline_val = str(meta.get('tagline') or '')
     poster_val = str(meta.get('poster') or meta.get('thumbnail') or '')
+    thumb_val = str(meta.get('thumbnail') or poster_val or '')
     fanart_val = str(meta.get('fanart') or '')
     clearlogo_val = str(meta.get('clearlogo') or '')
     genre_val = str(meta.get('genre') or '')
     director_val = str(meta.get('director') or '')
 
-    # 1. Inyectar directamente en el VideoInfoTag del Player de Kodi (Nexus/Omega 20/21)
+    # 1. Inyectar directamente en el VideoInfoTag del Player de Kodi (Nexus/Omega 20/21+)
+    # En Kodi 20+, getVideoInfoTag() retorna una copia: player.updateInfoTag(li) aplica los cambios reales.
     if not properties_only:
         try:
-            vt = player.getVideoInfoTag()
+            has_update_tag = hasattr(player, 'updateInfoTag')
+            li = None
+            if has_update_tag:
+                try:
+                    if hasattr(player, 'getPlayingItem'):
+                        li = player.getPlayingItem()
+                except Exception:
+                    li = None
+                try:
+                    pf = player.getPlayingFile() or ''
+                except Exception:
+                    pf = ''
+                if li is None:
+                    li = xbmcgui.ListItem(path=pf, offscreen=True)
+                else:
+                    try:
+                        if not li.getPath() and pf:
+                            li.setPath(pf)
+                    except Exception:
+                        pass
+            if li is not None:
+                if title_val:
+                    try:
+                        lbl = f"{showname_val} {int(s_val)}x{int(e_val):02d} - {title_val}" if (is_series and showname_val and s_val and e_val) else title_val
+                        li.setLabel(lbl)
+                    except Exception:
+                        pass
+                art_dict = {}
+                if poster_val: art_dict['poster'] = poster_val
+                if thumb_val: art_dict['thumb'] = thumb_val
+                if fanart_val: art_dict['fanart'] = fanart_val
+                if clearlogo_val: art_dict['clearlogo'] = clearlogo_val
+                if poster_val or thumb_val: art_dict['icon'] = poster_val or thumb_val
+                if art_dict:
+                    try: li.setArt(art_dict)
+                    except Exception: pass
+                vt = li.getVideoInfoTag()
+            else:
+                vt = player.getVideoInfoTag()
             if vt:
                 uids = {}
                 if tmdb_id:
@@ -224,38 +438,43 @@ def _inject_active_playback_metadata(player, properties_only=False):
                     uids['trakt'] = str(trakt_id)
                 if uids:
                     try: vt.setUniqueIDs(uids, 'tmdb' if tmdb_id else ('imdb' if imdb_id else ''))
-                    except: pass
+                    except Exception: pass
                 if imdb_id:
-                    try: vt.setIMDbNumber(imdb_id)
-                    except: pass
+                    try: vt.setIMDBNumber(imdb_id)
+                    except Exception: pass
                 vt.setMediaType('episode' if is_series else 'movie')
                 if is_series:
                     if showname_val: vt.setTvShowTitle(showname_val)
                     if title_val: vt.setTitle(title_val)
                     elif showname_val and s_val and e_val:
                         try: vt.setTitle(f"{showname_val} {int(s_val)}x{int(e_val):02d}")
-                        except: vt.setTitle(f"{showname_val} {s_val}x{e_val}")
+                        except Exception: vt.setTitle(f"{showname_val} {s_val}x{e_val}")
                     if s_val:
                         try: vt.setSeason(int(s_val))
-                        except: pass
+                        except Exception: pass
                     if e_val:
                         try: vt.setEpisode(int(e_val))
-                        except: pass
+                        except Exception: pass
                 else:
                     if title_val: vt.setTitle(title_val)
                 if year_val:
                     try: vt.setYear(int(year_val))
-                    except: pass
+                    except Exception: pass
                 if plot_val: vt.setPlot(plot_val)
+                if tagline_val:
+                    try: vt.setTagLine(tagline_val)
+                    except Exception: pass
                 if genre_val:
                     g_list = [g.strip() for g in genre_val.split('/') if g.strip()]
                     try: vt.setGenres(g_list)
-                    except: pass
+                    except Exception: pass
                 if director_val:
                     d_list = [d.strip() for d in director_val.split('/') if d.strip()]
                     try: vt.setDirectors(d_list)
-                    except: pass
-                xbmc.log("Multi Bridge PlayerService: VideoInfoTag de Kodi inyectado con exito", xbmc.LOGINFO)
+                    except Exception: pass
+                if li is not None and has_update_tag:
+                    player.updateInfoTag(li)
+                xbmc.log("Multi Bridge PlayerService: VideoInfoTag de Kodi inyectado con exito (tmdb=%s imdb=%s)" % (tmdb_id, imdb_id), xbmc.LOGINFO)
         except Exception as _e_vt:
             xbmc.log("Multi Bridge PlayerService: error inyectando VideoInfoTag: " + str(_e_vt), xbmc.LOGINFO)
 
@@ -493,33 +712,32 @@ def run_service():
         pass
 
     # Mantener vivo el listener de eventos de reproduccion en el servicio 24/7
-    player_service = BridgePlayerService()
-
     import threading
     _default_mod = [None]
+    player_service = BridgePlayerService(default_mod_ref=_default_mod)
 
-    def _run_startup_tasks():
-        if monitor.waitForAbort(2):
+    def _run_startup_tasks(mon):
+        if mon.waitForAbort(2):
             return
         try:
             import default as _def
             _default_mod[0] = _def
-            if monitor.abortRequested():
+            if mon.abortRequested():
                 return
             if hasattr(_def, 'check_and_run_migration'):
                 _def.check_and_run_migration()
-            if monitor.abortRequested():
+            if mon.abortRequested():
                 return
             if hasattr(_def, 'check_orphan_players'):
                 _def.check_orphan_players()
-            if monitor.abortRequested():
+            if mon.abortRequested():
                 return
             if hasattr(_def, 'sync_captcha_servers'):
                 _def.sync_captcha_servers()
         except Exception as e:
             xbmc.log("Multi Bridge Service: Error running startup migration: " + str(e), xbmc.LOGWARNING)
 
-    t_init = threading.Thread(target=_run_startup_tasks, daemon=True, name="BridgeMultiStartupInit")
+    t_init = threading.Thread(target=_run_startup_tasks, args=(monitor,), daemon=True, name="BridgeMultiStartupInit")
     t_init.start()
 
     # Iniciar monitor de conexion a internet en hilo daemon (cierre inmediato de Kodi en 0s)
@@ -576,7 +794,6 @@ def run_service():
     try:
         _default_mod[0] = None
         del player_service
-        del monitor
     except Exception:
         pass
 

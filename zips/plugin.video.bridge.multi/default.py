@@ -179,6 +179,15 @@ if len(sys.argv) > 1 and sys.argv[1]:
     except Exception: handle = -1
 original_argv = list(sys.argv)
 
+def _set_sys_argv_handle(h_val):
+    """Asigna sys.argv[1] de forma segura incluso si default se ejecuta dentro de service.py."""
+    try:
+        while len(sys.argv) < 2:
+            sys.argv.append('-1')
+        sys.argv[1] = str(h_val)
+    except Exception:
+        pass
+
 import xbmc
 import xbmcaddon
 import xbmcvfs
@@ -380,6 +389,7 @@ def _save_search_cache_atomic(cache_dict):
     _LAST_SEARCH_CACHE_DATA = cache_dict
     try:
         xbmcgui.Window(10000).setProperty('MultiBridge.SearchCacheJson', json.dumps(cache_dict))
+        xbmcgui.Window(10000).setProperty('MultiBridge.SearchCacheSeq', '%.6f_%d' % (time.time(), os.getpid()))
     except Exception:
         pass
     with _SEARCH_CACHE_LOCK:
@@ -550,13 +560,28 @@ _LAST_RESULTS_DICT = {}
 def _store_ram_search_cache(links, matched_item, meta, engine, unverified_links=None):
     global _RAM_SEARCH_CACHE
     try:
+        links_list = list(links or [])
+        for _ri, _rl in enumerate(links_list):
+            if _rl is not None and getattr(_rl, '_bridge_orig_idx', None) is None:
+                try: setattr(_rl, '_bridge_orig_idx', _ri)
+                except Exception: pass
+        _seq = ''
+        try: _seq = xbmcgui.Window(10000).getProperty('MultiBridge.SearchCacheSeq') or ''
+        except Exception: pass
+        _mt = 0
+        try:
+            if os.path.exists(SEARCH_CACHE_FILE):
+                _mt = os.path.getmtime(SEARCH_CACHE_FILE)
+        except Exception: pass
         _RAM_SEARCH_CACHE = {
-            'links': list(links or []),
+            'links': links_list,
             'unverified_links': list(unverified_links or []),
             'matched_item': matched_item,
             'meta': dict(meta or {}),
             'engine': engine or 'alfa',
             'time': time.time(),
+            'seq': _seq,
+            'mtime': _mt,
             'tmdb': _norm_id_str((meta or {}).get('tmdb')),
             'season': _norm_id_str((meta or {}).get('season')),
             'episode': _norm_id_str((meta or {}).get('episode'))
@@ -568,6 +593,20 @@ def _get_ram_search_cache(target_tmdb='', target_season='', target_episode='', m
     global _RAM_SEARCH_CACHE
     if not _RAM_SEARCH_CACHE or not isinstance(_RAM_SEARCH_CACHE, dict):
         return None
+
+    # Invalidar de inmediato si otro proceso o LateCollector actualizó la caché global
+    try:
+        _cur_seq = xbmcgui.Window(10000).getProperty('MultiBridge.SearchCacheSeq') or ''
+        if _cur_seq and _cur_seq != _RAM_SEARCH_CACHE.get('seq', ''):
+            return None
+    except Exception:
+        pass
+    try:
+        if os.path.exists(SEARCH_CACHE_FILE):
+            if os.path.getmtime(SEARCH_CACHE_FILE) != _RAM_SEARCH_CACHE.get('mtime', 0):
+                return None
+    except Exception:
+        pass
 
     # Si hay reproducción activa, mantener la caché activa durante toda la sesión (4 horas)
     p = xbmc.Player()
@@ -1259,6 +1298,325 @@ def wait_for_playback_monitor():
     except Exception:
         pass
 
+def _save_active_link_identity(link_obj, media_key='', fallback_idx=-1):
+    try:
+        w = xbmcgui.Window(10000)
+        if media_key:
+            w.setProperty('BridgeMulti.CurrentMediaKey', str(media_key))
+        w.setProperty('BridgeMulti.CurrentPlayingIndex', str(fallback_idx if fallback_idx is not None else -1))
+        sig = _get_link_unique_id(link_obj) if link_obj is not None else ''
+        w.setProperty('BridgeMulti.CurrentLinkSig', str(sig or ''))
+        if link_obj is not None:
+            is_tor = _is_torrent_link(link_obj)
+            srv = 'Torrent' if is_tor else (_get_link_server_name(link_obj) or 'Servidor')
+            qual = _format_quality(link_obj) or ''
+            w.setProperty('BridgeMulti.CurrentLinkServer', str(srv))
+            w.setProperty('BridgeMulti.CurrentLinkQuality', str(qual))
+    except Exception:
+        pass
+
+
+def _execute_hot_switch_choice(chosen_idx, c_links, c_meta, c_matched, c_eng='alfa', cur_time=0.0, chosen_link=None, media_key=''):
+    """Ejecuta el cambio de enlace en caliente, verifica arranque real y reabre la lista si falla."""
+    global _floating_dialog_active
+    p = xbmc.Player()
+    if chosen_link is None and isinstance(chosen_idx, int) and 0 <= chosen_idx < len(c_links):
+        chosen_link = c_links[chosen_idx]
+    if chosen_link is None:
+        return 'aborted'
+    prev_pf_switch = ''
+    try:
+        if p.isPlaying():
+            prev_pf_switch = p.getPlayingFile() or ''
+    except Exception:
+        prev_pf_switch = ''
+    _begin_playback_transition()
+    try:
+        switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
+        chosen_l = chosen_link or c_links[chosen_idx]
+        srv_n = _get_link_server_name(chosen_l) or 'Servidor'
+        cur_mk = media_key or _get_media_key(c_meta, chosen_l)
+        if switched is True:
+            is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
+            if is_t:
+                _set_global_monitor_token('')
+                return 'switched_torrent'
+            switch_ok = _verify_playback_started(is_torrent=is_t, ignore_file=prev_pf_switch or None)
+            if not switch_ok:
+                _t1_chk = -1.0
+                try:
+                    if p.isPlayingVideo():
+                        _t1_chk = float(p.getTime() or 0.0)
+                except Exception:
+                    pass
+                xbmc.sleep(1000)
+                try:
+                    _t2_chk = float(p.getTime() or 0.0) if p.isPlayingVideo() else -1.0
+                    if _t2_chk >= 0.35 and _t1_chk >= 0.0 and (_t2_chk - _t1_chk) >= 0.25:
+                        switch_ok = True
+                except Exception:
+                    pass
+            if not switch_ok:
+                xbmc.log("Multi Bridge: cambio en caliente fallido/timeout para %s -> limpiando y reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
+                _set_global_monitor_token('')
+                if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+                    _prepare_clean_switch_transition()
+                _f_idx = getattr(chosen_l, '_bridge_orig_idx', None)
+                _record_session_failed_link(chosen_l, index=(_f_idx if _f_idx is not None else chosen_idx), media_key=cur_mk, meta=c_meta)
+                try:
+                    xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+                    xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
+                    xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                except Exception:
+                    pass
+                try:
+                    xbmcgui.Dialog().notification('Multi Bridge', '%s no inició. Elige otro enlace.' % srv_n, '', 3000)
+                except Exception:
+                    pass
+                _set_dialog_active_global(False)
+                with _floating_dialog_lock:
+                    _floating_dialog_active = False
+                show_floating_links_dialog(resume_time=cur_time)
+                return 'reopened'
+            return 'switched_http'
+        elif switched in ('cancel', 'no_client'):
+            return 'aborted'
+        else:
+            xbmc.log("Multi Bridge: enlace %s no pudo resolverse en cambio en caliente -> reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
+            _set_global_monitor_token('')
+            if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
+                _prepare_clean_switch_transition()
+            _f_idx = getattr(chosen_l, '_bridge_orig_idx', None)
+            _record_session_failed_link(chosen_l, index=(_f_idx if _f_idx is not None else chosen_idx), media_key=cur_mk, meta=c_meta)
+            if _is_kodi_modal_dialog_open():
+                _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+            try:
+                xbmcgui.Dialog().notification('Multi Bridge', '%s falló. Elige otro enlace.' % srv_n, '', 3000)
+            except Exception:
+                pass
+            _set_dialog_active_global(False)
+            with _floating_dialog_lock:
+                _floating_dialog_active = False
+            show_floating_links_dialog(resume_time=cur_time)
+            return 'reopened'
+    finally:
+        _end_playback_transition()
+
+
+def _resume_after_pause_dialog(p):
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.JustResumedFromPrompt', str(time.time()))
+    except Exception:
+        pass
+    if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
+        try:
+            p.pause()
+        except Exception:
+            pass
+    try:
+        xbmcgui.Window(10000).setProperty('BridgeMulti.PauseCooldownTs', str(time.time() + 4.0))
+        xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+        xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+        xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+    except Exception:
+        pass
+
+
+def _run_pause_prompt_flow(media_key='', active_idx=-1, cur_time=0.0, monitor_token=None, ui_only=False):
+    """Muestra el diálogo de pausa y gestiona continuar, siguiente episodio o cambio de enlace.
+    Si ui_only=True (llamado desde service.py), solo muestra los diálogos en RAM y despacha
+    cualquier reproducción/cambio hacia RunPlugin(default.py) para no ejecutar Player().play
+    ni monitores dentro del subintérprete persistente del servicio."""
+    global _floating_dialog_active
+    p = xbmc.Player()
+    if monitor_token is None and not xbmc.getCondVisibility("Player.Paused"):
+        return 'skip'
+    pause_setting = str(_bridge_addon.getSetting('live_switch_on_pause') or '').strip().lower()
+    if pause_setting in ('false', '2') or _floating_dialog_active or _is_dialog_active_global():
+        return 'skip'
+
+    xbmc.log("Multi Bridge: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d, ui_only=%s)" % (cur_time, active_idx, str(ui_only)), xbmc.LOGINFO)
+    with _floating_dialog_lock:
+        _floating_dialog_active = True
+    _set_dialog_active_global(True)
+    result = 'resumed'
+    try:
+        c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
+        if not c_links:
+            return 'no_links'
+
+        # Resolver el enlace activo real por su firma única (evita desfase por ordenación o LateCollector)
+        matched_idx = -1
+        _cur_sig = ''
+        try:
+            _cur_sig = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentLinkSig') or ''
+            if _cur_sig:
+                for _ci, _cl in enumerate(c_links):
+                    if _get_link_unique_id(_cl) == _cur_sig:
+                        matched_idx = _ci
+                        break
+        except Exception:
+            matched_idx = -1
+
+        if matched_idx < 0 and not _cur_sig:
+            if active_idx < 0:
+                try:
+                    _cidx_s = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+                    if _cidx_s and _cidx_s.lstrip('-').isdigit():
+                        active_idx = int(_cidx_s)
+                except Exception:
+                    active_idx = -1
+            if 0 <= active_idx < len(c_links):
+                matched_idx = active_idx
+
+        active_idx = matched_idx
+        active_lnk = c_links[active_idx] if 0 <= active_idx < len(c_links) else None
+
+        open_links = False
+        if pause_setting == '1':
+            open_links = True
+        else:
+            if active_lnk is not None:
+                curr_srv = 'Torrent' if _is_torrent_link(active_lnk) else (_get_link_server_name(active_lnk) or '')
+                curr_qual = _format_quality(active_lnk) or ''
+            else:
+                try:
+                    _w_p = xbmcgui.Window(10000)
+                    curr_srv = _w_p.getProperty('BridgeMulti.CurrentLinkServer') or ''
+                    curr_qual = _w_p.getProperty('BridgeMulti.CurrentLinkQuality') or ''
+                except Exception:
+                    curr_srv, curr_qual = '', ''
+            if monitor_token is None and not xbmc.getCondVisibility("Player.Paused"):
+                return 'skip'
+            prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, current_quality=curr_qual, meta=c_meta)
+            prompt_dlg.doModal()
+            ans = prompt_dlg.selected
+            next_ep_info = getattr(prompt_dlg, 'next_ep', None)
+            del prompt_dlg
+            if ans == 1 and p.isPlayingVideo():
+                open_links = True
+            elif ans == 2 and next_ep_info:
+                if ui_only:
+                    try:
+                        xbmcgui.Window(10000).setProperty('BridgeMulti.PendingNextEpisode', json.dumps(next_ep_info))
+                    except Exception:
+                        pass
+                    _set_dialog_active_global(False)
+                    with _floating_dialog_lock:
+                        _floating_dialog_active = False
+                    xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=hot_switch_next_ep)')
+                    return 'dispatched_next_ep'
+                _begin_playback_transition()
+                try:
+                    _prepare_clean_switch_transition()
+                    _play_next_episode(c_meta, next_ep_info)
+                finally:
+                    _end_playback_transition()
+                return 'switched_episode'
+            else:
+                _resume_after_pause_dialog(p)
+                return 'resumed'
+
+        if open_links and p.isPlayingVideo():
+            cur_mk = _get_media_key(c_meta, c_links[active_idx] if 0 <= active_idx < len(c_links) else None) or media_key
+            cur_failed_sigs = _get_session_failed_signatures(media_key=cur_mk, meta=c_meta)
+            cur_failed_links = {l for l in c_links if getattr(l, 'bridge_failed', False) or (_get_link_unique_id(l) in cur_failed_sigs)}
+            dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True, failed_links=cur_failed_links)
+            dlg.doModal()
+            chosen_idx = dlg.selected
+            chosen_link = getattr(dlg, 'selected_link', None)
+            del dlg
+            xbmc.sleep(150)
+            if chosen_idx == 'force_search':
+                if not ui_only:
+                    try:
+                        if p.isPlayingVideo():
+                            p.stop()
+                    except Exception:
+                        pass
+                _u = 'plugin://plugin.video.bridge.multi/?action=force_search'
+                _t_id = str(c_meta.get('tmdb') or c_meta.get('tmdb_id') or '')
+                _s = str(c_meta.get('season') or '')
+                _e = str(c_meta.get('episode') or '')
+                _t = str(c_meta.get('title') or '')
+                _sn = str(c_meta.get('showname') or '')
+                _y = str(c_meta.get('year') or '')
+                _sy = str(c_meta.get('showyear') or '')
+                _imdb = str(c_meta.get('imdb') or c_meta.get('imdb_id') or '')
+                _eng = str(c_eng or c_meta.get('engine') or '')
+                if _t_id: _u += '&tmdb=' + _t_id
+                if _s and _e: _u += '&season=' + _s + '&episode=' + _e
+                if _t: _u += '&title=' + uparse.quote_plus(_t)
+                if _sn: _u += '&showname=' + uparse.quote_plus(_sn)
+                if _y: _u += '&year=' + _y
+                if _sy: _u += '&showyear=' + _sy
+                if _imdb: _u += '&imdb=' + _imdb
+                if _eng: _u += '&engine=' + _eng
+                xbmc.executebuiltin('RunPlugin(%s)' % _u)
+                return 'aborted'
+            elif chosen_idx == 'other_engine':
+                if not ui_only:
+                    try:
+                        if p.isPlayingVideo():
+                            p.stop()
+                    except Exception:
+                        pass
+                _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
+                xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
+                return 'aborted'
+            elif chosen_idx == 'verify_links':
+                if not ui_only:
+                    try:
+                        if p.isPlayingVideo():
+                            p.stop()
+                    except Exception:
+                        pass
+                xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=verify_links)')
+                return 'aborted'
+            elif isinstance(chosen_idx, int) and chosen_idx >= 0:
+                if chosen_link is None and 0 <= chosen_idx < len(c_links):
+                    chosen_link = c_links[chosen_idx]
+                if ui_only:
+                    _payload = {
+                        'idx': int(chosen_idx),
+                        'orig_idx': getattr(chosen_link, '_bridge_orig_idx', None) if chosen_link is not None else None,
+                        'sig': _get_link_unique_id(chosen_link) if chosen_link is not None else '',
+                        'cur_time': float(cur_time or 0.0),
+                        'media_key': str(cur_mk or ''),
+                        'item': _serialize_item(chosen_link) if chosen_link is not None else None,
+                    }
+                    try:
+                        xbmcgui.Window(10000).setProperty('BridgeMulti.PendingHotSwitch', json.dumps(_payload))
+                    except Exception:
+                        pass
+                    _set_dialog_active_global(False)
+                    with _floating_dialog_lock:
+                        _floating_dialog_active = False
+                    xbmc.executebuiltin(
+                        'RunPlugin(plugin://plugin.video.bridge.multi/?action=hot_switch_link&idx=%d&cur_time=%.3f)'
+                        % (int(chosen_idx), float(cur_time or 0.0))
+                    )
+                    return 'dispatched_switch'
+                return _execute_hot_switch_choice(
+                    chosen_idx, c_links, c_meta, c_matched, c_eng=c_eng,
+                    cur_time=cur_time, chosen_link=chosen_link, media_key=cur_mk
+                )
+            else:
+                _clear_session_failed_links(cur_mk)
+                for _l in c_links:
+                    try: setattr(_l, 'bridge_failed', False)
+                    except Exception: pass
+                _resume_after_pause_dialog(p)
+                return 'resumed'
+    except Exception as _de:
+        xbmc.log(f"Multi Bridge: floating dialog error: {_de}", xbmc.LOGINFO)
+    finally:
+        _set_dialog_active_global(False)
+        with _floating_dialog_lock:
+            _floating_dialog_active = False
+    return result
+
+
 def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link_index=0, meta=None, force_beginning=False, old_playing_file=None):
     if not media_key: return
     global _playback_monitor_token, _current_playing_link_index
@@ -1571,10 +1929,25 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                     xbmc.log("Multi Bridge: saltando a reanudar %.0fs (key=%s)" % (float(seek_to_time), media_key), xbmc.LOGINFO)
                     p.seekTime(float(seek_to_time))
                     mon.waitForAbort(0.15)
-                if old_playing_file:
+                if old_playing_file or seek_to_time > 2:
                     xbmc.executebuiltin('Dialog.Close(seekbar,true)')
                     xbmc.executebuiltin('Dialog.Close(videoosd,true)')
-                    xbmcgui.Window(10000).clearProperty('BridgeMulti.HotSwitching')
+                    xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+                    def _post_seek_overlay_cleanup():
+                        try:
+                            for _delay in (0.6, 1.4, 2.2):
+                                if mon.waitForAbort(_delay) or not p.isPlayingVideo():
+                                    break
+                                if xbmc.getCondVisibility("Player.Paused"):
+                                    break
+                                xbmc.executebuiltin('Dialog.Close(seekbar,true)')
+                                xbmc.executebuiltin('Dialog.Close(videoosd,true)')
+                                xbmc.executebuiltin('Dialog.Close(fullscreeninfo,true)')
+                                if not xbmc.getCondVisibility("Player.HasPerformedSeek(3)"):
+                                    break
+                        except Exception:
+                            pass
+                    threading.Thread(target=_post_seek_overlay_cleanup, daemon=True, name="BridgePostSeekOverlayClear").start()
             except Exception as _ske:
                 xbmc.log("Multi Bridge: error seekTime: %s" % str(_ske), xbmc.LOGINFO)
         elif seek_to_time <= 0 or force_beginning:
@@ -1651,180 +2024,13 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 if is_paused and not last_pause_state and pause_setting not in ('false', '2'):
                     now = time.time()
                     if now > pause_cooldown and cur_time >= 0.5 and not _floating_dialog_active and not _is_dialog_active_global():
-                        xbmc.log("Multi Bridge: PAUSA DETECTADA en reproducción (cur_time=%.1fs, server_idx=%d)" % (cur_time, active_idx), xbmc.LOGINFO)
-                        with _floating_dialog_lock:
-                            _floating_dialog_active = True
-                        _set_dialog_active_global(True)
-                        try:
-                            c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
-                            if c_links:
-                                open_links = False
-                                if pause_setting == '1':
-                                    open_links = True
-                                else:
-                                    curr_srv = _get_link_server_name(c_links[active_idx]) if active_idx < len(c_links) else ""
-                                    curr_qual = _format_quality(c_links[active_idx]) if active_idx < len(c_links) else ""
-                                    prompt_dlg = _PausePromptDialog(current_server_name=curr_srv, current_quality=curr_qual, meta=c_meta)
-                                    prompt_dlg.doModal()
-                                    ans = prompt_dlg.selected
-                                    next_ep_info = getattr(prompt_dlg, 'next_ep', None)
-                                    del prompt_dlg
-                                    if ans == 1 and p.isPlayingVideo():
-                                        open_links = True
-                                    elif ans == 2 and next_ep_info:
-                                        # Usuario seleccionó reproducir siguiente capítulo
-                                        _begin_playback_transition()
-                                        try:
-                                            _prepare_clean_switch_transition()
-                                            _play_next_episode(c_meta, next_ep_info)
-                                        finally:
-                                            _end_playback_transition()
-                                        return
-                                    else:
-                                        if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
-                                            try: p.pause()
-                                            except: pass
-                                        is_paused = False
-                                        last_pause_state = False
-                                        pause_cooldown = time.time() + 4.0
-
-                                if open_links and p.isPlayingVideo():
-                                    cur_mk = _get_media_key(c_meta, c_links[active_idx] if active_idx < len(c_links) else None) or media_key
-                                    cur_failed_sigs = _get_session_failed_signatures(media_key=cur_mk, meta=c_meta)
-                                    cur_failed_links = {l for l in c_links if getattr(l, 'bridge_failed', False) or (_get_link_unique_id(l) in cur_failed_sigs)}
-                                    dlg = _FloatingLinksDialog(c_links, current_index=active_idx, meta=c_meta, engine=c_eng, is_playback=True, failed_links=cur_failed_links)
-                                    dlg.doModal()
-                                    chosen_idx = dlg.selected
-                                    chosen_link = getattr(dlg, 'selected_link', None)
-                                    del dlg
-                                    xbmc.sleep(150)
-                                    if chosen_idx == 'force_search':
-                                        try:
-                                            if p.isPlayingVideo():
-                                                p.stop()
-                                        except Exception:
-                                            pass
-                                        _u = 'plugin://plugin.video.bridge.multi/?action=force_search'
-                                        _t_id = str(c_meta.get('tmdb') or c_meta.get('tmdb_id') or '')
-                                        _s = str(c_meta.get('season') or '')
-                                        _e = str(c_meta.get('episode') or '')
-                                        _t = str(c_meta.get('title') or '')
-                                        _sn = str(c_meta.get('showname') or '')
-                                        _y = str(c_meta.get('year') or '')
-                                        _sy = str(c_meta.get('showyear') or '')
-                                        _imdb = str(c_meta.get('imdb') or c_meta.get('imdb_id') or '')
-                                        _eng = str(c_eng or c_meta.get('engine') or '')
-                                        if _t_id: _u += '&tmdb=' + _t_id
-                                        if _s and _e: _u += '&season=' + _s + '&episode=' + _e
-                                        if _t: _u += '&title=' + uparse.quote_plus(_t)
-                                        if _sn: _u += '&showname=' + uparse.quote_plus(_sn)
-                                        if _y: _u += '&year=' + _y
-                                        if _sy: _u += '&showyear=' + _sy
-                                        if _imdb: _u += '&imdb=' + _imdb
-                                        if _eng: _u += '&engine=' + _eng
-                                        xbmc.executebuiltin('RunPlugin(%s)' % _u)
-                                        return
-                                    elif chosen_idx == 'other_engine':
-                                        try:
-                                            if p.isPlayingVideo():
-                                                p.stop()
-                                        except Exception:
-                                            pass
-                                        _other_engine = 'balandro' if c_eng == 'alfa' else 'alfa'
-                                        xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=search_other_engine&engine=%s)' % _other_engine)
-                                        return
-                                    elif chosen_idx == 'verify_links':
-                                        try:
-                                            if p.isPlayingVideo():
-                                                p.stop()
-                                        except Exception:
-                                            pass
-                                        xbmc.executebuiltin('RunPlugin(plugin://plugin.video.bridge.multi/?action=verify_links)')
-                                        return
-                                    elif isinstance(chosen_idx, int) and chosen_idx >= 0:
-                                        if chosen_link is None and 0 <= chosen_idx < len(c_links):
-                                            chosen_link = c_links[chosen_idx]
-                                        prev_pf_switch = ''
-                                        try:
-                                            if p.isPlaying():
-                                                prev_pf_switch = p.getPlayingFile() or ''
-                                        except Exception:
-                                            prev_pf_switch = ''
-                                        _begin_playback_transition()
-                                        try:
-                                            switched = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_time, chosen_link=chosen_link)
-                                            chosen_l = chosen_link or c_links[chosen_idx]
-                                            srv_n = _get_link_server_name(chosen_l) or 'Servidor'
-                                            if switched is True:
-                                                is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
-                                                switch_ok = _verify_playback_started(is_torrent=is_t, ignore_file=prev_pf_switch or None)
-                                                # Comprobación paciente antes de declarar fallo: dar 1s extra por si arrancó justo al borde del timeout
-                                                if not switch_ok:
-                                                    xbmc.sleep(1000)
-                                                    try:
-                                                        if p.isPlayingVideo() and float(p.getTime() or 0.0) >= 0.35:
-                                                            switch_ok = True
-                                                    except Exception:
-                                                        pass
-                                                if not switch_ok:
-                                                    xbmc.log("Multi Bridge: cambio en caliente fallido/timeout para %s -> limpiando y reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
-                                                    _set_global_monitor_token('')
-                                                    if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
-                                                        _prepare_clean_switch_transition()
-                                                    _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                    try:
-                                                        xbmc.executebuiltin('Dialog.Close(busydialog,true)')
-                                                        xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
-                                                        xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                                                    except Exception:
-                                                        pass
-                                                    try:
-                                                        xbmcgui.Dialog().notification('Multi Bridge', '%s no inició. Elige otro enlace.' % srv_n, '', 3000)
-                                                    except Exception:
-                                                        pass
-                                                    _set_dialog_active_global(False)
-                                                    with _floating_dialog_lock:
-                                                        _floating_dialog_active = False
-                                                    show_floating_links_dialog(resume_time=cur_time)
-                                                return
-                                            elif switched in ('cancel', 'no_client'):
-                                                return
-                                            else:
-                                                xbmc.log("Multi Bridge: enlace %s no pudo resolverse en cambio en caliente -> reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
-                                                _set_global_monitor_token('')
-                                                if p.isPlaying() or xbmc.getCondVisibility("Player.HasMedia"):
-                                                    _prepare_clean_switch_transition()
-                                                _record_session_failed_link(chosen_l, index=chosen_idx, media_key=cur_mk, meta=c_meta)
-                                                if _is_kodi_modal_dialog_open():
-                                                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
-                                                try:
-                                                    xbmcgui.Dialog().notification('Multi Bridge', '%s falló. Elige otro enlace.' % srv_n, '', 3000)
-                                                except Exception:
-                                                    pass
-                                                _set_dialog_active_global(False)
-                                                with _floating_dialog_lock:
-                                                    _floating_dialog_active = False
-                                                show_floating_links_dialog(resume_time=cur_time)
-                                                return
-                                        finally:
-                                            _end_playback_transition()
-                                    else:
-                                        _clear_session_failed_links(cur_mk)
-                                        for _l in c_links:
-                                            try: setattr(_l, 'bridge_failed', False)
-                                            except Exception: pass
-                                        if p.isPlayingVideo() and xbmc.getCondVisibility("Player.Paused"):
-                                            try: p.pause()
-                                            except: pass
-                                        is_paused = False
-                                        last_pause_state = False
-                                        pause_cooldown = time.time() + 4.0
-                        except Exception as _de:
-                            xbmc.log(f"Multi Bridge: floating dialog error: {_de}", xbmc.LOGINFO)
-                        finally:
-                            _set_dialog_active_global(False)
-                            with _floating_dialog_lock:
-                                _floating_dialog_active = False
+                        _p_res = _run_pause_prompt_flow(media_key=media_key, active_idx=active_idx, cur_time=cur_time, monitor_token=my_token)
+                        if _p_res in ('switched_episode', 'switched_torrent', 'switched_http', 'aborted'):
+                            return
+                        if _p_res == 'resumed':
+                            is_paused = False
+                            last_pause_state = False
+                            pause_cooldown = time.time() + 4.0
 
                 last_pause_state = is_paused
 
@@ -2339,6 +2545,8 @@ def _ask_resume_dialog(title_text, time_str, media_key=""):
       'restart': Si eligio Reiniciar
       'cancel': Si presiono Cancelar, Atras o Escape
     """
+    # Cerrar spinner nativo de Kodi para evitar solapamiento mientras se muestra la UI de Multi Bridge
+    _close_busy_dialogs()
     try:
         _rsel = show_resume_dialog(time_str, title_text)
         if _rsel == 0:
@@ -3495,51 +3703,6 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     return True
 
 
-def _offer_elementum_search(meta):
-    """Si elementum_fallback está activo, pregunta si buscar en Elementum.
-
-    Se ejecuta después de que el handle del plugin ha sido descartado y TMDb Helper
-    ha finalizado, evitando cualquier interferencia o espera de player.
-    """
-    has_elementum = bool(xbmc.getCondVisibility('System.HasAddon("plugin.video.elementum")'))
-    fallback_enabled = (_bridge_addon.getSetting('elementum_fallback') == 'true')
-
-    tmdb_id = str(meta.get('tmdb', '') or '')
-    is_episode = bool(meta.get('season') and meta.get('episode'))
-    title = str(meta.get('title') or meta.get('showname') or '')
-    label = '[B]%s[/B]' % title if title else 'este contenido'
-
-    if not fallback_enabled or not has_elementum or not tmdb_id:
-        _show_bridge_notification('Multi Bridge', 'No se encontraron enlaces para %s' % (title or 'este contenido'), 3500)
-        return False
-
-    dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
-    ans = dlg.yesno(
-        'Multi Bridge — Sin enlaces',
-        'No se encontraron enlaces para %s.\n¿Buscar en [B]Elementum[/B]?' % label,
-        nolabel='No',
-        yeslabel='Sí')
-
-    if not ans:
-        return False
-
-    # URL de Elementum para buscar y mostrar la lista modal de torrents por TMDb ID
-    if is_episode:
-        _s = str(meta.get('season', '') or '')
-        _e = str(meta.get('episode', '') or '')
-        elem_url = 'plugin://plugin.video.elementum/show/%s/season/%s/episode/%s/links' % (tmdb_id, _s, _e)
-    else:
-        elem_url = 'plugin://plugin.video.elementum/movie/%s/links' % tmdb_id
-
-    xbmc.log('Multi Bridge: lanzando Elementum via PlayMedia → %s' % elem_url, xbmc.LOGINFO)
-
-    # PlayMedia asigna a Elementum un handle de reproductor real para que al elegir el torrent
-    # Elementum pueda resolver e iniciar la reproducción en Kodi. Multi Bridge termina aquí su ejecución.
-    sync_tmdbhelper_playerstring(meta)
-    xbmc.executebuiltin('PlayMedia("%s")' % elem_url)
-    return True
-
-
 
 
 
@@ -3603,26 +3766,29 @@ _SESSION_FAILED_LINKS = {}
 def _get_link_unique_id(link, fallback_index=None):
     if not link:
         return ''
+    idx = getattr(link, '_bridge_orig_idx', None)
+    if idx is None and fallback_index is not None:
+        idx = fallback_index
     uid = getattr(link, '_bridge_uid', None)
-    if uid:
+    if uid and (idx is None or '|idx_' in uid):
         return uid
 
     srv = _get_link_server_name(link).strip().lower()
     ch = _safe_str(getattr(link, 'channel', '')).strip().lower()
     lang = _safe_str(getattr(link, 'language', '')).strip().lower()
     qual = _safe_str(getattr(link, 'quality', '')).strip().lower()
+    other = _safe_str(getattr(link, 'other', '')).strip().lower()
     data_url = _safe_str(getattr(link, 'data_url', '')).strip().lower()
     url = _safe_str(getattr(link, 'url', '')).strip().lower()
     extra = _safe_str(getattr(link, 'extra', '')).strip().lower()
     title = _safe_str(getattr(link, 'title', '')).strip().lower()
     post = _safe_str(getattr(link, 'post', '')).strip().lower()
-    idx = getattr(link, '_bridge_orig_idx', None)
-    if idx is None and fallback_index is not None:
-        idx = fallback_index
 
     parts = [srv, ch, lang, qual]
     if idx is not None:
         parts.append('idx_%s' % idx)
+    if other:
+        parts.append('oth_%s' % other)
     if data_url:
         parts.append('durl_%s' % data_url)
     elif url:
@@ -3682,13 +3848,13 @@ def _record_session_failed_link(link, index=None, media_key=None, meta=None):
         mk = 'default_media'
 
     if mk not in _SESSION_FAILED_LINKS:
-        _SESSION_FAILED_LINKS[mk] = {'signatures': set(), 'indices': set(), 'objects': set()}
+        _SESSION_FAILED_LINKS[mk] = {'signatures': set(), 'indices': set(), 'obj_ids': set()}
 
     if sig:
         _SESSION_FAILED_LINKS[mk]['signatures'].add(sig)
     if index is not None and isinstance(index, int):
         _SESSION_FAILED_LINKS[mk]['indices'].add(index)
-    _SESSION_FAILED_LINKS[mk]['objects'].add(link)
+    _SESSION_FAILED_LINKS[mk].setdefault('obj_ids', set()).add(id(link))
 
     try:
         win = xbmcgui.Window(10000)
@@ -7711,6 +7877,7 @@ class _RadialSearchProgressDialog(object):
 
     def set_metrics(self, completed_str="", n_dir=0, n_tor=0, n_ver=0, status_line=""):
         try:
+            self._explicit_metrics_ts = time.time()
             if completed_str:
                 self._set_prop("bridge.search_channels_count", str(completed_str))
             self._set_prop("bridge.count_directos", str(n_dir))
@@ -7752,17 +7919,18 @@ class _RadialSearchProgressDialog(object):
                 if m_ch:
                     self._set_prop("bridge.search_channels_count", m_ch.group(1))
 
-                m_dir = re.search(r'(\d+)\s*(?:funcionales|directos)(?!/)', header_line, re.IGNORECASE)
-                if m_dir:
-                    self._set_prop("bridge.count_directos", m_dir.group(1))
+                if (time.time() - getattr(self, '_explicit_metrics_ts', 0.0)) >= 0.25:
+                    m_dir = re.search(r'(\d+)\s*funcionales(?!\s*/)', header_line, re.IGNORECASE)
+                    if m_dir:
+                        self._set_prop("bridge.count_directos", m_dir.group(1))
 
-                m_tor = re.search(r'(\d+)\s*torrents', header_line, re.IGNORECASE)
-                if m_tor:
-                    self._set_prop("bridge.count_torrents", m_tor.group(1))
+                    m_tor = re.search(r'(\d+)\s*torrents', header_line, re.IGNORECASE)
+                    if m_tor:
+                        self._set_prop("bridge.count_torrents", m_tor.group(1))
 
-                m_ver = re.search(r'(?:verificando|comprobando)\s*\((\d+)\)', header_line, re.IGNORECASE)
-                if m_ver:
-                    self._set_prop("bridge.count_verificando", m_ver.group(1))
+                    m_ver = re.search(r'(?:verificando|comprobando)\s*\((\d+)\)|(\d+)\s*por\s*verificar', header_line, re.IGNORECASE)
+                    if m_ver:
+                        self._set_prop("bridge.count_verificando", m_ver.group(1) or m_ver.group(2))
 
                 status_txt = ""
                 for l in lines[1:]:
@@ -7941,6 +8109,7 @@ class _AutoplayProgressDialog(object):
 
     def create(self, heading="", line1="", line2="", line3=""):
         try:
+            _close_busy_dialogs()
             self._set_prop("bridge.autoplay_canceled", "false")
             self._canceled = False
             skin_dir = "Default"
@@ -8361,12 +8530,12 @@ def _run_parallel_search_impl(engine='alfa'):
             if hasattr(p_dialog, 'set_metrics'):
                 p_dialog.set_metrics(
                     completed_str='%d/%d' % (completed, total_channels),
-                    n_dir=raw_dir, n_tor=raw_tor + raw_cap, n_ver=0,
+                    n_dir=0, n_tor=raw_tor + raw_cap, n_ver=raw_dir,
                     status_line=lines[0] or active_str
                 )
             r_parts = []
             if raw_dir > 0:
-                r_parts.append('[COLOR lime]%d directos[/COLOR]' % raw_dir)
+                r_parts.append('[COLOR yellow]%d por verificar[/COLOR]' % raw_dir)
             if raw_tor > 0:
                 r_parts.append('[COLOR cyan]%d torrents[/COLOR]' % raw_tor)
             if raw_cap > 0:
@@ -8837,8 +9006,8 @@ def _enrich_link_metadata(link, meta, matched_item=None):
 
 def sync_tmdbhelper_playerstring(meta=None):
     """Sincroniza la propiedad de ventana TMDbHelper.PlayerInfoString para que
-    el servicio de TMDb Helper y el scrobbler de Trakt reconozcan la reproducción,
-    incluso cuando el reproductor en TMDb Helper tiene 'is_resolvable': 'false'."""
+    el servicio de TMDb Helper y el scrobbler de Trakt reconozcan la reproducción
+    nativa o mediante reintentos/cambios de enlace."""
     if not meta:
         meta = {}
     t_id = str(meta.get('tmdb') or '')
@@ -9945,7 +10114,7 @@ def _resolve_link_to_listitem(link, engine, matched_item=None, allow_captcha=Fal
                 pt.dialog_ok = _cap_ok
                 pt.dialog_notification = _cap_notif
                 pt.dialog_select = _cap_sel
-                sys.argv[1] = '1'
+                _set_sys_argv_handle('1')
                 res = pt.play_video(prep, parent, autoplay=False)
                 if res is True and _resolved_li[0] is not None:
                     _result[0] = True
@@ -9970,7 +10139,7 @@ def _resolve_link_to_listitem(link, engine, matched_item=None, allow_captcha=Fal
                 pt.dialog_ok = _cap_ok
                 pt.dialog_notification = _cap_notif
                 pt.dialog_select = _cap_sel
-                sys.argv[1] = '1'
+                _set_sys_argv_handle('1')
                 pt.play_video(prep, autoplay=True)
             finally:
                 if _orig_ok is not None:
@@ -10015,26 +10184,20 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             meta = _cf.get('meta', {}) or {}
 
     if not links:
-        _absorb = xbmcgui.ListItem()
-        xbmcplugin.setResolvedUrl(handle, False, _absorb)
+        _dismiss_plugin_handle(handle, wait_ms=200)
         return False
 
     # ── Filter torrents and manual captcha servers ──────────────────────────
     normal_links = [l for l in links if not _is_torrent_link(l) and not _is_web_captcha_server(_get_link_server_name(l), l)]
     if not normal_links:
-        _absorb = xbmcgui.ListItem()
-        try: xbmcplugin.setResolvedUrl(handle, False, _absorb)
-        except: pass
         if links and tmdb_for_list:
             _ts = int(time.time())
             _lu = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (str(tmdb_for_list), _ts)
             if meta and meta.get('season') and meta.get('episode'):
                 _lu += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-            _open_links_view(_lu)
+            return bool(_open_links_view(_lu))
+        _dismiss_plugin_handle(handle, wait_ms=200)
         return False
-
-    # ── Dismiss handle early (suppress Kodi error dialog via guardian) ─────
-    _absorb_plugin_handle(handle, wait_ms=300)
 
     # ── Abrir list_links en segundo plano ──────────────────────────────────
     # Se carga detrás del reproductor; cuando el usuario detiene el video
@@ -10160,7 +10323,17 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
             if _res_li[0] is not None:
                 _media_url = _ensure_playback_headers_on_item(_res_li[0], server_name=server, page_url=getattr(link, 'url', '') or '') or _res_li[0].getPath() or _media_url
                 set_listitem_info(_res_li[0], meta=meta)
-            player.play(_media_url, _res_li[0])
+                if seek_to_time > 10:
+                    _res_li[0].setProperty('StartOffset', str(seek_to_time))
+                    _res_li[0].setProperty('ResumeTime', str(seek_to_time))
+                    try:
+                        _vt = _res_li[0].getVideoInfoTag()
+                        if _vt: _vt.setResumePoint(float(seek_to_time))
+                    except Exception: pass
+            if not _resolve_plugin_handle(handle, _res_li[0]):
+                try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                except Exception: pass
+                player.play(_media_url, _res_li[0])
         except Exception as _pe:
             xbmc.log('Multi Bridge autoplay Player.play error: ' + str(_pe), xbmc.LOGINFO)
             continue
@@ -10471,8 +10644,63 @@ def _stop_player_cleanly(player=None):
     xbmc.sleep(250)
 
 
+_HANDLE_RESOLVED = False
+
+
+def _close_busy_dialogs():
+    for _dlg in ('busydialog', 'busydialognocancel'):
+        try:
+            xbmc.executebuiltin('Dialog.Close(%s,true)' % _dlg)
+        except Exception:
+            pass
+
+
+def _resolve_plugin_handle(h, listitem):
+    """Resuelve nativamente el handle de Kodi (is_resolvable=true) con un ListItem reproducible.
+    Retorna True si se llamó a setResolvedUrl(h, True, listitem); False si no hay handle o ya fue usado."""
+    global _HANDLE_RESOLVED
+    try:
+        h_int = int(h)
+    except Exception:
+        h_int = -1
+    if h_int < 0 or _HANDLE_RESOLVED or not listitem:
+        return False
+    _HANDLE_RESOLVED = True
+    try:
+        listitem.setProperty('IsPlayable', 'true')
+    except Exception:
+        pass
+    _close_busy_dialogs()
+    try:
+        xbmcplugin.setResolvedUrl(h_int, True, listitem)
+        xbmc.log("Multi Bridge: handle=%d resuelto nativamente con setResolvedUrl(True)" % h_int, xbmc.LOGINFO)
+        return True
+    except Exception as _re:
+        xbmc.log("Multi Bridge: error en setResolvedUrl(True, handle=%d): %s" % (h_int, _re), xbmc.LOGWARNING)
+        return False
+
+
+def _dismiss_plugin_handle(h, wait_ms=250):
+    """Libera silenciosamente un handle abierto sin activar cuadro de error de reproducción en Kodi."""
+    global _HANDLE_RESOLVED
+    try:
+        h_int = int(h)
+    except Exception:
+        h_int = -1
+    if h_int < 0 or _HANDLE_RESOLVED:
+        return False
+    _HANDLE_RESOLVED = True
+    try:
+        xbmcgui.Window(10000).setProperty('TMDbHelper.SuppressPlayFail', str(time.time() + 3.0))
+    except Exception:
+        pass
+    _absorb_plugin_handle(h_int, wait_ms=wait_ms)
+    return True
+
+
 def _absorb_plugin_handle(handle, wait_ms=250):
-    """Descarta el handle de plugin cuando se reproduce vía player.play(), suprimiendo okdialog espurio."""
+    """Descarta el handle de plugin cuando se cancela o se delega reproducción, suprimiendo okdialog espurio."""
+    _close_busy_dialogs()
     try:
         h_int = int(handle)
     except Exception:
@@ -10993,9 +11221,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                     try: p_dialog_c.close()
                     except: pass
-                    if not handle_absorbed and handle >= 0:
-                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                        except: pass
+                    _dismiss_plugin_handle(handle, wait_ms=200)
                     return False
 
                 cand_u_key = _safe_str(getattr(cand, 'url', '')) or str(id(cand))
@@ -11033,10 +11259,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                         try: p_dialog_c.close()
                         except: pass
-                        if not handle_absorbed and handle >= 0:
-                            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                            except: pass
+                        _dismiss_plugin_handle(handle, wait_ms=200)
                         return False
+                    _close_busy_dialogs()
                     xbmc.sleep(100)
                 _th_c.join(timeout=0.2)
 
@@ -11087,10 +11312,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                     try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                     except: pass
 
-                if not handle_absorbed:
-                    handle_absorbed = True
-                    _absorb_plugin_handle(handle, wait_ms=250)
-
                 if cached_item:
                     _enrich_link_metadata(cand, meta, cached_item)
                 media_key = _get_media_key(meta, cand)
@@ -11110,6 +11331,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                             ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
                             if ans == 'cancel':
                                 xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                                _dismiss_plugin_handle(handle, wait_ms=200)
                                 return False
                             elif ans == 'resume':
                                 seek_to_time = r_time
@@ -11129,7 +11351,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 cached_play_attempts += 1
                 xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea desde CACHÉ con %s! (intento %d/%d)" % (
                     srv_name, cached_play_attempts, max_cached_play_attempts), xbmc.LOGINFO)
-                player.play(fast_url, li)
+                if not handle_absorbed and _resolve_plugin_handle(handle, li):
+                    handle_absorbed = True
+                else:
+                    handle_absorbed = True
+                    try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                    except Exception: pass
+                    player.play(fast_url, li)
 
                 watchdog_timeout = _get_int_setting('autoplay_resolve_timeout', 12)
                 if watchdog_timeout < 10: watchdog_timeout = 10
@@ -11312,11 +11540,10 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
             try: p_dialog.close()
             except: pass
-            if handle >= 0:
-                try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                except: pass
+            _dismiss_plugin_handle(handle, wait_ms=200)
             return False
 
+        _close_busy_dialogs()
         p_dialog.update(min(pct, 85), 'Buscando servidores...')
 
         all_done = (completed >= total_channels) or ((time.time() - start_time) >= 12.0)
@@ -11378,10 +11605,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                         try: p_dialog.close()
                         except: pass
-                        if handle >= 0:
-                            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                            except: pass
+                        _dismiss_plugin_handle(handle, wait_ms=200)
                         return False
+                    _close_busy_dialogs()
                     xbmc.sleep(150)
                 _th_res.join(timeout=0.2)
                 ok, li = _res_box[0], _res_box[1]
@@ -11493,9 +11719,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             # Si el usuario no cancelo explicitamente, abrir la lista normal de enlaces (ej. si solo habia captchas o fallaron los directos)
             if xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled") != "true":
                 xbmc.log("Multi Bridge Fast Autoplay: no hubo directo reproducible pero hay enlaces disponibles -> abriendo lista", xbmc.LOGINFO)
-                if handle >= 0:
-                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                    except: pass
                 _cur_tmdb = str(meta.get('tmdb') or tmdb_id or get_param('tmdb') or '')
                 _ts = int(time.time())
                 _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
@@ -11506,12 +11729,10 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 return True
 
         xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
+        _dismiss_plugin_handle(handle, wait_ms=200)
         return False
 
-    # Descartar handle de plugin con guardian para suprimir cualquier dialogo de error espurio de Kodi
-    _absorb_plugin_handle(handle, wait_ms=250)
-
-    # Comprobar punto de reanudacion
+    # Comprobar punto de reanudacion ANTES de consumir el handle nativo
     if matched_item_holder[0]:
         _enrich_link_metadata(fast_link, meta, matched_item_holder[0])
     media_key = _get_media_key(meta, fast_link)
@@ -11531,9 +11752,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
                 try: p_dialog.close()
                 except: pass
-                if handle >= 0:
-                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                    except: pass
+                _dismiss_plugin_handle(handle, wait_ms=200)
                 return False
             elif ans == 'resume':
                 seek_to_time = r_time
@@ -11594,10 +11813,11 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
     # al siguiente mejor enlace verificado sin colisiones de reproductor ni esperas prematuras.
     # Notificaciones toast desactivadas por preferencia de usuario (la ventana de reproducción directa ya es suficiente)
 
-    # Iniciar reproductor de Kodi
+    # Iniciar reproductor de Kodi nativamente via setResolvedUrl(True) cuando haya handle disponible
     xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
     player = xbmc.Player()
-    player.play(fast_url, fast_li)
+    if not _resolve_plugin_handle(handle, fast_li):
+        player.play(fast_url, fast_li)
 
     search_params = (is_series, target_title, target_year, p_season, p_episode, all_names, alt_terms, p_tmdb, p_imdb)
     # Lanzar el recolector en segundo plano para completar los demás canales suavemente
@@ -11660,6 +11880,10 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         # C) Si llegó aquí, transcurrió el timeout o falló la decodificación (servidor caído / freeze)
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: enlace [%s] no inició (timeout/servidor caído). Intento %d de %d..." % (
             _get_link_server_name(active_link), current_attempt, max_watchdog_attempts), xbmc.LOGWARNING)
+        try:
+            xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+        except Exception:
+            pass
 
         _record_session_failed_link(active_link, media_key=media_key, meta=meta)
         # 1. Limpieza rigurosa previa al siguiente intento (garantiza 0 colisiones en CVideoPlayer/XAudio/MediaCodec)
@@ -11799,6 +12023,10 @@ def _autoplay_link(link, handle, engine, matched_item=None):
 
     server_name = (_safe_str(getattr(link, 'server', '') or '').strip().capitalize()
                    or 'servidor')
+    try:
+        xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+    except Exception:
+        pass
 
     # ── Balandro engine ────────────────────────────────────────────────────
     if engine == 'balandro':
@@ -11829,7 +12057,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             except: pass
 
             try:
-                sys.argv[1] = str(handle)
+                _set_sys_argv_handle(handle)
                 # autoplay=True → skip Balandro's internal player-selector dialog
                 platformtools.play_video(link, parent, autoplay=True)
                 if _result[0] is None:
@@ -11885,7 +12113,7 @@ def _autoplay_link(link, handle, engine, matched_item=None):
             return False
         platformtools = mods['platformtools']
         try:
-            sys.argv[1] = str(handle)
+            _set_sys_argv_handle(handle)
             # Alfa's play_video calls setResolvedUrl(handle, True, ...) internally
             platformtools.play_video(link)
             return True
@@ -12038,10 +12266,12 @@ def _capture_web_captcha_listitem(link, meta=None, seek_to_time=0):
     return item
 
 
-def _resolve_and_play_web_captcha(link, meta=None, seek_to_time=0):
+def _resolve_and_play_web_captcha(link, meta=None, seek_to_time=0, resolve_handle=False):
     item = _capture_web_captcha_listitem(link, meta=meta, seek_to_time=seek_to_time)
     if not item:
         return False
+    if resolve_handle and _resolve_plugin_handle(handle, item):
+        return True
     playback_url = item.getPath()
     xbmc.Player().play(playback_url, item)
     return True
@@ -12162,7 +12392,13 @@ def _prepare_clean_switch_transition():
             prev_pf = (p.getPlayingFile() or '').strip().lower()
     except Exception:
         prev_pf = ''
-    is_local_proxy = prev_pf.startswith(('http://127.0.0.1', 'http://localhost', 'https://127.0.0.1', 'https://localhost'))
+    is_tor_stream = (':61235/' in prev_pf or '/torrents/' in prev_pf)
+    try:
+        if xbmcgui.Window(10000).getProperty('MultiBridge.IsTorrentPlayback') == 'true':
+            is_tor_stream = True
+    except Exception:
+        pass
+    is_local_proxy = (not is_tor_stream) and prev_pf.startswith(('http://127.0.0.1', 'http://localhost', 'https://127.0.0.1', 'https://localhost'))
     if is_local_proxy:
         try:
             if xbmc.getCondVisibility("Player.Paused"):
@@ -12190,13 +12426,13 @@ def _prepare_clean_switch_transition():
             except Exception:
                 pass
             # Respiro seguro para que CloseFile / DXVA / InputStream Adaptive terminen de cerrar
-            # antes de lanzar el siguiente Player().play() y evitar cancelación del arranque
-            xbmc.sleep(350)
+            # completamente antes de lanzar el siguiente Player.play() y evitar crash/corte de arranque
+            xbmc.sleep(550)
     except Exception:
         pass
 
 
-def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False, seek_to_time=0, start_beginning=False):
+def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_switch=False, seek_to_time=0, start_beginning=False, keep_handle_on_fail=False):
 
     if not link: return False
 
@@ -12215,10 +12451,16 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             xbmc.log("Multi Bridge: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
             xbmcgui.Dialog().notification('Multi Bridge', msg, '', 4000)
             return False
+        if not is_switch and handle > 0 and not _HANDLE_RESOLVED:
+            _dismiss_plugin_handle(handle, wait_ms=200)
         res = _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
         return res
 
     # 2. Preparar enlace (resolver canal.play y data_url)
+    try:
+        xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+    except Exception:
+        pass
     prepared = _prepare_playable_link(link, engine=engine)
     if not prepared:
         xbmcgui.Dialog().notification('Multi Bridge', 'No se pudo preparar el enlace', '', 3000)
@@ -12237,7 +12479,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
 
     # 2.5 Servidor web con verificación humana / Captcha (ej. Powvideo)
     if _is_web_captcha_server(server_name, prepared):
-        return _resolve_and_play_web_captcha(prepared, meta=meta, seek_to_time=seek_to_time)
+        return _resolve_and_play_web_captcha(prepared, meta=meta, seek_to_time=seek_to_time, resolve_handle=(not is_switch))
 
     # 3. Reproductor según el motor
     # ── Balandro: ventana de progreso de conexión, timeout (15s) y aviso de fallo ──
@@ -12296,7 +12538,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 platformtools.dialog_ok = _cap_ok
                 platformtools.dialog_notification = _cap_notif
                 platformtools.dialog_select = _cap_sel
-                sys.argv[1] = str(handle)
+                _set_sys_argv_handle(handle)
                 xbmc.log(f"Multi Bridge: conectando a {server_name} en Balandro (url={str(getattr(prepared, 'url', ''))[:60]})", xbmc.LOGINFO)
                 res = platformtools.play_video(prepared, parent, autoplay=False)
                 if res is True and _resolved_li[0] is not None:
@@ -12400,33 +12642,33 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                             vt = _resolved_li[0].getVideoInfoTag()
                             if vt: vt.setResumePoint(0.0)
                         except Exception: pass
-                if handle > 0 and not is_switch:
-                    xbmcplugin.setResolvedUrl(handle, True, _resolved_li[0])
+                if not is_switch and _resolve_plugin_handle(handle, _resolved_li[0]):
+                    pass
                 else:
                     if is_switch:
                         _prepare_clean_switch_transition()
                     sync_tmdbhelper_playerstring(meta)
-                    xbmc.Player().play(media_url, _resolved_li[0])
+                    pl_play = xbmc.Player()
+                    pl_play.play(media_url, _resolved_li[0])
                 return True
             else:
                 xbmc.log(f"Multi Bridge: {server_name} resolvió pero no proporcionó la ruta final del vídeo", xbmc.LOGWARNING)
-                if handle > 0 and not is_switch:
-                    try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                    except: pass
-                dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
-                dlg.ok(
-                    'Multi Bridge — Error de Reproducción',
-                    f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] resolvió pero no proporcionó la ruta final del vídeo.'
-                )
+                if handle > 0 and not is_switch and not keep_handle_on_fail:
+                    _dismiss_plugin_handle(handle, wait_ms=200)
+                if not keep_handle_on_fail:
+                    dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+                    dlg.ok(
+                        'Multi Bridge — Error de Reproducción',
+                        f'El servidor [B][COLOR gold]{server_name}[/COLOR][/B] resolvió pero no proporcionó la ruta final del vídeo.'
+                    )
                 return False
 
-        if handle > 0 and not is_switch:
-            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-            except: pass
+        if handle > 0 and not is_switch and not keep_handle_on_fail:
+            _dismiss_plugin_handle(handle, wait_ms=200)
 
         if _result[0] is None:
             xbmc.log(f"Multi Bridge: timeout conectando a {server_name} tras 15s", xbmc.LOGINFO)
-            if not is_switch:
+            if not is_switch and not keep_handle_on_fail:
                 dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
                 dlg.ok(
                     'Multi Bridge — Tiempo de Espera Agotado',
@@ -12442,7 +12684,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             clean_reason = 'El vídeo ya no existe, el enlace está caído o el servidor no responde.'
 
         xbmc.log(f"Multi Bridge: fallo reproduciendo {server_name}: {clean_reason}", xbmc.LOGINFO)
-        if not is_switch:
+        if not is_switch and not keep_handle_on_fail:
             dlg = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
             dlg.ok(
                 'Multi Bridge — Fallo del Servidor',
@@ -12461,7 +12703,7 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
         try:
             if is_switch:
                 _prepare_clean_switch_transition()
-            sys.argv[1] = '-1' if is_switch else str(handle)
+            _set_sys_argv_handle('-1' if is_switch else handle)
             _enrich_link_metadata(prepared, meta, matched_item)
             sync_tmdbhelper_playerstring(meta)
 
@@ -12495,9 +12737,46 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                     return orig_select(heading, options, *args, **kwargs)
                 return 0
 
+            _use_native_alfa = (not is_switch and handle > 0 and not _HANDLE_RESOLVED)
+            _alfa_li_box = [None]
+            _alfa_res_ok = [False]
+            import xbmcplugin as _xp_alfa
+            _orig_alfa_sru = getattr(_xp_alfa, 'setResolvedUrl', None)
+
+            def _cap_alfa_sru(h, succeeded, listitem):
+                if succeeded and listitem:
+                    _alfa_li_box[0] = listitem
+                    _alfa_res_ok[0] = True
+                else:
+                    _alfa_res_ok[0] = False
+
             try:
+                if _use_native_alfa and _orig_alfa_sru is not None:
+                    _set_sys_argv_handle(handle)
+                    _xp_alfa.setResolvedUrl = _cap_alfa_sru
                 platformtools.dialog_select = _smart_alfa_select
                 platformtools.play_video(prepared, force_direct=True)
+                if _use_native_alfa and _alfa_res_ok[0] and _alfa_li_box[0] is not None:
+                    _a_li = _alfa_li_box[0]
+                    _ensure_playback_headers_on_item(_a_li, server_name=server_name, page_url=getattr(prepared, 'url', '') or getattr(link, 'url', ''))
+                    set_listitem_info(_a_li, meta=meta)
+                    if seek_to_time > 10:
+                        _a_li.setProperty('StartOffset', str(float(seek_to_time)))
+                        _a_li.setProperty('ResumeTime', str(float(seek_to_time)))
+                        try:
+                            _avt = _a_li.getVideoInfoTag()
+                            if _avt: _avt.setResumePoint(float(seek_to_time))
+                        except Exception: pass
+                    if _orig_alfa_sru is not None:
+                        _xp_alfa.setResolvedUrl = _orig_alfa_sru
+                    if _resolve_plugin_handle(handle, _a_li):
+                        return True
+                    _a_url = _a_li.getPath()
+                    if _a_url:
+                        pl_alfa = xbmc.Player()
+                        pl_alfa.play(_a_url, _a_li)
+                        return True
+                    return False
                 try:
                     _pl_cur = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
                     _pl_pos = _pl_cur.getposition()
@@ -12508,6 +12787,9 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
                 except Exception:
                     pass
             finally:
+                if _use_native_alfa and _orig_alfa_sru is not None:
+                    try: _xp_alfa.setResolvedUrl = _orig_alfa_sru
+                    except Exception: pass
                 if orig_select:
                     platformtools.dialog_select = orig_select
 
@@ -12623,31 +12905,48 @@ def check_first_run_device():
 
 
 _migration_checked_flag = False
+_migration_checked_version = ''
 
-def check_and_run_migration():
-    global _migration_checked_flag
-    if _migration_checked_flag:
-        return
+def check_and_run_migration(force=False):
+    global _migration_checked_flag, _migration_checked_version
     try:
-        if xbmcgui.Window(10000).getProperty('MultiBridge_MigrationDone') == 'true':
-            _migration_checked_flag = True
-            return
+        _cur_addon_ver = str(_bridge_addon.getAddonInfo('version') or '1')
     except Exception:
-        pass
+        _cur_addon_ver = '1'
+    if not force:
+        if _migration_checked_flag and _migration_checked_version == _cur_addon_ver:
+            return
+        try:
+            if xbmcgui.Window(10000).getProperty('MultiBridge_MigrationDone') == _cur_addon_ver:
+                _migration_checked_flag = True
+                _migration_checked_version = _cur_addon_ver
+                return
+        except Exception:
+            pass
     if not os.path.exists(TMDB_PLAYERS_PATH):
         try: os.makedirs(TMDB_PLAYERS_PATH)
         except: pass
 
-    # 1. Asegurar el player maestro (1) Multi Bridge en TMDb Helper
+    # 1. Asegurar el player maestro (1) Multi Bridge en TMDb Helper (is_resolvable=true nativo sin dummy.mp4)
+    # Limpiar variantes obsoletas de MultiBusqueda antes de sobrescribir (1)MultiBusqueda.json
     master_file = os.path.join(TMDB_PLAYERS_PATH, '(1)MultiBusqueda.json')
-    master_movie_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_title}&year={year}&title_es={es-ES_title}&title_lat={es-MX_title}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_title}&title_orig={originaltitle}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
-    master_ep_url = 'executebuiltin://RunPlugin("plugin://plugin.video.bridge.multi/?action=play&title={es-MX_showname}&season={season}&episode={episode}&showname={showname}&showyear={showyear}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_showname}&title_orig={original_name}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}")'
+    try:
+        for _fn in os.listdir(TMDB_PLAYERS_PATH):
+            if _fn.lower().endswith('.json') and 'multibusqueda' in _fn.lower() and _fn != '(1)MultiBusqueda.json':
+                try:
+                    os.remove(os.path.join(TMDB_PLAYERS_PATH, _fn))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    master_movie_url = 'plugin://plugin.video.bridge.multi/?action=play&title={es-MX_title}&year={year}&title_es={es-ES_title}&title_lat={es-MX_title}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_title}&title_orig={originaltitle}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}'
+    master_ep_url = 'plugin://plugin.video.bridge.multi/?action=play&title={es-MX_showname}&season={season}&episode={episode}&showname={showname}&showyear={showyear}&title_es={es-ES_showname}&title_lat={es-MX_showname}&tmdb={tmdb}&imdb={imdb}&tvdb={tvdb}&trakt={trakt}&plot={plot}&plot_lat={es-MX_plot}&plot_es={es-ES_plot}&tagline={tagline}&tagline_lat={es-MX_tagline}&tagline_es={es-ES_tagline}&director={director}&title_en={en_showname}&title_orig={original_name}&poster={poster}&fanart={fanart}&thumbnail={thumbnail}&clearlogo={clearlogo}'
 
     master_data = {
         "name": "(1) Multi Bridge",
         "plugin": "plugin.video.bridge.multi",
         "priority": 100,
-        "is_resolvable": "false",
+        "is_resolvable": "true",
         "assert": {
             "play_movie": ["title", "year"],
             "play_episode": ["showname", "season", "episode"]
@@ -12658,7 +12957,7 @@ def check_and_run_migration():
     }
 
     need_write_master = True
-    if os.path.exists(master_file):
+    if not force and os.path.exists(master_file):
         try:
             with open(master_file, 'r', encoding='utf-8') as f:
                 cur_master = json.load(f)
@@ -12671,6 +12970,7 @@ def check_and_run_migration():
         try:
             with open(master_file, 'w', encoding='utf-8') as f:
                 json.dump(master_data, f, indent=4, ensure_ascii=False)
+            xbmc.log("Multi Bridge: (1)MultiBusqueda.json actualizado/sobrescrito en TMDb Helper (v%s)" % _cur_addon_ver, xbmc.LOGINFO)
         except Exception as e:
             xbmc.log("Multi Bridge: error guardando master player: %s" % e, xbmc.LOGWARNING)
 
@@ -12752,8 +13052,9 @@ def check_and_run_migration():
     except Exception as e:
         xbmc.log("Multi Bridge: error limpiando players de TMDb Helper: %s" % e, xbmc.LOGWARNING)
     _migration_checked_flag = True
+    _migration_checked_version = _cur_addon_ver
     try:
-        xbmcgui.Window(10000).setProperty('MultiBridge_MigrationDone', 'true')
+        xbmcgui.Window(10000).setProperty('MultiBridge_MigrationDone', _cur_addon_ver)
     except Exception:
         pass
 
@@ -13711,7 +14012,7 @@ def update_players_from_cloud():
 
     p_dialog.update(90, 'Verificando y limpiando carpeta de TMDb Helper...')
     try:
-        check_and_run_migration()
+        check_and_run_migration(force=True)
     except Exception:
         pass
 
@@ -13926,6 +14227,7 @@ def _show_engine_picker():
     except Exception:
         pass
 
+    _close_busy_dialogs()
     try:
         alfa_addon = xbmcaddon.Addon('plugin.video.alfa')
         alfa_icon  = os.path.join(alfa_addon.getAddonInfo('path'), 'resources', 'icon.png')
@@ -15654,6 +15956,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
         self.selected = -1
         self.target_focus_idx = current_index if isinstance(current_index, int) else 0
         self.failed_links = set(failed_links or [])
+        self.failed_obj_ids = {id(x) for x in (failed_links or [])}
         mk = _get_media_key(self.meta) if self.meta else None
         self.failed_signatures = _get_session_failed_signatures(media_key=mk, meta=self.meta)
         self.offset_count = offset
@@ -15942,7 +16245,7 @@ class _FloatingLinksDialog(xbmcgui.WindowXMLDialog):
             # Comprobar si ha fallado
             sig = _get_link_unique_id(lnk)
             is_failed = bool(
-                (lnk in self.failed_links) or
+                (id(lnk) in self.failed_obj_ids) or
                 getattr(lnk, 'bridge_failed', False) or
                 (sig and sig in self.failed_signatures)
             )
@@ -16247,9 +16550,20 @@ def _load_cached_links_for_dialog(offset=0):
             _res = [l for l in _res if _is_torrent_link(l) or not _is_web_captcha_server(_get_link_server_name(l), l)]
         return _res
 
-    # 1. RAM Cache instantáneo (0 ms, sin acceso a disco ni deserialización)
+    # 1. RAM Cache instantáneo (0 ms, validado contra reproducción activa / secuencia / disco)
     try:
-        ram = _get_ram_search_cache()
+        _act_tmdb, _act_sea, _act_ep = '', '', ''
+        try:
+            _raw_act = xbmcgui.Window(10000).getProperty('MultiBridge.ActivePlaybackMeta')
+            if _raw_act and xbmc.Player().isPlayingVideo():
+                _am = json.loads(_raw_act)
+                if isinstance(_am, dict):
+                    _act_tmdb = str(_am.get('tmdb') or '')
+                    _act_sea = str(_am.get('season') or '')
+                    _act_ep = str(_am.get('episode') or '')
+        except Exception:
+            pass
+        ram = _get_ram_search_cache(target_tmdb=_act_tmdb, target_season=_act_sea, target_episode=_act_ep)
         if ram and ram.get('links'):
             c_links = [l for l in ram['links'] if l is not None and getattr(l, 'url', None)]
             if c_links:
@@ -16408,6 +16722,9 @@ def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alf
             m_idx = links.index(chosen)
         except (ValueError, AttributeError):
             m_idx = chosen_idx
+        _save_active_link_identity(chosen, media_key=media_key, fallback_idx=m_idx)
+        if _is_torrent_link(chosen):
+            return True
         start_playback_monitor(
             media_key, title_str=meta.get('title', ''), seek_to_time=cur_time,
             current_link_index=m_idx, meta=meta, old_playing_file=prev_file or None
@@ -16416,15 +16733,15 @@ def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alf
     return False
 
 
-def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0):
+def _play_link_from_dialog(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0, use_handle=False):
     _begin_playback_transition()
     try:
-        return _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, global_idx=global_idx, chosen_link=chosen_link, force_resume_time=force_resume_time)
+        return _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=matched_item, engine=engine, global_idx=global_idx, chosen_link=chosen_link, force_resume_time=force_resume_time, use_handle=use_handle)
     finally:
         _end_playback_transition()
 
 
-def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0):
+def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engine='alfa', global_idx=None, chosen_link=None, force_resume_time=0.0, use_handle=False):
     _android_stop_playback_if_active()
     if chosen_link is not None:
         chosen = chosen_link
@@ -16435,35 +16752,44 @@ def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engi
     _enrich_link_metadata(chosen, meta, matched_item)
     sync_tmdbhelper_playerstring(meta)
 
+    _is_tor = _is_torrent_link(chosen)
     media_key = _get_media_key(meta, chosen)
     is_s = bool(meta.get('season') and meta.get('episode'))
     seek_to_time = 0
     start_beginning = False
-    if force_resume_time and float(force_resume_time) > 0:
-        seek_to_time = float(force_resume_time)
-    else:
-        bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
-        if bm:
-            r_time = float(bm.get('resume_time', 0))
-            if r_time > 10:
-                mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
-                time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                _rsel = show_resume_dialog(time_str, meta.get('title', ''))
-                if _rsel == 0:
-                    seek_to_time = r_time
-                elif _rsel == 1:
-                    seek_to_time = 0
-                    start_beginning = True
-                    save_bookmark(media_key, 0, 0, title=meta.get('title', ''))
-                elif _rsel is None or _rsel < 0:
-                    return 'cancel'
+    if not _is_tor:
+        if force_resume_time and float(force_resume_time) > 0:
+            seek_to_time = float(force_resume_time)
+        else:
+            bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
+            if bm:
+                r_time = float(bm.get('resume_time', 0))
+                if r_time > 10:
+                    mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
+                    time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                    _rsel = show_resume_dialog(time_str, meta.get('title', ''))
+                    if _rsel == 0:
+                        seek_to_time = r_time
+                    elif _rsel == 1:
+                        seek_to_time = 0
+                        start_beginning = True
+                        save_bookmark(media_key, 0, 0, title=meta.get('title', ''))
+                    elif _rsel is None or _rsel < 0:
+                        return 'cancel'
 
     eng = getattr(chosen, 'bridge_engine', '') or engine or 'alfa'
-    played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, is_switch=True, seek_to_time=seek_to_time, start_beginning=start_beginning)
+    played = _play_link_safely(
+        chosen, engine=eng, matched_item=matched_item, meta=meta,
+        is_switch=(not use_handle), seek_to_time=seek_to_time,
+        start_beginning=start_beginning, keep_handle_on_fail=bool(use_handle)
+    )
     if played in ('cancel', 'no_client'):
         return played
     if played:
         mon_idx = global_idx if global_idx is not None else chosen_idx
+        _save_active_link_identity(chosen, media_key=media_key, fallback_idx=mon_idx)
+        if _is_tor:
+            return True
         start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=mon_idx, meta=meta, force_beginning=start_beginning)
         return True
     return False
@@ -16550,12 +16876,15 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
     media_key = _get_media_key(c_meta, c_links[0] if c_links else None)
     failed_signatures = _get_session_failed_signatures(media_key=media_key, meta=c_meta)
-    failed_links = set()
+    failed_links = []
     failed_indices = set()
     for idx, l in enumerate(c_links):
-        sig = _get_link_unique_id(l)
+        if getattr(l, '_bridge_orig_idx', None) is None:
+            try: setattr(l, '_bridge_orig_idx', idx + offset)
+            except Exception: pass
+        sig = _get_link_unique_id(l, fallback_index=(idx + offset))
         if getattr(l, 'bridge_failed', False) or (sig and sig in failed_signatures):
-            failed_links.add(l)
+            failed_links.append(l)
             failed_indices.add(idx)
     last_tab = None
     curr_idx_prop = -1
@@ -16579,6 +16908,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
         # Si todos los enlaces disponibles han fallado, notificar y salir
         if len(failed_indices) >= len(c_links) and len(c_links) > 0:
+            _dismiss_plugin_handle(handle, wait_ms=200)
             _show_bridge_notification('Multi Bridge', 'Todos los enlaces probados han fallado', 3500)
             _clear_session_failed_links(media_key)
             for _l in c_links:
@@ -16589,6 +16919,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
                 except: pass
             return False
 
+        _close_busy_dialogs()
         dlg = _FloatingLinksDialog(
             c_links,
             current_index=next_suggested_idx,
@@ -16607,6 +16938,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
         xbmc.sleep(150)
 
         if chosen_idx == 'force_search':
+            _dismiss_plugin_handle(handle, wait_ms=200)
             try:
                 if p.isPlayingVideo():
                     p.stop()
@@ -16634,6 +16966,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             return True
 
         if chosen_idx == 'verify_links':
+            _dismiss_plugin_handle(handle, wait_ms=200)
             try:
                 if p.isPlayingVideo():
                     p.stop()
@@ -16643,6 +16976,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             return True
 
         if chosen_idx == 'other_engine':
+            _dismiss_plugin_handle(handle, wait_ms=200)
             try:
                 if p.isPlayingVideo():
                     p.stop()
@@ -16654,6 +16988,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
         if not (isinstance(chosen_idx, int) and chosen_idx >= 0):
             # El usuario canceló o presionó Atrás (cierre manual: limpiar fallidos para apertura limpia posterior)
+            _dismiss_plugin_handle(handle, wait_ms=200)
             _clear_session_failed_links(media_key)
             for _l in c_links:
                 try: setattr(_l, 'bridge_failed', False)
@@ -16680,14 +17015,19 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             played = _switch_to_link(chosen_idx, c_links, c_meta, c_matched, engine=c_eng, force_cur_time=cur_playback_time, chosen_link=chosen_link)
         else:
             _prev_sw_file = ''
+            _use_native_h = (not was_playback) and (handle > 0) and (not _HANDLE_RESOLVED)
             played = _play_link_from_dialog(
                 chosen_idx, c_links, c_meta, c_matched, engine=c_eng,
                 global_idx=(chosen_idx + offset), chosen_link=chosen_link,
                 force_resume_time=cur_playback_time if (was_playback or (resume_time and float(resume_time) > 0)) else 0.0,
+                use_handle=_use_native_h,
             )
 
         if played in ('cancel', 'no_client'):
             continue
+
+        if is_tor and played:
+            return True
 
         playback_ok = False
         if played:
@@ -16697,6 +17037,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             return True
 
         if on_fail_setting == '1':
+            _dismiss_plugin_handle(handle, wait_ms=200)
             return False
 
         # Enlace fallido: si played fue False (o Kodi aun esta por lanzar DialogOK),
@@ -16713,9 +17054,14 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
         # Enlace fallido: registrar y reabrir
         if chosen_link:
-            failed_links.add(chosen_link)
+            if isinstance(failed_links, list):
+                if all(id(x) != id(chosen_link) for x in failed_links):
+                    failed_links.append(chosen_link)
+            else:
+                failed_links.add(chosen_link)
             failed_indices.add(chosen_idx)
-            _record_session_failed_link(chosen_link, index=chosen_idx, media_key=media_key, meta=c_meta)
+            _f_orig = getattr(chosen_link, '_bridge_orig_idx', None)
+            _record_session_failed_link(chosen_link, index=(_f_orig if _f_orig is not None else chosen_idx), media_key=media_key, meta=c_meta)
 
         xbmc.log("Multi Bridge: enlace %d (%s) falló al reproducir. Reabriendo ventana..." % (chosen_idx + 1, srv_name), xbmc.LOGWARNING)
 
@@ -16733,7 +17079,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             found_next = None
             for off in range(1, len(active_list)):
                 cand = active_list[(cur_tab_pos + off) % len(active_list)]
-                if cand not in failed_links:
+                if cand not in failed_links and all(id(x) != id(cand) for x in failed_links):
                     found_next = c_links.index(cand)
                     break
             if found_next is not None:
@@ -16751,13 +17097,14 @@ def _open_links_view(win_url=""):
     global _search_in_progress, _links_view_active
     _search_in_progress = False
     _links_view_active = True
+    _close_busy_dialogs()
     _apply_silence_all()
-    show_floating_links_dialog()
+    return show_floating_links_dialog()
 # ---------------------------------------------------------
 # Main Execution Entry Point
 # ---------------------------------------------------------
 def main():
-    global handle, original_argv, action, view, url, engine_param
+    global handle, original_argv, action, view, url, engine_param, _HANDLE_RESOLVED
     global plot, plot_lat, plot_es, tagline, tagline_lat, tagline_es
     global title, title_es, title_lat, title_en, title_orig
     global showname, year, showyear, season, episode
@@ -16765,6 +17112,7 @@ def main():
     global poster, fanart, thumbnail, director, clearlogo, genre
 
     # Re-sincronizar handle y parámetros en cada invocación (vital para reuselanguageinvoker a 0 ms)
+    _HANDLE_RESOLVED = False
     handle = -1
     if len(sys.argv) > 1 and sys.argv[1]:
         try: handle = int(sys.argv[1])
@@ -17084,6 +17432,105 @@ def main():
             except Exception: pass
         return
 
+    if action == 'hot_switch_link':
+        w_hs = xbmcgui.Window(10000)
+        raw_payload = w_hs.getProperty('BridgeMulti.PendingHotSwitch') or ''
+        w_hs.clearProperty('BridgeMulti.PendingHotSwitch')
+        payload = {}
+        if raw_payload:
+            try:
+                payload = json.loads(raw_payload)
+            except Exception:
+                payload = {}
+        try:
+            _raw_idx = payload.get('idx')
+            if _raw_idx is None:
+                _raw_idx = get_param('idx')
+            idx_hs = int(_raw_idx) if _raw_idx not in (None, '') else -1
+        except Exception:
+            idx_hs = -1
+        try:
+            _raw_ct = payload.get('cur_time')
+            if _raw_ct is None:
+                _raw_ct = get_param('cur_time')
+            cur_t_hs = float(_raw_ct or 0.0)
+        except Exception:
+            cur_t_hs = 0.0
+        target_sig = str(payload.get('sig') or '')
+        target_orig_idx = payload.get('orig_idx', None)
+        mk_hs = str(payload.get('media_key') or w_hs.getProperty('BridgeMulti.CurrentMediaKey') or '')
+        c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
+        chosen_hs = None
+        if c_links:
+            if target_sig:
+                for ci_hs, cl_hs in enumerate(c_links):
+                    if _get_link_unique_id(cl_hs) == target_sig:
+                        chosen_hs = cl_hs
+                        idx_hs = ci_hs
+                        break
+            if chosen_hs is None and target_orig_idx is not None:
+                for ci_hs, cl_hs in enumerate(c_links):
+                    if getattr(cl_hs, '_bridge_orig_idx', None) == target_orig_idx:
+                        chosen_hs = cl_hs
+                        idx_hs = ci_hs
+                        break
+            if chosen_hs is None and 0 <= idx_hs < len(c_links):
+                chosen_hs = c_links[idx_hs]
+        if chosen_hs is None and isinstance(payload.get('item'), dict):
+            try:
+                chosen_hs = _deserialize_item(payload.get('item'), c_eng or 'alfa')
+            except Exception:
+                chosen_hs = None
+        if chosen_hs is not None:
+            _hs_res = _execute_hot_switch_choice(
+                idx_hs, c_links or [chosen_hs], c_meta, c_matched, c_eng=c_eng,
+                cur_time=cur_t_hs, chosen_link=chosen_hs, media_key=mk_hs
+            )
+            if _hs_res in ('switched_http', 'reopened'):
+                wait_for_playback_monitor()
+        else:
+            xbmc.log("Multi Bridge: action=hot_switch_link sin enlace válido (idx=%s)" % str(idx_hs), xbmc.LOGWARNING)
+        return
+
+    if action == 'hot_switch_next_ep':
+        w_ne = xbmcgui.Window(10000)
+        raw_ne = w_ne.getProperty('BridgeMulti.PendingNextEpisode') or ''
+        w_ne.clearProperty('BridgeMulti.PendingNextEpisode')
+        try:
+            next_ep_info = json.loads(raw_ne) if raw_ne else None
+        except Exception:
+            next_ep_info = None
+        c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog()
+        if next_ep_info and c_meta:
+            _begin_playback_transition()
+            try:
+                _prepare_clean_switch_transition()
+                _play_next_episode(c_meta, next_ep_info)
+            finally:
+                _end_playback_transition()
+        return
+
+    if action == 'pause_prompt':
+        p_pause = xbmc.Player()
+        if not p_pause.isPlayingVideo() or not xbmc.getCondVisibility("Player.Paused"):
+            return
+        if _is_dialog_active_global():
+            return
+        try:
+            cur_t = float(p_pause.getTime() or 0.0)
+        except Exception:
+            cur_t = 0.0
+        try:
+            _a_idx_s = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentPlayingIndex')
+            _a_idx = int(_a_idx_s) if (_a_idx_s and _a_idx_s.lstrip('-').isdigit()) else -1
+        except Exception:
+            _a_idx = -1
+        _m_key = xbmcgui.Window(10000).getProperty('BridgeMulti.CurrentMediaKey') or ''
+        _res_p = _run_pause_prompt_flow(media_key=_m_key, active_idx=_a_idx, cur_time=cur_t, monitor_token=None, ui_only=False)
+        if _res_p in ('switched_http', 'reopened'):
+            wait_for_playback_monitor()
+        return
+
     if action == 'verify_links':
         verify_and_filter_links()
         return
@@ -17124,33 +17571,38 @@ def main():
                     'si' if _safe_str(getattr(chosen, 'data_url', '') or '') else 'no'), xbmc.LOGINFO)
             except: pass
             _enrich_link_metadata(chosen, meta, matched_item)
+            _is_tor_single = _is_torrent_link(chosen)
             media_key = _get_media_key(meta, chosen)
             is_s = bool(meta.get('season') and meta.get('episode'))
-            bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
             seek_to_time = 0
             start_beginning = False
-            if bm:
-                r_time = float(bm.get('resume_time', 0))
-                mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
-                time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-                t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
-                _rsel = show_resume_dialog(time_str, t_title)
-                if _rsel == 0:
-                    seek_to_time = r_time
-                elif _rsel == 1:
-                    seek_to_time = 0
-                    start_beginning = True
-                    save_bookmark(media_key, 0, 0, title=t_title)
-                elif _rsel is None or _rsel < 0:
-                    if handle >= 0:
-                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                        except: pass
-                    return
+            if not _is_tor_single:
+                bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
+                if bm:
+                    r_time = float(bm.get('resume_time', 0))
+                    mins = int(r_time // 60); secs = int(r_time % 60); hrs = mins // 60; mins = mins % 60
+                    time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                    t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este vídeo'
+                    _rsel = show_resume_dialog(time_str, t_title)
+                    if _rsel == 0:
+                        seek_to_time = r_time
+                    elif _rsel == 1:
+                        seek_to_time = 0
+                        start_beginning = True
+                        save_bookmark(media_key, 0, 0, title=t_title)
+                    elif _rsel is None or _rsel < 0:
+                        if handle >= 0:
+                            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+                            except: pass
+                        return
 
             played = _play_link_safely(chosen, engine=eng, matched_item=matched_item, meta=meta, seek_to_time=seek_to_time, start_beginning=start_beginning)
             if played in ('cancel', 'no_client'):
                 return
             if played:
+                _save_active_link_identity(chosen, media_key=media_key, fallback_idx=idx)
+                if _is_tor_single:
+                    return
                 start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=idx, meta=meta, force_beginning=start_beginning)
                 wait_for_playback_monitor()
             else:
@@ -17403,9 +17855,7 @@ def main():
                     if xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled") == "true":
                         xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "")
                         xbmc.log("Multi Bridge: autoplay desde caché cancelado por el usuario, saliendo limpiamente.", xbmc.LOGINFO)
-                        if handle >= 0:
-                            try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                            except: pass
+                        _dismiss_plugin_handle(handle, wait_ms=200)
                         return
 
                 else:
@@ -17415,7 +17865,8 @@ def main():
                     _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cached_tmdb_v, _ts3)
                     if _cached_meta.get('season') and _cached_meta.get('episode'):
                         _win_url += '&season=%s&episode=%s' % (_cached_meta['season'], _cached_meta['episode'])
-                    _open_links_view(_win_url)
+                    if _open_links_view(_win_url) and _has_live_playback_activity():
+                        wait_for_playback_monitor()
                     return
             except Exception as _ce:
                 xbmc.log('Multi Bridge: cache reciente error: ' + str(_ce), xbmc.LOGINFO)
@@ -17467,13 +17918,12 @@ def main():
                 if xbmcgui.Window(10000).getProperty("bridge.autoplay_canceled") == "true":
                     xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "")
                     xbmc.log("Multi Bridge: autoplay cancelado por el usuario, saliendo limpiamente sin notificaciones.", xbmc.LOGINFO)
-                    if handle >= 0:
-                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                        except: pass
+                    _dismiss_plugin_handle(handle, wait_ms=200)
                     return
 
                 if _bridge_addon.getSetting('autoplay_fallback_normal_search') != 'true':
                     xbmc.log("Multi Bridge: fallback a busqueda normal desactivado por ajuste de usuario", xbmc.LOGINFO)
+                    _dismiss_plugin_handle(handle, wait_ms=200)
                     _show_bridge_notification('Multi Bridge', 'Autoplay: no se encontraron enlaces reproducibles', 3000)
                     return
 
@@ -17536,7 +17986,10 @@ def main():
             except: pass
 
         if not links:
-            _offer_elementum_search(meta)
+            _dismiss_plugin_handle(handle, wait_ms=200)
+            _close_busy_dialogs()
+            _t_nf = str(meta.get('title') or meta.get('showname') or '')
+            _show_bridge_notification('Multi Bridge', 'No se encontraron enlaces para %s' % (_t_nf or 'este contenido'), 3500)
             return
 
 
@@ -17556,9 +18009,7 @@ def main():
                 t_title = meta.get('title') or getattr(matched_item, 'title', '') or 'este video'
                 ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
                 if ans == 'cancel':
-                    if handle >= 0:
-                        try: xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
-                        except: pass
+                    _dismiss_plugin_handle(handle, wait_ms=200)
                     return
                 elif ans == 'resume':
                     seek_to_time = r_time
@@ -17586,7 +18037,8 @@ def main():
                     _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
                     if meta.get('season') and meta.get('episode'):
                         _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-                    _open_links_view(_win_url)
+                    if _open_links_view(_win_url) and _has_live_playback_activity():
+                        wait_for_playback_monitor()
             return
 
         else:
@@ -17596,7 +18048,8 @@ def main():
             _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
             if meta.get('season') and meta.get('episode'):
                 _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
-            _open_links_view(_win_url)
+            if _open_links_view(_win_url) and _has_live_playback_activity():
+                wait_for_playback_monitor()
             return
 
     if action == 'play':
@@ -17613,14 +18066,14 @@ def main():
             except Exception:
                 pass
             _show_bridge_notification('Multi Bridge', msg, 3500)
-            if handle >= 0:
-                try: xbmcplugin.endOfDirectory(handle, succeeded=False)
-                except Exception: pass
+            _dismiss_plugin_handle(handle, wait_ms=200)
             return
 
         try:
             _play_action_impl(_tentative_title)
         finally:
+            if handle >= 0 and not _HANDLE_RESOLVED:
+                _dismiss_plugin_handle(handle, wait_ms=200)
             _release_search_lock_atomic()
         return
 
@@ -17787,14 +18240,10 @@ def main():
                 _open_links_view(_win_url)
             return
         else:
-            _meta_fallback = {
-                'tmdb':    tmdb_id or get_param('tmdb'),
-                'title':   title or get_param('title') or get_param('title_es') or get_param('title_lat') or showname or get_param('showname'),
-                'season':  season or get_param('season'),
-                'episode': episode or get_param('episode'),
-                'showname': showname or get_param('showname'),
-            }
-            _offer_elementum_search(_meta_fallback)
+            _dismiss_plugin_handle(handle, wait_ms=200)
+            _close_busy_dialogs()
+            _t_nf = str(title or get_param('title') or get_param('title_es') or get_param('title_lat') or showname or get_param('showname') or '')
+            _show_bridge_notification('Multi Bridge', 'No se encontraron enlaces para %s' % (_t_nf or 'este contenido'), 3500)
         return
 
 
