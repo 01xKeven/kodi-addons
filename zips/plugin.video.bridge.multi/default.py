@@ -1642,6 +1642,8 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
 
     # Limpiar cualquier estado residual de diálogo previo y bandera torrent en monitores HTTP
     _set_dialog_active_global(False)
+    global _floating_dialog_active
+    _floating_dialog_active = False
     try:
         xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
     except Exception:
@@ -15156,6 +15158,11 @@ def _play_preloaded_episode(preloaded):
             media_key = _get_media_key(meta, lnk)
             _save_active_link_identity(lnk, media_key=media_key, fallback_idx=idx)
             start_playback_monitor(media_key, title_str=meta.get('title', ''), current_link_index=idx, meta=meta)
+            # Limpiar bandera de diálogo activo ANTES de bloquear en wait_for_playback_monitor,
+            # para que el monitor del nuevo episodio pueda mostrar el popup al pausar.
+            _set_dialog_active_global(False)
+            global _floating_dialog_active
+            _floating_dialog_active = False
             wait_for_playback_monitor()
             return True
         else:
