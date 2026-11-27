@@ -1640,8 +1640,12 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         except Exception:
             pass
 
-    # Limpiar cualquier estado residual de diálogo previo
+    # Limpiar cualquier estado residual de diálogo previo y bandera torrent en monitores HTTP
     _set_dialog_active_global(False)
+    try:
+        xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
+    except Exception:
+        pass
 
     def _monitor_loop():
         global _floating_dialog_active
@@ -1967,7 +1971,7 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         last_saved_time = 0
         tot_time = 0
         last_pause_state = False
-        pause_cooldown = time.time() + 5.0
+        pause_cooldown = time.time() + 1.5
         active_idx = current_link_index
 
         _trakt_reassert_deadline = time.time() + 30.0
@@ -10394,9 +10398,12 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 _sk = seek_to_time
             else:
                 _sk = 0
+            _save_active_link_identity(link, media_key=_rk, fallback_idx=idx)
             start_playback_monitor(_rk, title_str=_rt, seek_to_time=_sk, current_link_index=idx, meta=meta)
+            _mon_tok_before = _get_global_monitor_token()
         except Exception as _se:
             xbmc.log('Multi Bridge autoplay monitor inicio error: %s' % _se, xbmc.LOGINFO)
+            _mon_tok_before = _get_global_monitor_token()
         _monitor_started = True
 
         mon_start       = time.time()
@@ -10413,7 +10420,13 @@ def _autoplay_with_fallback(links, handle, engine, matched_item=None,
                 user_declined = True
                 break
 
+            # Si el usuario cambió de enlace en caliente desde el popup de pausa, ceder el control sin detener el nuevo stream
+            if _is_playback_transition_active() or (_mon_tok_before and _get_global_monitor_token() != _mon_tok_before):
+                return True
+
             if not player.isPlaying():
+                if _is_playback_transition_active() or (_mon_tok_before and _get_global_monitor_token() != _mon_tok_before):
+                    return True
                 elapsed = time.time() - mon_start
                 xbmc.log('Multi Bridge autoplay [%d/%d] %s se detuvo a %.1fs reales' % (
                     idx+1, total_att, server, elapsed), xbmc.LOGINFO)
@@ -11408,6 +11421,7 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                         xbmc.executebuiltin('Dialog.Close(busydialog,true)')
                         xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
                     except Exception: pass
+                    _save_active_link_identity(cand, media_key=media_key, fallback_idx=0)
                     start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
                     wait_for_playback_monitor()
                     return True
@@ -11873,7 +11887,17 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
             except Exception: pass
             # Iniciar monitor de reproducción SOLO tras confirmar progreso real (evita colisiones en arranque/cierre)
-            start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=0, meta=meta)
+            _fast_idx = 0
+            try:
+                _fast_sig = _get_link_unique_id(active_link)
+                for _fi, _fl in enumerate(ready_initial or []):
+                    if _get_link_unique_id(_fl) == _fast_sig:
+                        _fast_idx = _fi
+                        break
+            except Exception:
+                _fast_idx = 0
+            _save_active_link_identity(active_link, media_key=media_key, fallback_idx=_fast_idx)
+            start_playback_monitor(media_key, title_str=meta.get('title', ''), seek_to_time=seek_to_time, current_link_index=_fast_idx, meta=meta)
             wait_for_playback_monitor()
             return True
 
@@ -15130,6 +15154,7 @@ def _play_preloaded_episode(preloaded):
             xbmc.log("Multi Bridge Instant Play: ¡Reproducción exitosa en enlace %d (%s)!" % (idx+1, srv), xbmc.LOGINFO)
             sync_tmdbhelper_playerstring(meta)
             media_key = _get_media_key(meta, lnk)
+            _save_active_link_identity(lnk, media_key=media_key, fallback_idx=idx)
             start_playback_monitor(media_key, title_str=meta.get('title', ''), current_link_index=idx, meta=meta)
             wait_for_playback_monitor()
             return True
@@ -18030,6 +18055,9 @@ def main():
                 meta         = meta, seek_to_time=seek_to_time,
                 resume_media_key=media_key,
                 resume_title=meta.get('title', ''))
+            if played:
+                wait_for_playback_monitor()
+                return
             if not played and not xbmc.Player().isPlaying():
                 if not _links_view_active:
                     _cur_tmdb = str(tmdb_id or get_param('tmdb') or meta.get('tmdb') or '')
@@ -18231,6 +18259,8 @@ def main():
                     meta         = meta, seek_to_time=seek_to_time,
                     resume_media_key=media_key,
                     resume_title=meta.get('title', ''))
+                if played or _has_live_playback_activity():
+                    wait_for_playback_monitor()
             else:
                 _cur_tmdb = str(tmdb_id or get_param('tmdb') or meta.get('tmdb') or '')
                 _ts = int(time.time())
