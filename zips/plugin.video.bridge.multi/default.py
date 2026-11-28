@@ -11847,11 +11847,14 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         channel_event.wait(timeout=0.25)
         channel_event.clear()
 
-    # Cerrar dialogo de progreso
-    try: p_dialog.close(); del p_dialog
-    except: pass
-    try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
-    except: pass
+    # Cerrar dialogo de progreso solo si NO hay enlace para reproducir.
+    # Si sí hay enlace, lo mantenemos visible hasta que Kodi confirme reproducción real
+    # (evita la pantalla negra cuando el servidor tarda en responder y Kodi no muestra spinner).
+    if not fast_link or not fast_li or not fast_url:
+        try: p_dialog.close(); del p_dialog
+        except: pass
+        try: xbmc.executebuiltin('Dialog.Close(progressdialog,true)')
+        except: pass
 
     if not fast_link or not fast_li or not fast_url:
         xbmc.log("Multi Bridge Fast Autoplay: no se encontro enlace rapido funcional en los canales. Evaluando fallback...", xbmc.LOGINFO)
@@ -11997,6 +12000,13 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
     # Iniciar reproductor de Kodi nativamente via setResolvedUrl(True) cuando haya handle disponible
     xbmc.log("Multi Bridge Fast Autoplay: ¡Iniciando reproducción instantánea con %s!" % _get_link_server_name(fast_link), xbmc.LOGINFO)
+    # Mantener la ventana visible con estado "Cargando..." mientras Kodi carga el stream.
+    # Se cerrará cuando el watchdog confirme reproducción real (evita pantalla negra).
+    try:
+        p_dialog.update(100, 'Cargando video...')
+        p_dialog.set_stream_info(status='Cargando video...')
+    except Exception:
+        pass
     player = xbmc.Player()
     if not _resolve_plugin_handle(handle, fast_li):
         player.play(fast_url, fast_li)
@@ -12045,10 +12055,15 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
         if user_aborted:
             _BG_TASK_ABORT_EVENT.set()
+            try: p_dialog.close()
+            except Exception: pass
             return True
 
-        if video_started and not _is_kodi_modal_dialog_open():
+        if video_started:
             xbmc.log("Multi Bridge Fast Autoplay Watchdog: ¡Reproducción confirmada con éxito [%s]!" % _get_link_server_name(active_link), xbmc.LOGINFO)
+            # Cerrar la ventana de autoplay AHORA que el video está reproduciéndose (OSD listo)
+            try: p_dialog.close()
+            except Exception: pass
             try:
                 xbmc.executebuiltin('Dialog.Close(busydialog,true)')
                 xbmc.executebuiltin('Dialog.Close(busydialognocancel,true)')
@@ -12170,12 +12185,22 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         # Iniciar reproducción del nuevo enlace
         xbmc.log("Multi Bridge Fast Autoplay Watchdog: reproduciendo automáticamente siguiente enlace: %s" % _get_link_server_name(active_link), xbmc.LOGINFO)
         _show_bridge_notification('Multi Bridge · Autoplay', 'Enlace no disponible · Probando siguiente...', 3000)
+        # Actualizar la ventana de autoplay con el nuevo servidor mientras carga
+        try:
+            _next_srv = _get_link_server_name(active_link)
+            p_dialog.set_stream_info(server=_next_srv, status='Cargando video...')
+            p_dialog.update(100, 'Cargando video...')
+        except Exception:
+            pass
         player.play(next_resolved_url, next_resolved_li)
 
     # Si se agotaron los intentos sin exito, abrir lista de enlaces para el usuario y gestionar fallback
     if not player.isPlayingVideo():
         _BG_TASK_ABORT_EVENT.set()
         xbmc.log("Multi Bridge Fast Autoplay: ningun enlace arranco en autoplay rapido", xbmc.LOGINFO)
+        # Cerrar ventana de autoplay antes de abrir la lista
+        try: p_dialog.close()
+        except Exception: pass
         xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
         _cur_tmdb = str(meta.get('tmdb') or '')
         if _cur_tmdb:
@@ -12187,6 +12212,9 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         return True
 
     xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
+    # Cerrar ventana de autoplay al finalizar normalmente (player.isPlayingVideo()=True al salir loop)
+    try: p_dialog.close()
+    except Exception: pass
     return True
 
 def _autoplay_link(link, handle, engine, matched_item=None):
