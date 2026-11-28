@@ -121,8 +121,7 @@
                 <onright>300</onright>
                 <onup>300</onup>
                 <ondown>300</ondown>
-                <!-- onclick manejado por Python onClick(300) → self.close() — NO poner Action(Close) aquí para evitar double-close crash -->
-                <onback>Action(Back)</onback>
+                <!-- onclick y onback manejados por Python onClick/onAction → self.close() — NO poner Action() aquí para evitar double-close crash -->
             </control>
         </control>
     </controls>
