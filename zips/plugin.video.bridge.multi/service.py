@@ -210,6 +210,36 @@ class BridgePlayerService(xbmc.Player):
             if is_tor and self._get_default_mod() is not None:
                 import threading
                 threading.Thread(target=self._prewarm_torrent_pause_cache, daemon=True, name="BridgeTorrentPauseWarm").start()
+            # Seek de reanudación cuando se cambia de HTTP a torrent en caliente
+            if is_tor and is_hot:
+                _resume_t_str = w.getProperty('MultiBridge.TorrentResumeTime') or ''
+                if _resume_t_str:
+                    w.clearProperty('MultiBridge.TorrentResumeTime')
+                    try:
+                        _resume_t = float(_resume_t_str)
+                    except Exception:
+                        _resume_t = 0.0
+                    if _resume_t > 2.0:
+                        def _do_torrent_seek(_t=_resume_t):
+                            try:
+                                # Esperar a que el buffer arranque antes de hacer seek
+                                for _w2 in range(60):
+                                    xbmc.sleep(500)
+                                    if not self.isPlayingVideo():
+                                        return
+                                    try:
+                                        cur_pos = float(self.getTime() or 0.0)
+                                    except Exception:
+                                        cur_pos = 0.0
+                                    if cur_pos > 1.0:
+                                        break
+                                if self.isPlayingVideo() and not xbmc.getCondVisibility("Player.Paused"):
+                                    self.seekTime(_t)
+                                    xbmc.log("Multi Bridge PlayerService: seek torrent a %.1fs tras hot-switch" % _t, xbmc.LOGINFO)
+                            except Exception as _se:
+                                xbmc.log("Multi Bridge PlayerService: error seek torrent: " + str(_se), xbmc.LOGWARNING)
+                        import threading
+                        threading.Thread(target=_do_torrent_seek, daemon=True, name="BridgeTorrentSeek").start()
             # Re-asegurar script.trakt.ids y TagVideo antes de que script.trakt / monitores lean tarde
             xbmc.sleep(500)
             if self.isPlayingVideo():
@@ -761,10 +791,76 @@ def run_service():
     t_inp.start()
 
     _sync_timer = 0
+    _no_links_dialog_active = [False]
+    _no_links_dialog_ts = [0.0]  # timestamp de cuando se activó
     while not monitor.abortRequested():
-        if monitor.waitForAbort(0.25):
+        if monitor.waitForAbort(0.1):
             break
-        _sync_timer += 0.25
+        _sync_timer += 0.1
+
+        # Detectar señal de "sin resultados" del plugin (default.py muere antes de poder mostrar el dialog)
+        # El dialog se lanza en un hilo separado para no bloquear el loop del service
+        try:
+            _w = xbmcgui.Window(10000)
+            if _w.getProperty('BridgeMulti.ShowNoLinksDialog') == '1':
+                _w.clearProperty('BridgeMulti.ShowNoLinksDialog')
+                xbmc.log('BridgeMulti Service: señal ShowNoLinksDialog recibida. active=%s' % str(_no_links_dialog_active[0]), xbmc.LOGINFO)
+
+                # Resetear la flag si lleva más de 10s activa (el dialog fue cerrado externamente sin finally)
+                import time as _time
+                if _no_links_dialog_active[0] and (_time.time() - _no_links_dialog_ts[0]) > 10.0:
+                    xbmc.log('BridgeMulti Service: flag activa >10s, reseteando.', xbmc.LOGINFO)
+                    _no_links_dialog_active[0] = False
+
+                # Si ya hay un dialog activo, ignorar esta señal (el usuario ya lo ve)
+                if not _no_links_dialog_active[0]:
+                    def _show_no_links_dialog(_active_flag=_no_links_dialog_active, _ts_flag=_no_links_dialog_ts):
+                        try:
+                            _active_flag[0] = True
+                            _ts_flag[0] = _time.time()
+                            # Fase 1: esperar a que el okdialog de Kodi esté activo (max 2s)
+                            # La señal llega ANTES de que Kodi muestre el error, así que esperamos
+                            xbmc.log('BridgeMulti Service: fase1 - esperando okdialog...', xbmc.LOGINFO)
+                            for _ in range(20):
+                                try:
+                                    if xbmc.getCondVisibility('Window.IsActive(okdialog)'):
+                                        break
+                                except Exception:
+                                    break
+                                xbmc.sleep(100)
+                            # Fase 2: cerrar el okdialog de Kodi
+                            xbmc.log('BridgeMulti Service: fase2 - cerrando okdialog de Kodi', xbmc.LOGINFO)
+                            try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                            except: pass
+                            # Fase 3: esperar a que desaparezca completamente (animación, max 1s)
+                            for _ in range(10):
+                                try:
+                                    if not xbmc.getCondVisibility('Window.IsActive(okdialog)'):
+                                        break
+                                except Exception:
+                                    break
+                                xbmc.sleep(100)
+                            xbmc.sleep(200)  # margen extra para la animación de cierre
+                            xbmc.log('BridgeMulti Service: mostrando Dialog().ok() sin resultados', xbmc.LOGINFO)
+                            xbmcgui.Dialog().ok(
+                                '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados',
+                                '[COLOR white]No se encontraron enlaces disponibles para este contenido.[/COLOR]'
+                                '[CR][COLOR gray]Es posible que el contenido aún no esté disponible en los servidores.[/COLOR]'
+                            )
+                            xbmc.log('BridgeMulti Service: Dialog().ok() cerrado por usuario', xbmc.LOGINFO)
+                        except Exception as _ex:
+                            xbmc.log('BridgeMulti Service: error en hilo dialog sin resultados: ' + str(_ex), xbmc.LOGWARNING)
+                        finally:
+                            _active_flag[0] = False
+                            xbmc.log('BridgeMulti Service: flag desactivada (finally)', xbmc.LOGINFO)
+
+                    import threading as _t
+                    _t.Thread(target=_show_no_links_dialog, daemon=True, name='BridgeNoLinksDialog').start()
+                else:
+                    xbmc.log('BridgeMulti Service: señal ignorada, dialog ya activo.', xbmc.LOGINFO)
+        except Exception as _e:
+            xbmc.log('BridgeMulti Service: error mostrando dialog sin resultados: ' + str(_e), xbmc.LOGWARNING)
+
         if _sync_timer >= 600:
             _sync_timer = 0
             try:

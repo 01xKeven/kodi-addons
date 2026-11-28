@@ -837,8 +837,36 @@ def _is_same_media_item(cached_meta, cur_meta):
 
 
 def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=None):
-    if is_item_completed(media_key):
-        return None
+    xbmc.log(f"[BridgeMulti] get_bookmark called: media_key={media_key} tmdb_id={tmdb_id} is_series={is_series}", xbmc.LOGINFO)
+
+    # 0. Kodi VideoDatabase — bookmark guardado por TMDb Helper (strFilename contiene tmdb_id).
+    #    Este es el origen del "Reanudar desde HH:MM:SS" del menú contextual de TMDb Helper.
+    if tmdb_id:
+        try:
+            kodi_db_path = xbmcvfs.translatePath('special://userdata/Database/MyVideos150.db')
+            if not os.path.exists(kodi_db_path):
+                for _v in range(149, 100, -1):
+                    _p = xbmcvfs.translatePath(f'special://userdata/Database/MyVideos{_v}.db')
+                    if os.path.exists(_p): kodi_db_path = _p; break
+            if os.path.exists(kodi_db_path):
+                _conn = sqlite3.connect(kodi_db_path)
+                _c = _conn.cursor()
+                _pat = '%tmdb_id={}%'.format(int(tmdb_id))
+                _c.execute('''SELECT b.timeInSeconds, b.totalTimeInSeconds
+                              FROM bookmark b
+                              JOIN files f ON b.idFile = f.idFile
+                              WHERE f.strFilename LIKE ? AND b.type = 1
+                              ORDER BY b.idBookmark DESC LIMIT 1''', (_pat,))
+                _row = _c.fetchone()
+                _conn.close()
+                if _row:
+                    _r_time, _t_time = float(_row[0]), float(_row[1])
+                    xbmc.log(f"[BridgeMulti] get_bookmark KodiDB: resume={_r_time:.1f}s total={_t_time:.1f}s", xbmc.LOGINFO)
+                    if _r_time > 20 and (_t_time == 0 or (_r_time / _t_time < 0.95)):
+                        return {'resume_time': _r_time, 'total_time': _t_time, 'source': 'kodi_db'}
+        except Exception as _e:
+            xbmc.log(f"[BridgeMulti] get_bookmark KodiDB error: {_e}", xbmc.LOGWARNING)
+
     # 1. Local bookmark database
     if media_key and os.path.exists(BOOKMARKS_FILE):
         try:
@@ -847,11 +875,12 @@ def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=
             if bm and isinstance(bm, dict):
                 r_time = float(bm.get('resume_time', 0))
                 t_time = float(bm.get('total_time', 0))
-                if r_time > 20 and (t_time == 0 or (r_time / t_time < 0.80)):
+                if r_time > 20 and (t_time == 0 or (r_time / t_time < 0.95)):
                     return bm
         except Exception: pass
 
-    # 2. Sync from TMDb Helper's Trakt cache (ItemDetails.db)
+    # 2. Trakt via TMDb Helper (ItemDetails.db) — tiene prioridad sobre nuestro estado interno.
+    #    Si Trakt dice que hay progreso (barra visible en Kodi), lo respetamos SIEMPRE.
     if tmdb_id:
         try:
             tmdb_base = xbmcvfs.translatePath('special://userdata/addon_data/plugin.video.themoviedb.helper/')
@@ -872,6 +901,7 @@ def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=
                         c.execute("SELECT playback_progress, runtime, title FROM simplecache WHERE tmdb_id = ? AND item_type = 'movie' AND playback_progress > 0;", (int(tmdb_id),))
                     row = c.fetchone()
                     conn.close()
+                    xbmc.log(f"[BridgeMulti] get_bookmark Trakt query tmdb_id={tmdb_id} row={row}", xbmc.LOGINFO)
                     if row:
                         progress_pct, runtime_mins, title = row[0], row[1], row[2]
                         if progress_pct and runtime_mins and float(progress_pct) > 0.2:
@@ -879,7 +909,7 @@ def get_bookmark(media_key, tmdb_id=None, is_series=False, season=None, episode=
                             if pct <= 1.0 and pct > 0: pct = pct * 100.0
                             tot_sec = float(runtime_mins) * 60.0
                             res_sec = (pct / 100.0) * tot_sec
-                            if res_sec > 20 and (res_sec / tot_sec < 0.80):
+                            if res_sec > 20 and (res_sec / tot_sec < 0.95):
                                 return {'resume_time': res_sec, 'total_time': tot_sec, 'title': title, 'source': 'trakt'}
                 except Exception: pass
         except Exception: pass
@@ -895,8 +925,9 @@ def save_bookmark(media_key, resume_time, total_time, title=""):
                 with open(BOOKMARKS_FILE, 'r', encoding='utf-8') as f: data = json.load(f)
             except: data = {}
         
-        # Al llegar al 80% o estar completado, eliminar bookmark para no guardar en reanudar
-        if (total_time > 0 and (resume_time / float(total_time) >= 0.80)) or is_item_completed(media_key):
+        # Solo eliminar el bookmark si el vídeo llegó al 95% o más (prácticamente terminado).
+        # NO eliminar por is_item_completed para permitir re-reanudar aunque Trakt lo marque visto.
+        if total_time > 0 and (resume_time / float(total_time) >= 0.95):
             if media_key in data: del data[media_key]
         elif resume_time > 30:
             data[media_key] = {
@@ -1336,6 +1367,26 @@ def _execute_hot_switch_choice(chosen_idx, c_links, c_meta, c_matched, c_eng='al
         chosen_l = chosen_link or c_links[chosen_idx]
         srv_n = _get_link_server_name(chosen_l) or 'Servidor'
         cur_mk = media_key or _get_media_key(c_meta, chosen_l)
+        # Si el usuario eligió un captcha, invalidar el aviso para que no vuelva a salir
+        if _is_web_captcha_server(srv_n, chosen_l):
+            try:
+                xbmcgui.Window(10000).clearProperty('BridgeMulti.CaptchaNotifiedToken')
+            except Exception:
+                pass
+        # Si era un enlace marcado fallido y el usuario lo volvió a elegir, limpiar marca optimistamente
+        if getattr(chosen_l, 'bridge_failed', False):
+            try:
+                setattr(chosen_l, 'bridge_failed', False)
+            except Exception:
+                pass
+            _sig_r = _get_link_unique_id(chosen_l)
+            try:
+                _sfl_r = _SESSION_FAILED_LINKS.get(cur_mk)
+                if _sfl_r and _sig_r:
+                    _sfl_r.get('signatures', set()).discard(_sig_r)
+                    _sfl_r.get('obj_ids', set()).discard(id(chosen_l))
+            except Exception:
+                pass
         if switched is True:
             is_t = (srv_n.lower() == 'torrent' or _is_torrent_link(chosen_l))
             if is_t:
@@ -1379,8 +1430,28 @@ def _execute_hot_switch_choice(chosen_idx, c_links, c_meta, c_matched, c_eng='al
                 show_floating_links_dialog(resume_time=cur_time)
                 return 'reopened'
             return 'switched_http'
-        elif switched in ('cancel', 'no_client'):
+        elif switched == 'cancel':
             return 'aborted'
+        elif switched == 'no_client':
+            # Mostrar diálogo bloqueante y al aceptar reabrir la lista (sin marcar el enlace fallido)
+            xbmc.log("Multi Bridge: torrent sin cliente habilitado → aviso al usuario", xbmc.LOGINFO)
+            # Esperar que el error interno de Kodi (del setResolvedUrl previo) aparezca y limpiarlo
+            for _nc in range(5):
+                try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                except: pass
+                xbmc.sleep(100)
+            try:
+                (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok(
+                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin cliente torrent',
+                    '[COLOR white]No hay ningún addon de torrent instalado o habilitado.[/COLOR]'
+                )
+            except Exception:
+                pass
+            _set_dialog_active_global(False)
+            with _floating_dialog_lock:
+                _floating_dialog_active = False
+            show_floating_links_dialog(resume_time=cur_time)
+            return 'reopened'
         else:
             xbmc.log("Multi Bridge: enlace %s no pudo resolverse en cambio en caliente -> reabriendo lista de enlaces" % srv_n, xbmc.LOGWARNING)
             _set_global_monitor_token('')
@@ -1389,7 +1460,7 @@ def _execute_hot_switch_choice(chosen_idx, c_links, c_meta, c_matched, c_eng='al
             _f_idx = getattr(chosen_l, '_bridge_orig_idx', None)
             _record_session_failed_link(chosen_l, index=(_f_idx if _f_idx is not None else chosen_idx), media_key=cur_mk, meta=c_meta)
             if _is_kodi_modal_dialog_open():
-                _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+                _wait_for_kodi_modal_dialog_to_dismiss(max_wait=3600.0)
             try:
                 xbmcgui.Dialog().notification('Multi Bridge', '%s falló. Elige otro enlace.' % srv_n, '', 3000)
             except Exception:
@@ -1648,6 +1719,40 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
         xbmcgui.Window(10000).clearProperty('MultiBridge.IsTorrentPlayback')
     except Exception:
         pass
+
+    # Actualizar ActivePlaybackMeta para reproucciones HTTP (evita que service.py inyecte
+    # meta obsoleta de la película/episodio anterior — especialmente tras un torrent previo)
+    if meta:
+        try:
+            xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackMeta', json.dumps(meta))
+            xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackTime', str(time.time()))
+        except Exception:
+            pass
+
+    # Limpiar INMEDIATAMENTE las properties de TMDb Helper / Trakt del elemento anterior
+    # para evitar que el monitor previo (que puede seguir vivo hasta 30s más) sobreescriba
+    # los datos del nuevo elemento con la info del anterior (poster, IDs, descripción, etc.)
+    try:
+        xbmcgui.Window(10000).clearProperty('script.trakt.ids')
+        xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.ClearLogo')
+        xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.CropImage')
+        xbmcgui.Window(10000).clearProperty('TMDbHelper.Player.ClearLogo')
+        xbmcgui.Window(10000).clearProperty('Player.Art(clearlogo)')
+        xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.Genre')
+        xbmcgui.Window(10000).clearProperty('TMDbHelper.ListItem.Director')
+        xbmcgui.Window(10000).clearProperty('MultiBridge.ClearLogo')
+        xbmcgui.Window(10000).clearProperty('MultiBridge.Genre')
+        xbmcgui.Window(10000).clearProperty('MultiBridge.Director')
+        xbmcgui.Window(10000).clearProperty('VideoPlayer.Genre')
+        xbmcgui.Window(10000).clearProperty('VideoPlayer.Director')
+    except Exception:
+        pass
+    # Inyectar los IDs del nuevo elemento de inmediato (no esperar al loop del monitor)
+    if meta:
+        try:
+            sync_tmdbhelper_playerstring(meta)
+        except Exception:
+            pass
 
     def _monitor_loop():
         global _floating_dialog_active
@@ -2007,12 +2112,15 @@ def start_playback_monitor(media_key, title_str="", seek_to_time=0, current_link
                 tot = p.getTotalTime()
                 if tot > 0: tot_time = tot
 
-                # Al llegar al 80% o más: Marcar como COMPLETO y NO guardar en Continuar viendo
+                # Al llegar al 80% o más: Marcar como COMPLETO pero NO borrar el bookmark aquí.
+                # El bookmark guardado (cada 5s) refleja la posición real donde el usuario puede reanudar.
+                # save_bookmark solo borrará al llegar al 95%+.
                 is_completed = bool(tot_time > 0 and (cur_time / float(tot_time) >= 0.80))
                 if is_completed:
                     mark_item_as_completed(media_key, meta=_m_dict, title=title_str, total_time=tot_time)
-                    save_bookmark(media_key, cur_time, tot_time, title=title_str)
-                    last_saved_time = cur_time
+                    if abs(cur_time - last_saved_time) >= 5:
+                        save_bookmark(media_key, cur_time, tot_time, title=title_str)
+                        last_saved_time = cur_time
                 elif abs(cur_time - last_saved_time) >= 5:
                     save_bookmark(media_key, cur_time, tot_time, title=title_str)
                     last_saved_time = cur_time
@@ -2553,6 +2661,8 @@ def _ask_resume_dialog(title_text, time_str, media_key=""):
     """
     # Cerrar spinner nativo de Kodi para evitar solapamiento mientras se muestra la UI de Multi Bridge
     _close_busy_dialogs()
+    # Asegurar que el diálogo nativo no esté silenciado (puede quedar silenciado por búsqueda previa)
+    _restore_dialog_noblock()
     try:
         _rsel = show_resume_dialog(time_str, title_text)
         if _rsel == 0:
@@ -3260,12 +3370,15 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
                 prefix = clean_title(parts[0])
                 prefix_comp = prefix.replace(' ', '')
                 if (prefix and clean_res == prefix) or (prefix_comp and _cr_compact == prefix_comp):
+                    # Si el resultado coincide SOLO con el prefijo del target (ej: resultado="Avengers"
+                    # para busqueda "Avengers: Doomsday"), solo aceptar con confirmacion de TMDB o año.
+                    # Sin año ni TMDB, el resultado podria ser cualquier pelicula de la franquicia.
                     if tmdb_score > 0:
                         best_title_score = max(best_title_score, 1000)
                     elif year_score > 0:
                         best_title_score = max(best_title_score, 800)
-                    elif target_year is None:
-                        best_title_score = max(best_title_score, 500)
+                    # target_year is None: NO dar score — sin año no podemos confirmar
+                    # que "Avengers" sea "Avengers: Doomsday" y no "Avengers: Endgame"
                     continue
 
         if ':' in result_title or ' - ' in result_title or '–' in result_title:
@@ -3273,14 +3386,19 @@ def score_match(result_title, target_year, all_names, target_tmdb=None, item=Non
             if len(res_parts) > 1:
                 res_prefix = clean_title(res_parts[0])
                 res_pref_comp = res_prefix.replace(' ', '')
-                if (res_prefix and res_prefix == clean_target) or (res_pref_comp and res_pref_comp == _ct_compact):
-                    if tmdb_score > 0:
-                        best_title_score = max(best_title_score, 1000)
-                    elif year_score > 0:
-                        best_title_score = max(best_title_score, 800)
-                    elif target_year is None:
-                        best_title_score = max(best_title_score, 500)
-                    continue
+                # Solo hacer match de prefijo si el target NO tiene subtitulo propio.
+                # Si ambos tienen subtitulo ('Avengers: Endgame' vs 'Avengers: Doomsday')
+                # son obras distintas del mismo universo: no deben coincidir por prefijo solo.
+                _name_has_sub = bool(':' in name or ' - ' in name or '–' in name or '—' in name)
+                if not _name_has_sub:
+                    if (res_prefix and res_prefix == clean_target) or (res_pref_comp and res_pref_comp == _ct_compact):
+                        if tmdb_score > 0:
+                            best_title_score = max(best_title_score, 1000)
+                        elif year_score > 0:
+                            best_title_score = max(best_title_score, 800)
+                        elif target_year is None:
+                            best_title_score = max(best_title_score, 500)
+                        continue
 
         # 8. Substring match (palabra completa estricta; sin letras/palabras extra no autorizadas)
         for _rv, _tv in [(clean_res, clean_target), (_cr_na, _ct_na)]:
@@ -3449,7 +3567,7 @@ def _get_torrent_client(is_magnet=False):
                 if ret and ret != -1 and isinstance(ret, (list, tuple)) and len(ret) >= 2:
                     c_name = ret[0]
                     c_id = str(ret[1]).split()[0]
-                    if xbmc.getCondVisibility('System.HasAddon("%s")' % c_id):
+                    if xbmc.getCondVisibility('System.HasAddon("%s")' % c_id) and xbmc.getCondVisibility('System.AddonIsEnabled("%s")' % c_id):
                         try:
                             dlg_yesno = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().yesno(
                                 'Multi Bridge — Cliente Torrent',
@@ -3481,7 +3599,7 @@ def _get_torrent_client(is_magnet=False):
         for client in _data.get('clients', []):
             if client.get('name', '').lower() == cliente:
                 addon_id = client.get('id', '')
-                if addon_id and xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id):
+                if addon_id and xbmc.getCondVisibility('System.HasAddon("%s")' % addon_id) and xbmc.getCondVisibility('System.AddonIsEnabled("%s")' % addon_id):
                     tpl = client.get('url_magnet') if (is_magnet and client.get('url_magnet')) else client.get('url', '')
                     return addon_id, tpl
                 else:
@@ -3620,10 +3738,7 @@ def _play_torrent_link(torrent_url, matched_item=None, meta=None):
     _is_magnet = torrent_url.startswith('magnet:')
     _tor_id, _tor_tpl = _get_torrent_client(is_magnet=_is_magnet)
     if not (_tor_id and _tor_tpl):
-        xbmcgui.Dialog().notification(
-            'Multi Bridge',
-            'Configura un cliente torrent en Ajustes → Balandro → Torrents',
-            '', 5000)
+        xbmc.log('Multi Bridge: no hay cliente torrent habilitado', xbmc.LOGINFO)
         return 'no_client'
 
     encoded = uparse.quote_plus(torrent_url)
@@ -6123,6 +6238,26 @@ def _detail_year_consistent(url, target_year, channel_id='', item=None, target_i
             except Exception: pass
 
         if not year_t:
+            # Sin año objetivo (ej: película no estrenada en TMDB globalmente).
+            # Puede que ya esté disponible en otra región antes de la fecha global.
+            # Solo rechazar si el sitio muestra CLARAMENTE un año viejo (> 2 años atrás),
+            # lo que indica que es una obra distinta con el mismo título.
+            if target_tmdb:
+                try:
+                    import datetime as _dt
+                    _cur_year = _dt.datetime.now().year
+                    _all_site_years = [int(y) for y in _re2.findall(years_re, html)]
+                    if _all_site_years:
+                        # Usar el año más repetido en la página como año dominante del sitio
+                        _site_year = max(set(_all_site_years), key=_all_site_years.count)
+                        if _site_year < (_cur_year - 2):
+                            # El sitio muestra un año claramente antiguo → obra distinta
+                            try:
+                                xbmc.log('Multi Bridge: %s descartado por año antiguo en web (%d) sin año objetivo' % (channel_id, _site_year), xbmc.LOGINFO)
+                            except: pass
+                            return False
+                except Exception:
+                    pass
             return True
 
         # 0.8. Check específico de HDFull y similares (ej: /buscar/year/2013 o /year/2013)
@@ -8737,10 +8872,7 @@ def _append_late_links(engine, target_tmdb, season, episode, new_links, channel_
             except Exception as _re:
                 xbmc.log("Multi Bridge: error refrescando contenedor: %s" % _re, xbmc.LOGWARNING)
 
-            # Mostrar la notificación toast al usuario tras refrescar
-            try:
-                _show_bridge_notification('Multi Bridge', '+%d enlaces de %s' % (added, channel_name or 'canal'), 3500)
-            except: pass
+            pass
     except Exception as _e:
         try: xbmc.log("Multi Bridge: _append_late_links error: %s" % _e, xbmc.LOGWARNING)
         except: pass
@@ -10714,7 +10846,7 @@ def _dismiss_plugin_handle(h, wait_ms=250):
 
 
 def _absorb_plugin_handle(handle, wait_ms=250):
-    """Descarta el handle de plugin cuando se cancela o se delega reproducción, suprimiendo okdialog espurio."""
+    """Descarta el handle de plugin cuando se cancela o se delega reproducción, suprimiendo okdialog espurio de Kodi."""
     _close_busy_dialogs()
     try:
         h_int = int(handle)
@@ -10722,28 +10854,15 @@ def _absorb_plugin_handle(handle, wait_ms=250):
         h_int = -1
     if h_int < 0:
         return
-    _guard_stop = [False]
-    def _suppress():
-        for _ in range(30):
-            if _guard_stop[0]:
-                break
-            try:
-                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-            except Exception:
-                pass
-            time.sleep(0.1)
-    _gt = threading.Thread(target=_suppress, daemon=True)
-    _gt.start()
     try:
-        xbmcplugin.setResolvedUrl(h_int, False, xbmcgui.ListItem())
+        # Usar succeeded=True con ListItem vacío en lugar de False.
+        # Con True + sin path, Kodi no muestra el dialog de error "not playable"
+        # pero tampoco inicia ninguna reproducción (ListItem sin path = noop silencioso).
+        _silent_li = xbmcgui.ListItem()
+        xbmcplugin.setResolvedUrl(h_int, True, _silent_li)
     except Exception:
         pass
     xbmc.sleep(int(wait_ms))
-    _guard_stop[0] = True
-    try:
-        _gt.join(timeout=0.5)
-    except Exception:
-        pass
 
 
 def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_time=0.0, server_name="", ignore_file=None):
@@ -10773,14 +10892,10 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
         if mon.abortRequested():
             return False
 
-        # Detección inmediata de diálogo modal de error de Kodi ("Uno o más elementos fallaron...")
+        # Detección de diálogo modal de Kodi -> esperar a que el usuario lo cierre (nunca cerrarlo por código)
         if _is_kodi_modal_dialog_open():
-            try:
-                xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                xbmc.executebuiltin('Dialog.Close(10100,true)')
-            except Exception:
-                pass
-            xbmc.log("Multi Bridge Watchdog: diálogo modal de error de Kodi detectado [%s] -> descartando" % server_name, xbmc.LOGINFO)
+            xbmc.log("Multi Bridge Watchdog: diálogo modal de Kodi detectado [%s] -> esperando al usuario" % server_name, xbmc.LOGINFO)
+            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=3600.0)
             return False
 
         # Comprobar si el vídeo ya abrió demuxer y levantó el hilo de reproducción
@@ -10808,11 +10923,7 @@ def _wait_for_playback_progress(player=None, mon=None, timeout=12.0, seek_to_tim
                 if mon.abortRequested():
                     return False
                 if _is_kodi_modal_dialog_open():
-                    try:
-                        xbmc.executebuiltin('Dialog.Close(okdialog,true)')
-                        xbmc.executebuiltin('Dialog.Close(10100,true)')
-                    except Exception:
-                        pass
+                    _wait_for_kodi_modal_dialog_to_dismiss(max_wait=3600.0)
                     return False
                 if not player.isPlayingVideo():
                     xbmc.log("Multi Bridge Watchdog: el reproductor se cerró repentinamente tras iniciar [%s]" % server_name, xbmc.LOGINFO)
@@ -11202,6 +11313,37 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             xbmc.log("Multi Bridge Fast Autoplay: error leyendo caché previa: %s" % _ce, xbmc.LOGWARNING)
 
     cached_failed_urls = set()
+
+    # ── Pre-check de reanudación global ─────────────────────────────────────
+    # Se ejecuta UNA SOLA VEZ aquí, antes del bloque de caché y del de canales,
+    # para que el diálogo de Reanudar/Reiniciar aparezca siempre limpio.
+    # El resultado se reutiliza en ambas rutas (caché y canales) sin volver a preguntar.
+    _global_seek_time = 0
+    _global_resume_prompted = False
+    _pre_mk_global = _get_media_key(meta)
+    if _pre_mk_global:
+        _is_s_global = bool(meta.get('season') and meta.get('episode'))
+        _bm_global = get_bookmark(_pre_mk_global, tmdb_id=meta.get('tmdb'), is_series=_is_s_global,
+                                  season=meta.get('season'), episode=meta.get('episode'))
+        if _bm_global:
+            _rt_global = float(_bm_global.get('resume_time', 0))
+            if _rt_global > 10:
+                _mins_g = int(_rt_global // 60); _secs_g = int(_rt_global % 60)
+                _hrs_g = _mins_g // 60; _mins_g = _mins_g % 60
+                _ts_g = ('%d:%02d:%02d' % (_hrs_g, _mins_g, _secs_g)) if _hrs_g else ('%d:%02d' % (_mins_g, _secs_g))
+                _ttl_g = meta.get('title') or 'este video'
+                _ans_g = _ask_resume_dialog(_ttl_g, _ts_g, media_key=_pre_mk_global)
+                if _ans_g == 'cancel':
+                    xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                    _dismiss_plugin_handle(handle, wait_ms=200)
+                    return False
+                elif _ans_g == 'resume':
+                    _global_seek_time = _rt_global
+                elif _ans_g == 'restart':
+                    _global_seek_time = 0
+                    save_bookmark(_pre_mk_global, 0, 0, title=_ttl_g)
+                _global_resume_prompted = True
+
     if cached_links:
         sorted_cached = _filter_and_sort_links(cached_links)
         normal_cached = [
@@ -11211,6 +11353,17 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         if normal_cached:
             xbmc.log("Multi Bridge Fast Autoplay: evaluando %d enlaces en caché..." % len(normal_cached), xbmc.LOGINFO)
             _extra_info = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
+
+            # Usar la respuesta ya dada en el pre-check global (no preguntar de nuevo)
+            handle_absorbed = False
+            resume_prompted = _global_resume_prompted
+            seek_to_time = _global_seek_time
+            cached_play_attempts = 0
+            max_cached_play_attempts = 3
+            player = xbmc.Player()
+            mon = xbmc.Monitor()
+
+            # Crear el progress dialog (el usuario ya respondió en el pre-check global)
             p_dialog_c = _AutoplayProgressDialog(
                 target_title=target_title,
                 poster_url=meta.get('poster') or '',
@@ -11220,14 +11373,6 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
             )
             p_dialog_c.create('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  [COLOR white]AUTOPLAY[/COLOR]', 'Iniciando reproducción...')
             p_dialog_c.update(25)
-
-            handle_absorbed = False
-            resume_prompted = False
-            seek_to_time = 0
-            cached_play_attempts = 0
-            max_cached_play_attempts = 3
-            player = xbmc.Player()
-            mon = xbmc.Monitor()
 
             for cand in normal_cached:
                 if cached_play_attempts >= max_cached_play_attempts:
@@ -11475,6 +11620,12 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         enabled_players = sorted(enabled_players, key=_ch_prio)
 
     total_channels = len(enabled_players)
+
+    # Reanudación para el path de canales: reutilizar la respuesta del pre-check global.
+    # Si el usuario ya respondió antes (caché con solo captchas, o sin caché), no preguntar de nuevo.
+    _pre_seek_time_channels = _global_seek_time
+    _pre_resume_prompted_channels = _global_resume_prompted
+
     _extra_info = _get_single_genre(meta) or ('%s' % (meta.get('year') or ''))
     p_dialog = _AutoplayProgressDialog(
         target_title=target_title,
@@ -11740,40 +11891,55 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
                 _win_url = 'plugin://plugin.video.bridge.multi/?view=list_links&tmdb=%s&t=%s' % (_cur_tmdb, _ts)
                 if meta.get('season') and meta.get('episode'):
                     _win_url += '&season=%s&episode=%s' % (meta['season'], meta['episode'])
+                # Preservar el seek_to_time ya elegido (pre-check global) para que el floating dialog
+                # no vuelva a preguntar. Se limpia en _play_link_from_dialog_impl tras usarlo.
+                if _global_seek_time > 0:
+                    xbmcgui.Window(10000).setProperty('BridgeMulti.PendingSeekTime', str(_global_seek_time))
+                elif _global_resume_prompted:
+                    # El usuario eligió reiniciar desde 0 — marcar como "ya respondido"
+                    xbmcgui.Window(10000).setProperty('BridgeMulti.PendingSeekTime', '0_answered')
                 xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
                 _open_links_view(_win_url)
                 return True
 
         xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
+        # Señalar al service ANTES de consumir el handle, para que pueda cerrar
+        # el okdialog de Kodi lo antes posible (mínima ventana de visibilidad del error)
+        xbmcgui.Window(10000).setProperty('BridgeMulti.ShowNoLinksDialog', '1')
         _dismiss_plugin_handle(handle, wait_ms=200)
         return False
 
-    # Comprobar punto de reanudacion ANTES de consumir el handle nativo
+    # Comprobar punto de reanudacion ANTES de consumir el handle nativo.
+    # Si ya se preguntó al usuario ANTES de lanzar workers (_pre_resume_prompted_channels),
+    # reutilizar esa respuesta sin volver a preguntar (evita doble diálogo y race con silenced_dialogs)
     if matched_item_holder[0]:
         _enrich_link_metadata(fast_link, meta, matched_item_holder[0])
     media_key = _get_media_key(meta, fast_link)
-    is_s = bool(meta.get('season') and meta.get('episode'))
-    bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s,
-                      season=meta.get('season'), episode=meta.get('episode'))
-    seek_to_time = 0
-    if bm:
-        r_time = float(bm.get('resume_time', 0))
-        if r_time > 10:
-            mins = int(r_time // 60); secs = int(r_time % 60)
-            hrs = mins // 60; mins = mins % 60
-            time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
-            t_title = meta.get('title') or getattr(matched_item_holder[0], 'title', '') or 'este video'
-            ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
-            if ans == 'cancel':
-                xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
-                try: p_dialog.close()
-                except: pass
-                _dismiss_plugin_handle(handle, wait_ms=200)
-                return False
-            elif ans == 'resume':
-                seek_to_time = r_time
-            elif ans == 'restart':
-                seek_to_time = 0
+    if _pre_resume_prompted_channels:
+        seek_to_time = _pre_seek_time_channels
+    else:
+        is_s = bool(meta.get('season') and meta.get('episode'))
+        bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s,
+                          season=meta.get('season'), episode=meta.get('episode'))
+        seek_to_time = 0
+        if bm:
+            r_time = float(bm.get('resume_time', 0))
+            if r_time > 10:
+                mins = int(r_time // 60); secs = int(r_time % 60)
+                hrs = mins // 60; mins = mins % 60
+                time_str = ('%d:%02d:%02d' % (hrs, mins, secs)) if hrs else ('%d:%02d' % (mins, secs))
+                t_title = meta.get('title') or getattr(matched_item_holder[0], 'title', '') or 'este video'
+                ans = _ask_resume_dialog(t_title, time_str, media_key=media_key)
+                if ans == 'cancel':
+                    xbmcgui.Window(10000).setProperty("bridge.autoplay_canceled", "true")
+                    try: p_dialog.close()
+                    except: pass
+                    _dismiss_plugin_handle(handle, wait_ms=200)
+                    return False
+                elif ans == 'resume':
+                    seek_to_time = r_time
+                elif ans == 'restart':
+                    seek_to_time = 0
 
     # Aplicar metadatos completos para Trakt, TMDb Helper y reproductor
     sync_tmdbhelper_playerstring(meta)
@@ -12477,6 +12643,14 @@ def _play_link_safely(link, engine='alfa', matched_item=None, meta=None, is_swit
             xbmc.log("Multi Bridge: torrent %s no reproducible: %s" % (_ch_dbg, msg), xbmc.LOGWARNING)
             xbmcgui.Dialog().notification('Multi Bridge', msg, '', 4000)
             return False
+        # Verificar cliente ANTES de liberar el handle: si no hay cliente, retornar sin
+        # llamar a setResolvedUrl(False) para evitar el diálogo de error de Kodi.
+        # El caller (show_floating_links_dialog) liberará el handle tras mostrar su propio diálogo.
+        _is_mag_pre = _tl.startswith('magnet:')
+        _pre_cli, _pre_tpl = _get_torrent_client(is_magnet=_is_mag_pre)
+        if not (_pre_cli and _pre_tpl):
+            xbmc.log('Multi Bridge: no hay cliente torrent habilitado (pre-check)', xbmc.LOGINFO)
+            return 'no_client'
         if not is_switch and handle > 0 and not _HANDLE_RESOLVED:
             _dismiss_plugin_handle(handle, wait_ms=200)
         res = _play_torrent_link(_tl, matched_item=matched_item, meta=meta)
@@ -15003,9 +15177,12 @@ def _notify_preferred_captcha_if_needed(meta, my_token, p, mon):
             pass
         xbmc.log("Multi Bridge Fast Autoplay: avisando Captcha en %s (%s) [cap_rank=%d < direct_rank=%d]" % (
             best_cap_lbl, cap_srv, best_cap_rk, best_direct_rank), xbmc.LOGINFO)
+        # Mensaje simplificado: solo idioma, sin nombre del servidor
+        _cap_langs = list(dict.fromkeys(lbl for _, lbl, _, _ in captcha_cands if lbl))
+        _cap_msg = 'Hay enlace Captcha disponible en %s' % ' / '.join(_cap_langs) if _cap_langs else 'Hay enlace Captcha disponible'
         xbmcgui.Dialog().notification(
             'Multi Bridge',
-            'Enlace Captcha en %s disponible (%s)' % (best_cap_lbl, cap_srv),
+            _cap_msg,
             xbmcgui.NOTIFICATION_INFO,
             4500
         )
@@ -15886,8 +16063,10 @@ def show_resume_dialog(time_str, title_text=""):
       1: Reiniciar
       -1: Cancelar (no reproducir nada)
     """
+    # Usar siempre la clase Dialog real (nunca el silenciador)
+    _real_dlg_cls = _orig_dialog_class or _KODI_ORIG_DIALOG
     try:
-        dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+        dialog = _real_dlg_cls()
         if hasattr(dialog, 'yesnocustom'):
             # Kodi nativo con 3 botones (DialogConfirm):
             # ret == 1 -> yeslabel ('Continuar')
@@ -15913,7 +16092,7 @@ def show_resume_dialog(time_str, title_text=""):
 
     # Fallback seguro con dialog.select
     try:
-        dialog = (_KODI_ORIG_DIALOG or xbmcgui.Dialog)()
+        dialog = _real_dlg_cls()
         ret = dialog.select('Reanudar reproducción', ['Continuar (%s)' % time_str, 'Reiniciar'])
         xbmc.log('Multi Bridge show_resume_dialog select ret=%s' % str(ret), xbmc.LOGINFO)
         return ret
@@ -16737,7 +16916,8 @@ def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alf
     sync_tmdbhelper_playerstring(meta)
 
     try:
-        xbmcgui.Dialog().notification('Multi Bridge', 'Cambiando a [B]%s[/B]...' % srv_name, '', 2500)
+        _notif_name = 'Torrent' if _is_torrent_link(chosen) else srv_name
+        xbmcgui.Dialog().notification('Multi Bridge', 'Cambiando a [B]%s[/B]...' % _notif_name, '', 2500)
     except Exception:
         pass
 
@@ -16756,6 +16936,12 @@ def _switch_to_link_impl(chosen_idx, links, meta, matched_item=None, engine='alf
             m_idx = chosen_idx
         _save_active_link_identity(chosen, media_key=media_key, fallback_idx=m_idx)
         if _is_torrent_link(chosen):
+            # Guardar posición de reanudación para que service.py haga seek cuando el torrent arranque
+            if cur_time > 2.0:
+                try:
+                    xbmcgui.Window(10000).setProperty('MultiBridge.TorrentResumeTime', str(cur_time))
+                except Exception:
+                    pass
             return True
         start_playback_monitor(
             media_key, title_str=meta.get('title', ''), seek_to_time=cur_time,
@@ -16790,8 +16976,22 @@ def _play_link_from_dialog_impl(chosen_idx, links, meta, matched_item=None, engi
     seek_to_time = 0
     start_beginning = False
     if not _is_tor:
+        # Leer seek_to_time pendiente del autoplay (evita doble diálogo cuando autoplay
+        # derivó al floating dialog por enlaces captcha o fallidos)
+        _pending_seek = xbmcgui.Window(10000).getProperty('BridgeMulti.PendingSeekTime')
+        if _pending_seek:
+            xbmcgui.Window(10000).clearProperty('BridgeMulti.PendingSeekTime')
+            if _pending_seek == '0_answered':
+                # Usuario eligió reiniciar desde 0 — no preguntar, ir directo al inicio
+                force_resume_time = -1  # señal: ya respondido, no preguntar
+            else:
+                try: force_resume_time = float(_pending_seek)
+                except: pass
         if force_resume_time and float(force_resume_time) > 0:
             seek_to_time = float(force_resume_time)
+        elif force_resume_time and float(force_resume_time) < 0:
+            # -1 = usuario ya eligió reiniciar desde 0, no preguntar de nuevo
+            seek_to_time = 0
         else:
             bm = get_bookmark(media_key, tmdb_id=meta.get('tmdb'), is_series=is_s, season=meta.get('season'), episode=meta.get('episode'))
             if bm:
@@ -16843,7 +17043,7 @@ def _is_kodi_modal_dialog_open():
     return False
 
 
-def _wait_for_kodi_modal_dialog_to_dismiss(mon=None, max_wait=60.0):
+def _wait_for_kodi_modal_dialog_to_dismiss(mon=None, max_wait=3600.0):
     """Espera pacientemente a que el usuario presione Aceptar / OK / Cerrar en el dialogo de error de Kodi."""
     if mon is None:
         mon = xbmc.Monitor()
@@ -16903,7 +17103,6 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
     c_links, c_matched, c_meta, c_eng = _load_cached_links_for_dialog(offset=offset)
     if not c_links:
-        _show_bridge_notification('Multi Bridge', 'No hay enlaces disponibles', 3000)
         return False
 
     media_key = _get_media_key(c_meta, c_links[0] if c_links else None)
@@ -16936,12 +17135,11 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
     while True:
         # Asegurar que ningun dialogo modal de error de Kodi este abierto antes de mostrar la lista
         if _is_kodi_modal_dialog_open():
-            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=3600.0)
 
-        # Si todos los enlaces disponibles han fallado, notificar y salir
+        # Si todos los enlaces disponibles han fallado, salir silenciosamente
         if len(failed_indices) >= len(c_links) and len(c_links) > 0:
             _dismiss_plugin_handle(handle, wait_ms=200)
-            _show_bridge_notification('Multi Bridge', 'Todos los enlaces probados han fallado', 3500)
             _clear_session_failed_links(media_key)
             for _l in c_links:
                 try: setattr(_l, 'bridge_failed', False)
@@ -17039,6 +17237,30 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
         srv_name = _get_link_server_name(chosen_link) or 'Servidor'
         is_tor = (srv_name.lower() == 'torrent' or _is_torrent_link(chosen_link))
 
+        # Si el usuario elige un enlace captcha, suprimir la notificación para que no vuelva a salir
+        if _is_web_captcha_server(srv_name, chosen_link):
+            try:
+                xbmcgui.Window(10000).clearProperty('BridgeMulti.CaptchaNotifiedToken')
+            except Exception:
+                pass
+
+        # Si el enlace fue marcado como fallido pero el usuario lo elige de nuevo, limpiar marca
+        # para darle otra oportunidad (timeout o fallo puntual)
+        if getattr(chosen_link, 'bridge_failed', False):
+            try:
+                setattr(chosen_link, 'bridge_failed', False)
+            except Exception:
+                pass
+            _sig_retry = _get_link_unique_id(chosen_link)
+            _mk_retry = _get_media_key(c_meta, chosen_link)
+            try:
+                _sfl = _SESSION_FAILED_LINKS.get(_mk_retry)
+                if _sfl and _sig_retry:
+                    _sfl.get('signatures', set()).discard(_sig_retry)
+                    _sfl.get('obj_ids', set()).discard(id(chosen_link))
+            except Exception:
+                pass
+
         if was_playback and p.isPlayingVideo():
             try:
                 _prev_sw_file = p.getPlayingFile()
@@ -17055,7 +17277,27 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
                 use_handle=_use_native_h,
             )
 
-        if played in ('cancel', 'no_client'):
+        if played == 'no_client':
+            # Mostrar nuestro diálogo primero (handle todavía activo, sin error de Kodi)
+            try:
+                (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok(
+                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin cliente torrent',
+                    '[COLOR white]No hay ningún addon de torrent instalado o habilitado.[/COLOR]'
+                )
+            except Exception:
+                pass
+            # Usuario ya dio OK; ahora liberar el handle si aún está activo
+            # El suppress thread cierra el error de Kodi que sigue al setResolvedUrl(False)
+            if handle > 0 and not _HANDLE_RESOLVED:
+                def _sup_nc_post():
+                    for _ in range(30):
+                        try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                        except: pass
+                        time.sleep(0.1)
+                threading.Thread(target=_sup_nc_post, daemon=True).start()
+                _dismiss_plugin_handle(handle, wait_ms=200)
+            continue
+        if played == 'cancel':
             continue
 
         if is_tor and played:
@@ -17082,7 +17324,7 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
 
         # Si el cartel de error de Kodi esta en pantalla, esperar pacientemente a que el usuario presione Aceptar
         if _is_kodi_modal_dialog_open():
-            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=60.0)
+            _wait_for_kodi_modal_dialog_to_dismiss(max_wait=3600.0)
 
         # Enlace fallido: registrar y reabrir
         if chosen_link:
@@ -17327,8 +17569,8 @@ def main():
 
         if not _se_links:
             _eng_name = 'Alfa' if _se_engine == 'alfa' else 'Balandro'
-            xbmcgui.Dialog().notification('Multi Bridge', 'No se encontraron enlaces en %s' % _eng_name, '', 4000)
             xbmcplugin.endOfDirectory(handle, succeeded=False)
+            xbmcgui.Dialog().ok('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados', '[COLOR white]No se encontraron enlaces disponibles en el motor [B]%s[/B].[/COLOR][CR][CR][COLOR orange][B]%s[/B][/COLOR]' % (_eng_name, _eng_name))
             return
 
         _ts2 = int(time.time())
@@ -17953,11 +18195,31 @@ def main():
                     _dismiss_plugin_handle(handle, wait_ms=200)
                     return
 
-                if _bridge_addon.getSetting('autoplay_fallback_normal_search') != 'true':
-                    xbmc.log("Multi Bridge: fallback a busqueda normal desactivado por ajuste de usuario", xbmc.LOGINFO)
-                    _dismiss_plugin_handle(handle, wait_ms=200)
-                    _show_bridge_notification('Multi Bridge', 'Autoplay: no se encontraron enlaces reproducibles', 3000)
-                    return
+                # Autoplay no encontró ningún enlace reproducible.
+                # El script Python del plugin muere muy rápido después de que el handle se consume,
+                # por lo que Dialog().ok() nunca llega a mostrarse. En su lugar, señalamos al
+                # service.py (que siempre está vivo) mediante una window property para que él
+                # muestre el dialog desde su propio proceso permanente.
+                xbmc.log("Multi Bridge: autoplay sin resultados para este contenido.", xbmc.LOGINFO)
+                # Resolver el handle silenciosamente con setResolvedUrl(True, empty_li)
+                # para evitar que Kodi muestre su dialog de error "not playable".
+                # Con succeeded=True + ListItem sin path, Kodi no muestra error ni inicia reproducción.
+                global _HANDLE_RESOLVED
+                if not _HANDLE_RESOLVED:
+                    _HANDLE_RESOLVED = True
+                    try:
+                        xbmcgui.Window(10000).setProperty('TMDbHelper.SuppressPlayFail', str(time.time() + 3.0))
+                    except Exception:
+                        pass
+                    try:
+                        _silent_li = xbmcgui.ListItem()
+                        xbmcplugin.setResolvedUrl(handle, True, _silent_li)
+                    except Exception:
+                        pass
+                # Señal al service para mostrar el dialog "sin resultados"
+                xbmcgui.Window(10000).setProperty('BridgeMulti.ShowNoLinksDialog', '1')
+                # El handle ya está consumido; no llamar endOfDirectory de nuevo.
+                return
 
             _cached = None if _force_search else _read_search_cache_atomic()
             if not _force_search and _cached and isinstance(_cached, dict) and _cached.get('links'):
@@ -18018,10 +18280,18 @@ def main():
             except: pass
 
         if not links:
-            _dismiss_plugin_handle(handle, wait_ms=200)
             _close_busy_dialogs()
             _t_nf = str(meta.get('title') or meta.get('showname') or '')
-            _show_bridge_notification('Multi Bridge', 'No se encontraron enlaces para %s' % (_t_nf or 'este contenido'), 3500)
+            (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados', '[COLOR white]No se encontraron enlaces disponibles para:[/COLOR][CR][CR][COLOR orange][B]%s[/B][/COLOR]' % (_t_nf or 'este contenido'))
+            # Usuario ya cerró nuestro diálogo; suprimir el error interno de Kodi que sigue
+            def _sup_b():
+                for _ in range(30):
+                    try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                    except: pass
+                    time.sleep(0.1)
+            threading.Thread(target=_sup_b, daemon=True).start()
+            try: xbmcplugin.endOfDirectory(handle, succeeded=False)
+            except Exception: pass
             return
 
 
@@ -18277,10 +18547,18 @@ def main():
                 _open_links_view(_win_url)
             return
         else:
-            _dismiss_plugin_handle(handle, wait_ms=200)
             _close_busy_dialogs()
             _t_nf = str(title or get_param('title') or get_param('title_es') or get_param('title_lat') or showname or get_param('showname') or '')
-            _show_bridge_notification('Multi Bridge', 'No se encontraron enlaces para %s' % (_t_nf or 'este contenido'), 3500)
+            (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok('[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados', '[COLOR white]No se encontraron enlaces disponibles para:[/COLOR][CR][CR][COLOR orange][B]%s[/B][/COLOR]' % (_t_nf or 'este contenido'))
+            # Usuario ya cerró nuestro diálogo; suprimir el error interno de Kodi que sigue
+            def _sup_c():
+                for _ in range(30):
+                    try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
+                    except: pass
+                    time.sleep(0.1)
+            threading.Thread(target=_sup_c, daemon=True).start()
+            try: xbmcplugin.endOfDirectory(handle, succeeded=False)
+            except Exception: pass
         return
 
 
