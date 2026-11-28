@@ -1576,6 +1576,8 @@ def _run_pause_prompt_flow(media_key='', active_idx=-1, cur_time=0.0, monitor_to
                     return 'dispatched_next_ep'
                 _begin_playback_transition()
                 try:
+                    # Limpiar resume del episodio actual antes del switch para no dejarlo en "Continuar viendo"
+                    _clear_playing_episode_resume()
                     _prepare_clean_switch_transition()
                     _play_next_episode(c_meta, next_ep_info)
                 finally:
@@ -12609,6 +12611,32 @@ def sync_captcha_servers():
         xbmc.log(f"Multi Bridge: Error sincronizando servidores en Balandro: {e}", xbmc.LOGWARNING)
 
 
+def _clear_playing_episode_resume():
+    """Limpia el resume/bookmark del episodio/pelicula que se esta reproduciendo ahora mismo
+    via JSON-RPC, para que al hacer stop() Kodi no lo deje en 'Continuar viendo'.
+    Se llama justo antes de player.stop() en cambios de episodio."""
+    try:
+        p = xbmc.Player()
+        if not p.isPlayingVideo():
+            return
+        # Intentar limpiar via JSON-RPC Player.GetItem primero para obtener el id de Kodi
+        import json as _json2
+        resp = xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Player.GetItem","params":{"playerid":1,"properties":["id","type","file"]},"id":1}')
+        d = _json2.loads(resp)
+        item = d.get('result', {}).get('item', {})
+        item_id = item.get('id')
+        item_type = item.get('type', '')
+        if item_id and item_id != -1:
+            if item_type == 'episode':
+                xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"VideoLibrary.SetEpisodeDetails","params":{"episodeid":%d,"resume":{"position":0,"total":0}},"id":1}' % item_id)
+                xbmc.log('Multi Bridge: resume limpiado para episodio id=%d (cambio de episodio)' % item_id, xbmc.LOGINFO)
+            elif item_type == 'movie':
+                xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"VideoLibrary.SetMovieDetails","params":{"movieid":%d,"resume":{"position":0,"total":0}},"id":1}' % item_id)
+                xbmc.log('Multi Bridge: resume limpiado para pelicula id=%d (cambio)' % item_id, xbmc.LOGINFO)
+    except Exception as _cre:
+        xbmc.log('Multi Bridge: _clear_playing_episode_resume error: %s' % str(_cre), xbmc.LOGINFO)
+
+
 def _prepare_clean_switch_transition():
     """Prepara una transición limpia y sin congelo al cambiar de enlace en caliente.
     - En Android o al salir de streams remotos HTTP/HTTPS: limpia la playlist primero y detiene
@@ -15441,6 +15469,8 @@ def _play_preloaded_episode(preloaded):
     player = xbmc.Player()
     try:
         if player.isPlayingVideo():
+            # Limpiar resume del episodio anterior para que no aparezca en "Continuar viendo"
+            _clear_playing_episode_resume()
             player.stop()
     except Exception:
         pass
