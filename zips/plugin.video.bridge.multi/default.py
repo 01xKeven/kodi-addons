@@ -1441,10 +1441,7 @@ def _execute_hot_switch_choice(chosen_idx, c_links, c_meta, c_matched, c_eng='al
                 except: pass
                 xbmc.sleep(100)
             try:
-                (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok(
-                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin cliente torrent',
-                    '[COLOR white]No hay ningún addon de torrent instalado o habilitado.[/COLOR]'
-                )
+                xbmc.executebuiltin('Notification(Multi Bridge,Sin cliente torrent instalado o habilitado.,4000,DefaultIconWarning.png)')
             except Exception:
                 pass
             _set_dialog_active_global(False)
@@ -11907,7 +11904,21 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
 
         xbmcgui.Window(10000).clearProperty('bridge.in_autoplay')
         # Señalar al service ANTES de consumir el handle, para que pueda cerrar
-        # el okdialog de Kodi lo antes posible (mínima ventana de visibilidad del error)
+        # el okdialog de Kodi lo antes posible (mínima ventana de visibilidad del error).
+        # Pasar metadatos para personalizar el diálogo personalizado.
+        try:
+            _w_sig = xbmcgui.Window(10000)
+            _w_sig.setProperty('BridgeMulti.NoLinksTitle', _safe_str(meta.get('title', '') or ''))
+            _w_sig.setProperty('BridgeMulti.NoLinksPoster', _safe_str(meta.get('poster', '') or meta.get('thumbnail', '') or ''))
+            _w_sig.setProperty('BridgeMulti.NoLinksFanart', _safe_str(meta.get('fanart', '') or ''))
+            _s = meta.get('season'); _e = meta.get('episode')
+            _ep_disp = ''
+            if _s and _e:
+                try: _ep_disp = '  •  [COLOR yellow][B]S%02dE%02d[/B][/COLOR]' % (int(_s), int(_e))
+                except Exception: pass
+            _w_sig.setProperty('BridgeMulti.NoLinksEpisode', _ep_disp)
+        except Exception:
+            pass
         xbmcgui.Window(10000).setProperty('BridgeMulti.ShowNoLinksDialog', '1')
         _dismiss_plugin_handle(handle, wait_ms=200)
         return False
@@ -13075,6 +13086,147 @@ def verify_and_filter_links():
     except: pass
     _open_links_view()
     xbmc.executebuiltin('Container.Refresh')
+
+# ---------------------------------------------------------
+# Dialogo personalizado "Sin Resultados" (no_links.xml)
+# Al usar WindowXMLDialog propio nunca comparte ID con okdialog de Kodi,
+# por lo que se puede cerrar cualquier ventana nativa sin riesgo.
+# ---------------------------------------------------------
+class _NoLinksWindow(xbmcgui.WindowXMLDialog):
+    """Ventana XML para el diálogo de 'Sin Resultados'."""
+    OK_BTN = 300
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.accepted = False
+
+    def onInit(self):
+        self.accepted = False
+        try:
+            self.setFocusId(self.OK_BTN)
+            btn = self.getControl(self.OK_BTN)
+            if btn:
+                self.setFocus(btn)
+        except Exception:
+            pass
+        try:
+            xbmc.executebuiltin("SetFocus(300)")
+        except Exception:
+            pass
+
+    def onAction(self, action):
+        try:
+            aid = action.getId() if hasattr(action, 'getId') else action
+            # Back, Esc, Return, Enter, OK — cualquier tecla cierra
+            if aid in (9, 10, 92, 110, 13, 216, 247, 61452):
+                self.accepted = True
+                self.close()
+        except Exception:
+            pass
+
+    def onClick(self, control_id):
+        if control_id == self.OK_BTN:
+            self.accepted = True
+            self.close()
+
+    def onControl(self, control):
+        try:
+            cid = control.getId() if hasattr(control, 'getId') else None
+        except Exception:
+            cid = None
+        if cid == self.OK_BTN:
+            self.accepted = True
+            self.close()
+
+
+class _NoLinksDialog(object):
+    """Controlador de alto nivel para el diálogo personalizado 'Sin Resultados'.
+
+    Uso:
+        dlg = _NoLinksDialog(title='Película', poster_url='...', fanart_url='...',
+                             episode_display='S01E03')
+        dlg.show()   # bloqueante hasta que el usuario presione Aceptar
+    """
+
+    def __init__(self, title='', poster_url='', fanart_url='', episode_display='',
+                 message='No se encontraron enlaces disponibles.',
+                 submessage='Es posible que el contenido aún no esté disponible en los servidores.'):
+        self.title = title or ''
+        self.poster_url = poster_url or ''
+        self.fanart_url = fanart_url or ''
+        self.episode_display = episode_display or ''
+        self.message = message or ''
+        self.submessage = submessage or ''
+        self._dlg = None
+
+    def _set_prop(self, k, v):
+        try:
+            xbmcgui.Window(10000).setProperty(k, str(v if v is not None else ''))
+        except Exception:
+            pass
+
+    def _clear_props(self):
+        for k in ('bridge.nolinks_title', 'bridge.nolinks_episode_display',
+                  'bridge.nolinks_poster', 'bridge.nolinks_fanart',
+                  'bridge.nolinks_message', 'bridge.nolinks_submessage'):
+            try:
+                xbmcgui.Window(10000).clearProperty(k)
+            except Exception:
+                pass
+
+    def show(self):
+        """Muestra el diálogo. Seguro para llamarse desde hilos secundarios.
+
+        doModal() en Kodi SOLO puede llamarse desde el hilo principal; desde un hilo
+        secundario hay que usar show() + bucle de espera o se crashea Kodi.
+        """
+        try:
+            self._set_prop('bridge.nolinks_title', self.title)
+            self._set_prop('bridge.nolinks_episode_display', self.episode_display)
+            self._set_prop('bridge.nolinks_poster', self.poster_url)
+            self._set_prop('bridge.nolinks_fanart', self.fanart_url)
+            self._set_prop('bridge.nolinks_message', self.message)
+            self._set_prop('bridge.nolinks_submessage', self.submessage)
+            addon_path = _bridge_addon.getAddonInfo('path')
+            self._dlg = _NoLinksWindow('no_links.xml', addon_path, 'Default', '1080i')
+            self._dlg.show()
+            # Robar foco al botón Aceptar tras el fade-in (~200ms)
+            def _steal():
+                xbmc.sleep(250)
+                try:
+                    self._dlg.setFocusId(300)
+                    btn = self._dlg.getControl(300)
+                    if btn: self._dlg.setFocus(btn)
+                except Exception:
+                    pass
+                try: xbmc.executebuiltin('SetFocus(300)')
+                except Exception: pass
+            import threading as _thr
+            _thr.Thread(target=_steal, daemon=True).start()
+            # Esperar a que el usuario presione Aceptar (hilo seguro — no doModal)
+            _mon = xbmc.Monitor()
+            while not _mon.abortRequested():
+                if getattr(self._dlg, 'accepted', False):
+                    break
+                xbmc.sleep(100)
+        except Exception as e:
+            xbmc.log('Multi Bridge _NoLinksDialog: error mostrando no_links.xml: %s' % e, xbmc.LOGWARNING)
+            # Fallback a Dialog().ok() nativo si falla el XML
+            try:
+                xbmcgui.Dialog().ok(
+                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados',
+                    '[COLOR white]%s[/COLOR][CR][COLOR gray]%s[/COLOR]' % (self.message, self.submessage)
+                )
+            except Exception:
+                pass
+        finally:
+            try:
+                if self._dlg:
+                    self._dlg.close()
+            except Exception:
+                pass
+            self._clear_props()
+
 
 # ---------------------------------------------------------
 # Player Manager & Migration / Cloud Update Tools
@@ -17306,16 +17458,12 @@ def _show_floating_links_dialog_impl(offset=0, resume_time=0.0):
             )
 
         if played == 'no_client':
-            # Mostrar nuestro diálogo primero (handle todavía activo, sin error de Kodi)
+            # Mostrar notificación nativa encima de la lista de enlaces al reabrise
             try:
-                (_KODI_ORIG_DIALOG or xbmcgui.Dialog)().ok(
-                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin cliente torrent',
-                    '[COLOR white]No hay ningún addon de torrent instalado o habilitado.[/COLOR]'
-                )
+                xbmc.executebuiltin('Notification(Multi Bridge,Sin cliente torrent instalado o habilitado.,4000,DefaultIconWarning.png)')
             except Exception:
                 pass
-            # Usuario ya dio OK; ahora liberar el handle si aún está activo
-            # El suppress thread cierra el error de Kodi que sigue al setResolvedUrl(False)
+            # Liberar el handle si aún está activo (cierra el error de Kodi que sigue al setResolvedUrl(False))
             if handle > 0 and not _HANDLE_RESOLVED:
                 def _sup_nc_post():
                     for _ in range(30):
@@ -18244,7 +18392,22 @@ def main():
                         xbmcplugin.setResolvedUrl(handle, True, _silent_li)
                     except Exception:
                         pass
-                # Señal al service para mostrar el dialog "sin resultados"
+                # Señal al service para mostrar el dialog "sin resultados".
+                # Pasar metadatos para personalizar el diálogo personalizado.
+                try:
+                    _w_sig2 = xbmcgui.Window(10000)
+                    _m2 = _init_meta or {}
+                    _w_sig2.setProperty('BridgeMulti.NoLinksTitle', _safe_str(_m2.get('title', '') or ''))
+                    _w_sig2.setProperty('BridgeMulti.NoLinksPoster', _safe_str(_m2.get('poster', '') or _m2.get('thumbnail', '') or ''))
+                    _w_sig2.setProperty('BridgeMulti.NoLinksFanart', _safe_str(_m2.get('fanart', '') or ''))
+                    _s2 = _m2.get('season'); _e2 = _m2.get('episode')
+                    _ep2 = ''
+                    if _s2 and _e2:
+                        try: _ep2 = '  •  [COLOR yellow][B]S%02dE%02d[/B][/COLOR]' % (int(_s2), int(_e2))
+                        except Exception: pass
+                    _w_sig2.setProperty('BridgeMulti.NoLinksEpisode', _ep2)
+                except Exception:
+                    pass
                 xbmcgui.Window(10000).setProperty('BridgeMulti.ShowNoLinksDialog', '1')
                 # El handle ya está consumido; no llamar endOfDirectory de nuevo.
                 return

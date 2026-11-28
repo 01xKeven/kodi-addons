@@ -129,6 +129,115 @@ def _network_monitor_loop(monitor):
 import json
 import time
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dialogo personalizado "Sin Resultados" — definido aquí en service.py para que
+# viva permanentemente (default.py es destruido por Kodi tras cada ejecución).
+# Al ser WindowXMLDialog propio, su ID nunca colisiona con okdialog (12002).
+# ──────────────────────────────────────────────────────────────────────────────
+class _NoLinksWindow(xbmcgui.WindowXMLDialog):
+    OK_BTN = 300
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.accepted = False
+
+    def onInit(self):
+        self.accepted = False
+        try:
+            self.setFocusId(self.OK_BTN)
+            btn = self.getControl(self.OK_BTN)
+            if btn:
+                self.setFocus(btn)
+        except Exception:
+            pass
+        try:
+            xbmc.executebuiltin('SetFocus(300)')
+        except Exception:
+            pass
+
+    def onAction(self, action):
+        try:
+            aid = action.getId() if hasattr(action, 'getId') else action
+            if aid in (9, 10, 92, 110, 13, 216, 247, 61452):
+                self.accepted = True
+                self.close()
+        except Exception:
+            pass
+
+    def onClick(self, control_id):
+        if control_id == self.OK_BTN:
+            self.accepted = True
+            self.close()
+
+    def onControl(self, control):
+        try:
+            cid = control.getId() if hasattr(control, 'getId') else None
+        except Exception:
+            cid = None
+        if cid == self.OK_BTN:
+            self.accepted = True
+            self.close()
+
+
+class _NoLinksDialog(object):
+    """Muestra no_links.xml de forma segura desde un hilo secundario."""
+
+    def __init__(self, title='', poster_url='', fanart_url='', episode_display=''):
+        self.title = title or ''
+        self.poster_url = poster_url or ''
+        self.fanart_url = fanart_url or ''
+        self.episode_display = episode_display or ''
+        self._dlg = None
+
+    def _prop(self, k, v):
+        try:
+            xbmcgui.Window(10000).setProperty(k, str(v or ''))
+        except Exception:
+            pass
+
+    def _clear(self):
+        for k in ('bridge.nolinks_title', 'bridge.nolinks_episode_display',
+                  'bridge.nolinks_poster', 'bridge.nolinks_fanart',
+                  'bridge.nolinks_message', 'bridge.nolinks_submessage'):
+            try:
+                xbmcgui.Window(10000).clearProperty(k)
+            except Exception:
+                pass
+
+    def show(self):
+        # Llamado desde un hilo daemon separado.
+        # doModal() bloquea hasta que el usuario presiona Aceptar/Back.
+        # NO llamar close() manualmente después de doModal() — el botón ya lo hace internamente.
+        try:
+            self._prop('bridge.nolinks_title', self.title)
+            self._prop('bridge.nolinks_episode_display', self.episode_display)
+            self._prop('bridge.nolinks_poster', self.poster_url)
+            self._prop('bridge.nolinks_fanart', self.fanart_url)
+            self._prop('bridge.nolinks_message', 'No se encontraron enlaces disponibles.')
+            self._prop('bridge.nolinks_submessage', 'Es posible que el contenido aún no esté disponible en los servidores.')
+            addon = xbmcaddon.Addon('plugin.video.bridge.multi')
+            addon_path = addon.getAddonInfo('path')
+            self._dlg = _NoLinksWindow('no_links.xml', addon_path, 'Default', '1080i')
+            # doModal() bloquea hasta que la ventana se cierra — correcto para un hilo daemon.
+            self._dlg.doModal()
+            # NO hacer del self._dlg aquí — Kodi gestiona el ciclo de vida de la ventana.
+            # El botón ya llamó self.close() internamente; destruir el objeto aquí causa double-free.
+        except Exception as ex:
+            xbmc.log('BridgeMulti Service _NoLinksDialog: error: ' + str(ex), xbmc.LOGWARNING)
+            try:
+                xbmcgui.Dialog().ok(
+                    '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados',
+                    '[COLOR white]No se encontraron enlaces disponibles.[/COLOR]'
+                    '[CR][COLOR gray]Es posible que el contenido aún no esté disponible en los servidores.[/COLOR]'
+                )
+            except Exception:
+                pass
+        finally:
+            self._clear()
+            self._clear()
+
+
 class BridgePlayerService(xbmc.Player):
     def __init__(self, *args, default_mod_ref=None, **kwargs):
         super(BridgePlayerService, self).__init__(*args, **kwargs)
@@ -798,68 +907,50 @@ def run_service():
             break
         _sync_timer += 0.1
 
-        # Detectar señal de "sin resultados" del plugin (default.py muere antes de poder mostrar el dialog)
-        # El dialog se lanza en un hilo separado para no bloquear el loop del service
+        # Detectar señal de "sin resultados" — hilo separado para no bloquear el bucle principal.
         try:
             _w = xbmcgui.Window(10000)
             if _w.getProperty('BridgeMulti.ShowNoLinksDialog') == '1':
                 _w.clearProperty('BridgeMulti.ShowNoLinksDialog')
-                xbmc.log('BridgeMulti Service: señal ShowNoLinksDialog recibida. active=%s' % str(_no_links_dialog_active[0]), xbmc.LOGINFO)
 
-                # Resetear la flag si lleva más de 10s activa (el dialog fue cerrado externamente sin finally)
                 import time as _time
                 if _no_links_dialog_active[0] and (_time.time() - _no_links_dialog_ts[0]) > 10.0:
-                    xbmc.log('BridgeMulti Service: flag activa >10s, reseteando.', xbmc.LOGINFO)
                     _no_links_dialog_active[0] = False
 
-                # Si ya hay un dialog activo, ignorar esta señal (el usuario ya lo ve)
                 if not _no_links_dialog_active[0]:
-                    def _show_no_links_dialog(_active_flag=_no_links_dialog_active, _ts_flag=_no_links_dialog_ts):
+                    _no_links_dialog_active[0] = True
+                    _no_links_dialog_ts[0] = _time.time()
+
+                    def _show_no_links_dialog(_active_flag=_no_links_dialog_active):
                         try:
-                            _active_flag[0] = True
-                            _ts_flag[0] = _time.time()
-                            # Fase 1: esperar a que el okdialog de Kodi esté activo (max 2s)
-                            # La señal llega ANTES de que Kodi muestre el error, así que esperamos
-                            xbmc.log('BridgeMulti Service: fase1 - esperando okdialog...', xbmc.LOGINFO)
-                            for _ in range(20):
-                                try:
-                                    if xbmc.getCondVisibility('Window.IsActive(okdialog)'):
-                                        break
-                                except Exception:
-                                    break
-                                xbmc.sleep(100)
-                            # Fase 2: cerrar el okdialog de Kodi
-                            xbmc.log('BridgeMulti Service: fase2 - cerrando okdialog de Kodi', xbmc.LOGINFO)
+                            # Cerrar el okdialog de Kodi primero — sin miedo porque nuestra
+                            # ventana personalizada tiene su propio ID distinto a 12002.
                             try: xbmc.executebuiltin('Dialog.Close(okdialog,true)')
                             except: pass
-                            # Fase 3: esperar a que desaparezca completamente (animación, max 1s)
-                            for _ in range(10):
-                                try:
-                                    if not xbmc.getCondVisibility('Window.IsActive(okdialog)'):
-                                        break
-                                except Exception:
-                                    break
-                                xbmc.sleep(100)
-                            xbmc.sleep(200)  # margen extra para la animación de cierre
-                            xbmc.log('BridgeMulti Service: mostrando Dialog().ok() sin resultados', xbmc.LOGINFO)
-                            xbmcgui.Dialog().ok(
-                                '[COLOR gold][B]Multi Bridge[/B][/COLOR]  •  Sin resultados',
-                                '[COLOR white]No se encontraron enlaces disponibles para este contenido.[/COLOR]'
-                                '[CR][COLOR gray]Es posible que el contenido aún no esté disponible en los servidores.[/COLOR]'
+                            try: xbmc.executebuiltin('Dialog.Close(busydialog,true)')
+                            except: pass
+
+                            _title   = _w.getProperty('BridgeMulti.NoLinksTitle') or ''
+                            _poster  = _w.getProperty('BridgeMulti.NoLinksPoster') or ''
+                            _fanart  = _w.getProperty('BridgeMulti.NoLinksFanart') or ''
+                            _episode = _w.getProperty('BridgeMulti.NoLinksEpisode') or ''
+
+                            dlg = _NoLinksDialog(
+                                title=_title,
+                                poster_url=_poster,
+                                fanart_url=_fanart,
+                                episode_display=_episode,
                             )
-                            xbmc.log('BridgeMulti Service: Dialog().ok() cerrado por usuario', xbmc.LOGINFO)
+                            dlg.show()  # doModal() internamente — bloquea hasta Aceptar
                         except Exception as _ex:
-                            xbmc.log('BridgeMulti Service: error en hilo dialog sin resultados: ' + str(_ex), xbmc.LOGWARNING)
+                            xbmc.log('BridgeMulti Service: error dialog sin resultados: ' + str(_ex), xbmc.LOGWARNING)
                         finally:
                             _active_flag[0] = False
-                            xbmc.log('BridgeMulti Service: flag desactivada (finally)', xbmc.LOGINFO)
 
                     import threading as _t
                     _t.Thread(target=_show_no_links_dialog, daemon=True, name='BridgeNoLinksDialog').start()
-                else:
-                    xbmc.log('BridgeMulti Service: señal ignorada, dialog ya activo.', xbmc.LOGINFO)
         except Exception as _e:
-            xbmc.log('BridgeMulti Service: error mostrando dialog sin resultados: ' + str(_e), xbmc.LOGWARNING)
+            xbmc.log('BridgeMulti Service: error señal sin resultados: ' + str(_e), xbmc.LOGWARNING)
 
         if _sync_timer >= 600:
             _sync_timer = 0
