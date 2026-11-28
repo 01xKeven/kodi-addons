@@ -12018,6 +12018,14 @@ def _fast_autoplay_search_and_play(engine, handle, cached_links=None, cached_ite
         p_dialog.set_stream_info(status='Cargando video...')
     except Exception:
         pass
+    # Escribir ActivePlaybackMeta ANTES de setResolvedUrl para que service.py.onPlayBackStarted
+    # lea los datos de la pelicula NUEVA y no los de la anterior (race condition fix).
+    if meta:
+        try:
+            xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackMeta', json.dumps(meta))
+            xbmcgui.Window(10000).setProperty('MultiBridge.ActivePlaybackTime', str(time.time()))
+        except Exception:
+            pass
     player = xbmc.Player()
     if not _resolve_plugin_handle(handle, fast_li):
         player.play(fast_url, fast_li)

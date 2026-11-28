@@ -289,8 +289,9 @@ class BridgePlayerService(xbmc.Player):
                     _def._LAST_SEARCH_CACHE_MTIME = 0
                 except Exception:
                     pass
-            if self.isPlaying():
-                _inject_active_playback_metadata(self)
+            # NO inyectar meta en onPlayBackStarted — hay race condition: default.py puede
+            # no haber escrito aun ActivePlaybackMeta para la pelicula nueva.
+            # La inyeccion real se hace en onAVStarted (con 500ms de margen) donde el meta ya es correcto.
         except Exception as e:
             xbmc.log("Multi Bridge PlayerService: error en onPlayBackStarted: " + str(e), xbmc.LOGWARNING)
 
